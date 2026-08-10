@@ -26,6 +26,7 @@ yarn-error.log*
 tauri-app/src-tauri/target/
 tauri-app/src-tauri/Cargo.lock
 *.app
+tauri-app/src-tauri/icons/backup/
 
 # === Docker 数据卷 ===
 litellm_postgres_data/
