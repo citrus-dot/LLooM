@@ -3,6 +3,7 @@ const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
         HeadingLevel, BorderStyle, WidthType, ShadingType,
         PageNumber, PageBreak } = require('docx');
 const fs = require('fs');
+const path = require('path');
 
 const cjkFont = { ascii: "Arial", hAnsi: "Arial", eastAsia: "Microsoft YaHei" };
 const border = { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" };
@@ -284,7 +285,9 @@ const doc = new Document({
   }]
 });
 
+const outputPath = path.join(__dirname, '..', 'LiteLLM_工作汇报.docx');
+
 Packer.toBuffer(doc).then(buffer => {
-  fs.writeFileSync("/Users/orange/litellm-install/LiteLLM_工作汇报.docx", buffer);
-  console.log("Word 文档已生成: /Users/orange/litellm-install/LiteLLM_工作汇报.docx");
+  fs.writeFileSync(outputPath, buffer);
+  console.log(`Word 文档已生成: ${outputPath}`);
 });

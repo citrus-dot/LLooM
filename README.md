@@ -407,6 +407,8 @@ LLooM/
 │   └── provisioning/             # 自动加载配置
 │
 ├── conversations/                # 对话历史存储（JSON）
+├── scripts/                      # 辅助脚本
+│   └── generate_report.js        # 报告生成（Node.js）
 ├── save-images.sh                # Docker 镜像导出（离线部署）
 ├── load-images.sh                # Docker 镜像导入
 └── offline-install.sh            # 离线安装脚本
