@@ -2,13 +2,13 @@
 """
 Generate macOS-compliant app icons with proper squircle transparency.
 
-The white-corner issue on macOS happens when the icon image has a solid
+The square-corner issue on macOS happens when the icon image has a solid
 square background. macOS .icns icons need transparent corners outside
 the squircle (superellipse) shape.
 
 This script:
-1. Opens the source JPG/PNG
-2. Resizes to 1024x1024
+1. Opens the source JPG/PNG (any aspect ratio)
+2. Center-crops to square, then resizes to 1024x1024
 3. Applies a macOS-style squircle mask (transparent corners)
 4. Saves as source PNG for `cargo tauri icon`
 """
@@ -19,7 +19,7 @@ import sys
 import os
 
 
-def create_squircle_mask(size: int) -> Image.Image:
+def create_squircle_mask(size: int, n: float = 5.0) -> Image.Image:
     """
     Create a macOS-style squircle (superellipse) mask.
 
@@ -31,11 +31,6 @@ def create_squircle_mask(size: int) -> Image.Image:
     draw = ImageDraw.Draw(mask)
 
     center = size / 2
-    # Apple's squircle uses n ≈ 5.0, which gives the distinctive
-    # "rounded square" shape that's not a simple rounded rectangle
-    n = 5.0
-
-    # Generate the superellipse points
     points = []
     steps = 360
     for i in range(steps + 1):
@@ -52,9 +47,19 @@ def create_squircle_mask(size: int) -> Image.Image:
     return mask
 
 
+def center_crop_to_square(img: Image.Image) -> Image.Image:
+    """Crop image to square by taking the center region."""
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    return img.crop((left, top, left + side, top + side))
+
+
 def process_icon(source_path: str, output_path: str, size: int = 1024):
-    """Open source image, resize, and apply squircle mask."""
+    """Open source image, center-crop to square, resize, and apply squircle mask."""
     img = Image.open(source_path).convert("RGBA")
+    img = center_crop_to_square(img)
     img = img.resize((size, size), Image.LANCZOS)
 
     mask = create_squircle_mask(size)

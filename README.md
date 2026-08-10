@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="tauri-app/app-icon.jpg" width="120" height="120" alt="LLooM Logo" />
+  <img src="tauri-app/app-icon.png" width="120" height="120" alt="LLooM Logo" />
 </p>
 
 <h1 align="center">LLooM</h1>
