@@ -1,0 +1,57 @@
+# ============================================================
+# Semantic Router Configuration
+# Following vLLM Semantic Router architecture: signals → decisions → plugins
+# ============================================================
+
+# Backend (LiteLLM Worker)
+backend:
+  url: "http://litellm-worker:4000"
+  api_key_env: "LITELLM_MASTER_KEY"
+
+# Domain Classifier (MMLU 14 categories)
+classifier:
+  domain:
+    enabled: true
+    timeout: 10
+    max_tokens: 20
+    # LLM auto-selected:
+    #   DASHSCOPE_API_KEY set    → qwen3.6-flash (cloud, fast)
+    #   DASHSCOPE_API_KEY empty  → qwen2.5:latest (Ollama local fallback)
+
+# PII Detection Plugin
+pii:
+  enabled: true
+  action: "mask"        # block | mask | warn
+  # Detectable PII types:
+  # email, phone, ssn, credit_card, ip_address, id_card, bank_account
+
+# Jailbreak Detection Plugin
+jailbreak:
+  enabled: true
+  action: "block"       # block | warn
+
+# Hallucination Detection Plugin
+hallucination:
+  enabled: false        # Disabled by default (adds latency)
+  action: "header"      # header | body | block | none
+
+# Semantic Cache (use existing Qdrant in LiteLLM)
+semantic_cache:
+  enabled: false
+
+# MMLU 14 Categories
+mmlu_categories:
+  - math
+  - physics
+  - chemistry
+  - biology
+  - computer_science
+  - engineering
+  - business
+  - law
+  - economics
+  - health
+  - psychology
+  - philosophy
+  - history
+  - other

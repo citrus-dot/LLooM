@@ -1,0 +1,58 @@
+# === 敏感文件 ===
+.env
+*.key
+*.pem
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+vsr-env/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# === Node.js ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# === Tauri / Rust ===
+tauri-app/src-tauri/target/
+tauri-app/src-tauri/Cargo.lock
+*.app
+
+# === Docker 数据卷 ===
+litellm_postgres_data/
+litellm_redis_data/
+litellm_qdrant_data/
+litellm_grafana_data/
+litellm_open_webui_data/
+prometheus_data/
+
+# === 运行时数据 ===
+conversations/
+
+# === Docker 镜像导出 ===
+*.tar
+*.tar.gz
+
+# === macOS ===
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === 日志 ===
+*.log

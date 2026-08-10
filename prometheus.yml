@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'litellm-admin'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['litellm-admin:4000']
+
+  - job_name: 'litellm-worker'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['litellm-worker:4000']

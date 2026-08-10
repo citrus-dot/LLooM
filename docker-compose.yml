@@ -1,0 +1,307 @@
+services:
+  # ====================================
+  # 控制面 Admin Instance
+  # 端口 4000 — 管理 UI + 配置 API
+  # ====================================
+  litellm-admin:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/ghcr.io/berriai/litellm:v1.82.3-stable.patch.2-linuxarm64
+    container_name: litellm_admin
+    volumes:
+      - ./config_admin.yaml:/app/config.yaml
+    command:
+      - "--config=/app/config.yaml"
+    ports:
+      - "4000:4000"
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      STORE_MODEL_IN_DB: "True"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: always
+
+  # ====================================
+  # 数据面 Worker Instance
+  # 端口 4001 — 推理 API (/chat/completions, /v1/*)
+  # ====================================
+  litellm-worker:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/ghcr.io/berriai/litellm:v1.82.3-stable.patch.2-linuxarm64
+    container_name: litellm_worker
+    volumes:
+      - ./config_worker.yaml:/app/config.yaml
+      - ./custom_callbacks.py:/app/custom_callbacks.py   # Phase 2: 智能路由 + 配额追踪回调
+    command:
+      - "--config=/app/config.yaml"
+    ports:
+      - "4001:4000"
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      STORE_MODEL_IN_DB: "True"
+    env_file:
+      - .env
+    # host.docker.internal: macOS Docker Desktop 自动支持
+    # extra_hosts 确保 Linux 部署时也能访问宿主机 Ollama
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: always
+
+  # ====================================
+  # PostgreSQL 数据库（Admin/Worker 共享）
+  # ====================================
+  db:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/postgres:16.4-alpine-linuxarm64
+    restart: always
+    container_name: litellm_db
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+  # ====================================
+  # Redis 7 — 路由状态 + 限流（非缓存用途）
+  # 优化：密码认证 + AOF/RDB 持久化 + 内存限制 + LRU 淘退 + Lazyfree
+  #       + 危险命令禁用 + protected-mode
+  # 配置文件：./redis.conf
+  # ====================================
+  redis:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/redis:7-alpine-linuxarm64
+    restart: always
+    container_name: litellm_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf       # 自定义配置
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    deploy:
+      resources:
+        limits:
+          memory: 512M                                       # 容器内存上限（Redis maxmemory 256MB + 系统开销）
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "litellm_redis_2026", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ====================================
+  # Qdrant — 语义缓存向量数据库
+  # 存储请求向量，基于相似度匹配命中缓存
+  # 镜像：DaoCloud 提供 arm64 原生版本（华为镜像源仅有 amd64）
+  # 语义缓存当前已关闭，待 DASHSCOPE_API_KEY 填入后启用
+  # ====================================
+  qdrant:
+    image: docker.m.daocloud.io/qdrant/qdrant:v1.16.3
+    restart: always
+    container_name: litellm_qdrant
+    ports:
+      - "6333:6333"                           # REST API
+      - "6334:6334"                           # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ====================================
+  # Prometheus 指标采集
+  # ====================================
+  prometheus:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/prom/prometheus:v3.8.1-linuxarm64
+    container_name: litellm_prometheus
+    volumes:
+      - prometheus_data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: always
+
+  # ====================================
+  # Grafana 可视化面板
+  # ====================================
+  grafana:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/grafana/grafana:11.5.2-linuxarm64
+    container_name: litellm_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: always
+
+  # ====================================
+  # Open WebUI — 聊天前端界面
+  # 连接 LiteLLM Worker 的 OpenAI 兼容 API
+  # 端口 3001（Grafana 已占用 3000）
+  # arm64 原生镜像 v0.9.2，避免平台模拟性能损耗
+  # WEBUI_AUTH=false 时自动登录（admin@localhost / admin）
+  # 启动前通过 webui-init.sh 注入 OpenAI 连接配置到 config.json
+  # ====================================
+  open-webui:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/ghcr.io/open-webui/open-webui:v0.9.2-linuxarm64
+    container_name: litellm_webui
+    ports:
+      - "3001:8080"
+    environment:
+      OPENAI_API_BASE_URL: "http://semantic-router:8888/v1"
+      OPENAI_API_BASE_URLS: "http://semantic-router:8888/v1"
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY:-sk-1234}
+      OPENAI_API_KEYS: ${LITELLM_MASTER_KEY:-sk-1234}
+      ENABLE_OPENAI_API_SUPPORT: "true"
+      WEBUI_AUTH: "false"
+    volumes:
+      - open-webui_data:/app/backend/data
+      - ./webui-init.sh:/app/backend/webui-init.sh:ro
+    entrypoint: ["sh", "/app/backend/webui-init.sh"]
+    depends_on:
+      semantic-router:
+        condition: service_healthy
+    restart: always
+
+  # ====================================
+  # Semantic Router — vLLM SR 集成
+  # 端口 8888 — 安全检测 + MMLU 14 域分类代理
+  # 插件链: PII 检测 / 越狱检测 / 幻觉检测 / 域分类
+  # 架构: Client → Semantic Router (8888) → LiteLLM Worker (4001) → 模型供应商
+  # ====================================
+  semantic-router:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/python:3.11-slim-linuxarm64
+    container_name: litellm_semantic_router
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./semantic_router:/app/semantic_router:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-1234}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      DASHSCOPE_API_BASE: ${DASHSCOPE_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      sh -c "pip install --no-cache-dir flask requests pyyaml && python /app/semantic_router/app.py"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      litellm-worker:
+        condition: service_healthy
+    restart: always
+
+  # ====================================
+  # 可视化管理界面（Phase 4）
+  # 端口 3002 — 仪表盘 + 智能对话 + 配置向导 + 模型管理
+  # 复杂任务自动分解、成本可视化、SSE 实时推送
+  # ====================================
+  orchestrator-web:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/python:3.11-slim-linuxarm64
+    container_name: litellm_orchestrator
+    ports:
+      - "3002:5000"
+    volumes:
+      - ./webapp:/app/webapp:ro
+      - ./task_orchestrator.py:/app/task_orchestrator.py:ro
+      - ./.env:/app/.env:rw
+    environment:
+      LITELLM_WORKER_URL: "http://litellm-worker:4000"
+      LITELLM_ADMIN_URL: "http://litellm-admin:4000"
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-1234}
+      SEMANTIC_ROUTER_URL: "http://semantic-router:8888"
+      OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.docker.internal:11434}
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      sh -c "pip install --no-cache-dir flask && python /app/webapp/app.py"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      litellm-worker:
+        condition: service_healthy
+      semantic-router:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  prometheus_data:
+    driver: local
+  postgres_data:
+    name: litellm_postgres_data
+  redis_data:
+    name: litellm_redis_data
+  qdrant_data:
+    name: litellm_qdrant_data
+  grafana_data:
+    name: litellm_grafana_data
+  open-webui_data:
+    name: litellm_open_webui_data
