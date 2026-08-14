@@ -26,6 +26,31 @@ fn get_install_dir() -> String {
         .unwrap_or_else(|_| ".".to_string())
 }
 
+fn get_api_binary_path() -> Option<String> {
+    let install_dir = get_install_dir();
+    // Production: resources are under {install_dir}/resources/lloom-server/
+    for sub in &["resources/lloom-server", "lloom-server"] {
+        let bin = std::path::Path::new(&install_dir)
+            .join(sub)
+            .join("lloom-server");
+        if bin.exists() && bin.is_file() {
+            return Some(bin.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+fn get_ollama_binary_path() -> String {
+    let install_dir = get_install_dir();
+    for sub in &["resources", ""] {
+        let bin = std::path::Path::new(&install_dir).join(sub).join("ollama");
+        if bin.exists() && bin.is_file() {
+            return bin.to_string_lossy().to_string();
+        }
+    }
+    "ollama".to_string()
+}
+
 fn enhanced_path() -> String {
     let current = env::var("PATH").unwrap_or_default();
     let extra = [
@@ -196,11 +221,21 @@ fn get_services_status() -> SuiteStatus {
 #[tauri::command]
 fn start_api(state: State<AppState>) -> String {
     let install_dir = get_install_dir();
-    let mut c = cmd("python3");
-    c.arg("api/server.py")
-        .current_dir(&install_dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    let mut c = if let Some(bin) = get_api_binary_path() {
+        let mut c = cmd(&bin);
+        // Set working dir to the binary's parent (where _internal/ is)
+        let bin_dir = std::path::Path::new(&bin)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(install_dir.clone());
+        c.current_dir(&bin_dir);
+        c
+    } else {
+        let mut c = cmd("python3");
+        c.arg("api/server.py").current_dir(&install_dir);
+        c
+    };
+    c.stdout(Stdio::null()).stderr(Stdio::null());
 
     match c.spawn() {
         Ok(child) => {
@@ -225,7 +260,8 @@ fn stop_api(state: State<AppState>) -> String {
 
 #[tauri::command]
 fn start_ollama(state: State<AppState>) -> String {
-    let mut c = cmd("ollama");
+    let ollama_bin = get_ollama_binary_path();
+    let mut c = cmd(&ollama_bin);
     c.arg("serve")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -507,11 +543,20 @@ fn smart_restart(changed_keys: Vec<String>, state: State<AppState>) -> SmartRest
 
         // Restart API
         let install_dir = get_install_dir();
-        let mut c = cmd("python3");
-        c.arg("api/server.py")
-            .current_dir(&install_dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        let mut c = if let Some(bin) = get_api_binary_path() {
+            let mut c = cmd(&bin);
+            let bin_dir = std::path::Path::new(&bin)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or(install_dir.clone());
+            c.current_dir(&bin_dir);
+            c
+        } else {
+            let mut c = cmd("python3");
+            c.arg("api/server.py").current_dir(&install_dir);
+            c
+        };
+        c.stdout(Stdio::null()).stderr(Stdio::null());
 
         match c.spawn() {
             Ok(child) => {
@@ -567,14 +612,53 @@ fn run_cli(args: Vec<String>) -> String {
     }
 }
 
+// ── First-Run Setup ──
+
+#[tauri::command]
+fn first_run_setup() -> String {
+    let install_dir = get_install_dir();
+    // Check resources/ subdirectory (production) then root (dev)
+    let script_path = std::path::Path::new(&install_dir)
+        .join("resources")
+        .join("first_run_setup.py");
+    let (script, work_dir) = if script_path.exists() {
+        (script_path.to_string_lossy().to_string(), install_dir.clone())
+    } else {
+        let dev_path = std::path::Path::new(&install_dir).join("first_run_setup.py");
+        if dev_path.exists() {
+            (dev_path.to_string_lossy().to_string(), install_dir.clone())
+        } else {
+            ("scripts/first_run_setup.py".to_string(), install_dir.clone())
+        }
+    };
+    let output = cmd("python3")
+        .arg(&script)
+        .current_dir(&work_dir)
+        .output();
+    match output {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+            if !stderr.is_empty() {
+                format!("{stdout}\n{stderr}")
+            } else {
+                stdout
+            }
+        }
+        Err(e) => format!("First-run setup error: {e}"),
+    }
+}
+
 // ── System Tray ──
 
 fn create_tray(app: &tauri::AppHandle) {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::TrayIconBuilder;
 
-    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>);
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>);
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)
+        .expect("failed to create show menu item");
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)
+        .expect("failed to create quit menu item");
     let menu = Menu::with_items(app, &[&show, &quit]);
 
     if let Ok(menu) = menu {
@@ -609,6 +693,10 @@ fn main() {
             ollama_child: Mutex::new(None),
         })
         .setup(|app| {
+            // In production, set install dir to resource directory
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                env::set_var("LLOOM_INSTALL_DIR", resource_dir.to_string_lossy().to_string());
+            }
             create_tray(app.handle());
             Ok(())
         })
@@ -651,6 +739,7 @@ fn main() {
             smart_restart,
             open_web_interface,
             run_cli,
+            first_run_setup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LLooM v2");

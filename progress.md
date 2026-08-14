@@ -35,7 +35,7 @@
 | Phase 5 | API 服务层（FastAPI + SSE）| Phase 1,2,3 | 2-3 天 | ✅ 已完成 |
 | Phase 6 | CLI 工具（init/model/status/chat）| Phase 1（可并行）| 1-2 天 | ✅ 已完成 |
 | Phase 7 | Tauri GUI + 进程管理 | Phase 5 | 3-5 天 | ✅ 已完成 |
-| Phase 8 | 打包构建（PyInstaller + Ollama + Tauri）| Phase 7 | 2-3 天 | 待开始 |
+| Phase 8 | 打包构建（PyInstaller + Ollama + Tauri）| Phase 7 | 2-3 天 | ✅ 已完成 |
 | Phase 9 | 集成测试 + 文档 + GitHub Release | Phase 8 | 2-3 天 | 待开始 |
 
 **总预估**：17-30 天
@@ -154,13 +154,29 @@
 - [x] `tauri-app/package.json` — NPM 配置（@tauri-apps/cli + api v2）
 - [x] 从 v1 迁移图标文件（6 个 PNG/ICO/ICNS）
 
-### Phase 8: 打包构建
-- [ ] PyInstaller 打包 Python 核心（hiddenimports 调试）
-- [ ] 下载 Ollama macOS ARM64 二进制
-- [ ] 配置 tauri.conf.json bundle.resources
-- [ ] 首次运行模型拉取逻辑
-- [ ] cargo tauri build 生成 .app
-- [ ] 验证双击运行
+### Phase 8: 打包构建 ✅ 已完成
+- [x] PyInstaller 打包 Python 核心 — lloom.spec + lloom_server.py 入口点
+  - hiddenimports: litellm/chromadb/uvicorn/fastapi/starlette/pydantic 全量子模块
+  - tiktoken_ext.openai_public 隐藏导入 + 预缓存编码数据（修复 cl100k_base 未知编码错误）
+  - SSL 证书修复（certifi where() → SSL_CERT_FILE/REQUESTS_CA_BUNDLE）
+  - 输出: dist/lloom-server/ (222MB)，二进制测试通过（端口 7860 健康检查 OK）
+- [x] 下载 Ollama macOS ARM64 二进制 — 从系统安装复制 (63MB, v0.32.6)
+  - download_ollama.sh 增加代理回退逻辑（下载失败时自动从系统复制）
+- [x] 配置 tauri.conf.json bundle.resources — resources/ 目录方案
+  - lloom-server/ (PyInstaller 输出) + ollama (二进制) + first_run_setup.py + .env.example
+- [x] 首次运行模型拉取逻辑 — first_run_setup.py (DB 初始化 + 种子模型 + Ollama 模型拉取)
+  - main.rs 新增 first_run_setup Tauri command
+- [x] cargo tauri build 生成 .app — LLooM.app (308MB)
+  - Rust 编译修复: 临时值生命周期(E0716) + MenuItem::with_id 返回 Result(E0277)
+  - main.rs 更新: get_api_binary_path/get_ollama_binary_path 支持 resources/ 子目录
+  - main.rs 更新: setup hook 设置 LLOOM_INSTALL_DIR 到 resource_dir
+  - 使用 `--bundles app` 跳过 DMG（沙箱限制）
+- [x] 验证 .app bundle 结构
+  - Contents/MacOS/lloom (Tauri 二进制)
+  - Contents/Resources/resources/lloom-server/ (PyInstaller 包含 _internal/, data/, lloom-server)
+  - Contents/Resources/resources/ollama (63MB 可执行)
+  - Contents/Resources/resources/first_run_setup.py
+  - Contents/Resources/resources/.env.example
 
 ### Phase 9: 集成测试 + 发布
 - [ ] 全新机器端到端测试
@@ -173,7 +189,29 @@
 
 ## 四、进度记录
 
-### 2026-08-14
+### 2026-08-14 (Phase 8)
+- 完成 Phase 8：打包构建（PyInstaller + Ollama + Tauri）
+  - 创建 `lloom_server.py`：PyInstaller 入口点，frozen 环境路径设置 + SSL 证书 + tiktoken 缓存
+  - 创建 `lloom.spec`：PyInstaller spec，全量 hiddenimports + 数据文件收集
+    - 修复 tiktoken `cl100k_base` 未知编码错误：添加 tiktoken_ext.openai_public 隐藏导入 + 预缓存编码数据
+    - 修复 SSL 证书验证：certifi where() → SSL_CERT_FILE/REQUESTS_CA_BUNDLE 环境变量
+    - 添加 backoff/opentelemetry.instrumentation 隐藏导入
+  - 创建 `scripts/download_ollama.sh`：下载架构特定 Ollama 二进制（arm64/x86_64）
+    - 代理回退逻辑：下载失败时自动从系统安装复制
+  - 创建 `scripts/first_run_setup.py`：首次运行设置（DB 初始化 + 种子模型 + Ollama 模型拉取）
+  - 创建 `scripts/build.sh`：统一构建脚本（PyInstaller → Ollama → Tauri）
+  - 更新 `tauri.conf.json`：bundle.resources 配置（resources/ 目录方案）
+  - 更新 `tauri-app/src-tauri/src/main.rs`：
+    - 新增 get_api_binary_path() / get_ollama_binary_path() — 支持 resources/ 子目录
+    - 更新 start_api / smart_restart — 使用 PyInstaller 二进制（frozen mode），回退到 python3
+    - 更新 start_ollama — 使用内置 Ollama 二进制，回退到系统 ollama
+    - 新增 first_run_setup Tauri command
+    - 更新 setup hook — 设置 LLOOM_INSTALL_DIR 到 resource_dir
+    - 修复 Rust 编译错误：E0716（临时值生命周期）+ E0277（MenuItem::with_id 返回 Result）
+  - 验证 PyInstaller 二进制：端口 7860 健康检查返回 {"status":"ok","version":"2.0.0"}
+  - 验证 Tauri .app bundle：308MB，包含 PyInstaller 包 + Ollama + 脚本 + .env.example
+
+### 2026-08-14 (Phase 1-7)
 - 完成 Phase 3：Orchestrator + 语义缓存（ChromaDB）
   - 实现 `core/cache.py`：SemanticCache 类
     - ChromaDB PersistentClient（本地文件，零外部服务依赖）

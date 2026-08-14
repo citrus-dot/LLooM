@@ -21,9 +21,17 @@ data/
 *.db
 *.sqlite3
 
-# PyInstaller
-*.spec
-spec/
+# PyInstaller build artifacts (keep lloom.spec)
+build/
+dist/
+tiktoken_cache/
+
+# Tauri build artifacts
+tauri-app/node_modules/
+tauri-app/src-tauri/target/
+tauri-app/src-tauri/resources/lloom-server/
+tauri-app/src-tauri/resources/ollama
+tauri-app/src-tauri/gen/
 
 # OS
 .DS_Store
