@@ -1,5 +1,7 @@
 # LLooM v2 — Intelligent LLM Routing Platform
 
+**English** | [中文](README-ZH.md)
+
 A self-contained desktop application that manages multiple LLM models, routes requests intelligently based on task type, tracks token usage and costs, and provides security filtering — all without external infrastructure.
 
 ## Features
