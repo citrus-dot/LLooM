@@ -135,11 +135,34 @@ a:hover { text-decoration: underline; }
 
 <script>
 // ── Tauri invoke wrapper ──
+function waitForTauri(maxWait) {
+  maxWait = maxWait || 5000;
+  return new Promise((resolve, reject) => {
+    if (window.__TAURI__ && window.__TAURI__.core) return resolve();
+    const start = Date.now();
+    const timer = setInterval(() => {
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        clearInterval(timer);
+        resolve();
+      } else if (Date.now() - start > maxWait) {
+        clearInterval(timer);
+        reject('Tauri not ready (timeout)');
+      }
+    }, 50);
+  });
+}
+
 function invoke(cmd, args) {
   if (window.__TAURI__ && window.__TAURI__.core) {
     return window.__TAURI__.core.invoke(cmd, args || {});
   }
-  return Promise.reject('Tauri not ready');
+  // Retry: wait for Tauri runtime to inject __TAURI__
+  return waitForTauri().then(() => {
+    if (window.__TAURI__ && window.__TAURI__.core) {
+      return window.__TAURI__.core.invoke(cmd, args || {});
+    }
+    return Promise.reject('Tauri not ready');
+  });
 }
 
 // ── Toast ──
@@ -571,9 +594,13 @@ async function updateSidebarStatus() {
 }
 
 // ── Init ──
-renderPage('overview');
-updateSidebarStatus();
-setInterval(updateSidebarStatus, 30000);
+waitForTauri().then(() => {
+  renderPage('overview');
+  updateSidebarStatus();
+  setInterval(updateSidebarStatus, 30000);
+}).catch(err => {
+  document.getElementById('content').innerHTML = `<div class="card"><div class="muted">等待 Tauri 运行时超时: ${err}<br>请重新打开应用</div></div>`;
+});
 </script>
 </body>
 </html>
