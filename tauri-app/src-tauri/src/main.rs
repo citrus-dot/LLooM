@@ -155,6 +155,37 @@ fn curl_post_sse(url: &str, body: &str) -> String {
     }
 }
 
+// ── Process log files ──
+
+fn log_file_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(&get_install_dir())
+        .join("data")
+        .join("logs")
+        .join(name)
+}
+
+fn attach_log(c: &mut Command, log_name: &str) {
+    let _ = std::fs::create_dir_all(log_file_path(log_name).parent().unwrap());
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file_path(log_name))
+    {
+        Ok(f) => {
+            let f_err = f.try_clone();
+            c.stdout(Stdio::from(f));
+            match f_err {
+                Ok(fe) => c.stderr(Stdio::from(fe)),
+                Err(_) => c.stderr(Stdio::null()),
+            };
+        }
+        Err(_) => {
+            c.stdout(Stdio::null());
+            c.stderr(Stdio::null());
+        }
+    }
+}
+
 // ── Data structures ──
 
 #[derive(serde::Serialize)]
@@ -235,7 +266,7 @@ fn start_api(state: State<AppState>) -> String {
         c.arg("api/server.py").current_dir(&install_dir);
         c
     };
-    c.stdout(Stdio::null()).stderr(Stdio::null());
+    attach_log(&mut c, "api.log");
 
     match c.spawn() {
         Ok(child) => {
@@ -262,9 +293,8 @@ fn stop_api(state: State<AppState>) -> String {
 fn start_ollama(state: State<AppState>) -> String {
     let ollama_bin = get_ollama_binary_path();
     let mut c = cmd(&ollama_bin);
-    c.arg("serve")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    c.arg("serve");
+    attach_log(&mut c, "ollama.log");
 
     match c.spawn() {
         Ok(child) => {
@@ -273,6 +303,76 @@ fn start_ollama(state: State<AppState>) -> String {
         }
         Err(e) => format!("Failed to start Ollama: {e}"),
     }
+}
+
+#[tauri::command]
+fn stop_ollama(state: State<AppState>) -> String {
+    let mut guard = state.ollama_child.lock().unwrap();
+    if let Some(child) = guard.as_mut() {
+        let _ = child.kill();
+        *guard = None;
+        "Ollama stopped".to_string()
+    } else {
+        "Ollama not running".to_string()
+    }
+}
+
+#[tauri::command]
+fn restart_service(service_name: String, state: State<AppState>) -> String {
+    if service_name == "Ollama" {
+        {
+            let mut guard = state.ollama_child.lock().unwrap();
+            if let Some(child) = guard.as_mut() {
+                let _ = child.kill();
+                *guard = None;
+            }
+        }
+        start_ollama(state)
+    } else {
+        {
+            let mut guard = state.api_child.lock().unwrap();
+            if let Some(child) = guard.as_mut() {
+                let _ = child.kill();
+                *guard = None;
+            }
+        }
+        start_api(state)
+    }
+}
+
+#[tauri::command]
+fn get_service_logs(service_name: String, lines: Option<usize>) -> String {
+    let file = if service_name == "Ollama" { "ollama.log" } else { "api.log" };
+    let content = std::fs::read_to_string(log_file_path(file)).unwrap_or_default();
+    let n = lines.unwrap_or(200);
+    let tail: Vec<&str> = content.lines().rev().take(n).collect();
+    let logs: String = tail.iter().rev().map(|s| s.to_string()).collect::<Vec<_>>().join("\n");
+    serde_json::json!({ "logs": logs }).to_string()
+}
+
+#[tauri::command]
+fn open_folder(path: String) -> bool {
+    cmd("open").arg(&path).spawn().is_ok()
+}
+
+#[tauri::command]
+fn update_budget(scope: String, scope_id: String, max_budget: f64, duration: String) -> String {
+    let body = serde_json::json!({
+        "scope": scope,
+        "scope_id": scope_id,
+        "max_budget": max_budget,
+        "duration": duration,
+    });
+    curl_post("http://localhost:7860/api/budgets", &body.to_string())
+}
+
+#[tauri::command]
+fn check_budget(scope: String, scope_id: String) -> String {
+    let url = format!(
+        "http://localhost:7860/api/budgets/check?scope={}&scope_id={}",
+        scope, scope_id
+    );
+    curl_get(&url)
 }
 
 #[tauri::command]
@@ -719,6 +819,12 @@ fn main() {
             start_api,
             stop_api,
             start_ollama,
+            stop_ollama,
+            restart_service,
+            get_service_logs,
+            open_folder,
+            update_budget,
+            check_budget,
             check_ollama,
             check_api,
             read_env,
