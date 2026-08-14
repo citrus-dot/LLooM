@@ -27,8 +27,8 @@
 
 | Phase | 内容 | 依赖 | 预估时间 | 状态 |
 |-------|------|------|----------|------|
-| Phase 0 | 项目骨架 + 打包验证 | 无 | 1-2 天 | 进行中 |
-| Phase 1 | ModelManager（模型注册/用量追踪/预算）| Phase 0 | 2-3 天 | 待开始 |
+| Phase 0 | 项目骨架 + 打包验证 | 无 | 1-2 天 | ✅ 已完成 |
+| Phase 1 | ModelManager（模型注册/用量追踪/预算）| Phase 0 | 2-3 天 | ✅ 已完成 |
 | Phase 2 | SmartRouter（两层分类/Fallback/成本感知）| Phase 1 | 2-3 天 | 待开始 |
 | Phase 3 | Orchestrator + 语义缓存（ChromaDB）| Phase 2 | 3-4 天 | 待开始 |
 | Phase 4 | 安全层（PII/越狱/域分类）| Phase 2（可并行）| 1-2 天 | 待开始 |
@@ -63,13 +63,13 @@
 - [ ] PyInstaller 打包验证（待 litellm/chromadb 依赖安装后执行）
 - [ ] Tauri 拉起打包二进制验证（待 Phase 7）
 
-### Phase 1: ModelManager
-- [ ] SQLite schema 建表（models / usage_records / budgets）
-- [ ] `core/database.py` CRUD 操作
-- [ ] `core/model_manager.py` ModelManager 类
-- [ ] `core/callbacks.py` UsageTrackerCallback
-- [ ] 从 v1 config_worker.yaml 迁移模型定价数据
-- [ ] 单元测试
+### Phase 1: ModelManager ✅ 已完成
+- [x] SQLite schema 建表（models / usage_records / budgets）
+- [x] `core/database.py` CRUD 操作（model / usage / budget 全量 CRUD）
+- [x] `core/model_manager.py` ModelManager 类（注册/查询/更新/删除/成本计算/预算检查/litellm参数）
+- [x] `core/callbacks.py` UsageTrackerCallback（litellm success callback → SQLite）
+- [x] `core/seed_models.py` 从 v1 config_worker.yaml 迁移 7 个模型定价数据
+- [x] `tests/test_phase1.py` 单元测试 — 35/35 通过
 
 ### Phase 2: SmartRouter
 - [ ] `core/smart_router.py` SmartRouter 类
@@ -139,6 +139,22 @@
 ## 四、进度记录
 
 ### 2026-08-14
+- 完成 Phase 1：ModelManager（模型注册/用量追踪/预算控制）
+  - 实现 `core/model_manager.py`：ModelManager 类
+    - register_model / remove_model / get_model / list_models / update_model
+    - get_litellm_params（生成 litellm 调用参数，api_key 从环境变量读取）
+    - record_usage / get_usage_summary / get_total_spend（用量追踪 + 统计）
+    - set_budget / get_budget / check_budget（预算设置 + 超限检查）
+    - calculate_cost（基于 DB 单价计算 token 成本）
+  - 实现 `core/callbacks.py`：UsageTrackerCallback
+    - litellm success_callback，自动记录每次调用的 token/cost 到 SQLite
+    - install() 函数一键挂载
+  - 实现 `core/seed_models.py`：从 v1 迁移 7 个模型定价数据
+    - qwen-plus / qwen3.6-flash / qwen3.6-plus / qwen3-max / deepseek-v3 / qwen2.5-local / gpt-4o
+    - 幂等：DB 非空时自动跳过
+  - 完善 `core/database.py`：get_total_spend 增加 model_name 过滤参数
+  - 创建 `tests/test_phase1.py`：35 项单元测试全部通过
+    - 模型 CRUD（11项）/ 用量追踪（6项）/ 预算控制（8项）/ 成本计算（2项）/ litellm 参数（3项）/ 种子数据（5项）
 - 完成需求确认：三个核心目标、Python核心+Tauri、零外部基础设施、新建v2分支
 - 完成打包方案确认：嵌入式Python运行时 + Ollama二进制内置 + Tauri自动拉起进程
 - 完成重构计划制定（10个Phase，17-30天预估）
