@@ -31,7 +31,7 @@
 | Phase 1 | ModelManager（模型注册/用量追踪/预算）| Phase 0 | 2-3 天 | ✅ 已完成 |
 | Phase 2 | SmartRouter（两层分类/Fallback/成本感知）| Phase 1 | 2-3 天 | ✅ 已完成 |
 | Phase 3 | Orchestrator + 语义缓存（ChromaDB）| Phase 2 | 3-4 天 | ✅ 已完成 |
-| Phase 4 | 安全层（PII/越狱/域分类）| Phase 2（可并行）| 1-2 天 | 待开始 |
+| Phase 4 | 安全层（PII/越狱/域分类）| Phase 2（可并行）| 1-2 天 | ✅ 已完成 |
 | Phase 5 | API 服务层（FastAPI + SSE）| Phase 1,2,3 | 2-3 天 | 待开始 |
 | Phase 6 | CLI 工具（init/model/status/chat）| Phase 1（可并行）| 1-2 天 | 待开始 |
 | Phase 7 | Tauri GUI + 进程管理 | Phase 5 | 3-5 天 | 待开始 |
@@ -96,11 +96,15 @@
 - [x] 安装 chromadb（pip3 install chromadb）
 - [x] `tests/test_phase3.py` 单元测试 — 52/52 通过
 
-### Phase 4: 安全层
-- [ ] `core/security.py` PII 检测（7 类正则）
-- [ ] 越狱拦截（5 类模式）
-- [ ] 域分类（MMLU 14 类关键词 + LLM 兜底）
-- [ ] 从 v1 semantic_router/app.py 迁移正则规则
+### Phase 4: 安全层 ✅ 已完成
+- [x] `core/security.py` PII 检测（7 类正则：邮箱/手机号/SSN/信用卡/IP/身份证/银行账号）
+- [x] 越狱拦截（5 类模式 + 关键词检测：DAN/指令覆盖/角色操纵/安全绕过/提示注入）
+- [x] 域分类（MMLU 14 类关键词预过滤 + LLM 兜底）
+- [x] 从 v1 semantic_router/app.py 迁移正则规则
+- [x] 中文字符兼容（lookbehind/lookahead 替代 \b 边界）
+- [x] 纯函数架构（无 HTTP/proxy 依赖，可复用于 CLI 和 GUI）
+- [x] 统一 check() 管线（PII → 越狱 → 域分类，短路阻断）
+- [x] `tests/test_phase4.py` 单元测试 — 115/115 通过
 
 ### Phase 5: API 服务层
 - [ ] `api/server.py` FastAPI 应用
