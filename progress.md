@@ -191,6 +191,18 @@
 
 ## 四、进度记录
 
+### 2026-08-14 (v2.1.0)
+- 完成 v2.1.0：复刻 v1（LiteLLM Suite）最终版界面，适配 v2 架构
+  - UI 重写：浅色主题（浅灰背景 + 白色卡片 + 深色侧边栏 + 绿色点缀），5 页布局（总览/用量/对话/模型/设置），可折叠区块
+  - Rust 新增 6 个命令：stop_ollama / restart_service / get_service_logs / open_folder / update_budget / check_budget
+  - 日志落盘：API server 与 Ollama 的 stdout/stderr 持久化到 data/logs/{api,ollama}.log，应用内可查看尾部 N 行
+  - 用量页完整恢复：花费统计、模型花费/请求分布、智能路由统计、定价表、路由策略表、配额管理
+  - 对话页：完整 Markdown 渲染（表格/代码块/列表/引用），会话历史侧栏
+  - 快捷入口适配 v2 原生端点（无 Docker 技术栈）
+  - 本地验证：macOS ARM64 构建，浅色主题渲染正常，服务检测正常
+  - GitHub Release v2.1.0：https://github.com/citrus-dot/LLooM/releases/tag/v2.1.0（含 LLooM-v2.1.0-macos-arm64.zip）
+  - v2.0.0 保持不变，仍可从其发布页获取
+
 ### 2026-08-14 (Phase 9)
 - 完成 Phase 9：集成测试 + 文档 + GitHub Release
   - 单元测试：Phase 1 (37/37), Phase 2 (64/64), Phase 4 (115/115), Phase 5 (78/78), Phase 6 (55/55)
