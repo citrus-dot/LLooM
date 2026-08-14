@@ -30,7 +30,7 @@
 | Phase 0 | 项目骨架 + 打包验证 | 无 | 1-2 天 | ✅ 已完成 |
 | Phase 1 | ModelManager（模型注册/用量追踪/预算）| Phase 0 | 2-3 天 | ✅ 已完成 |
 | Phase 2 | SmartRouter（两层分类/Fallback/成本感知）| Phase 1 | 2-3 天 | ✅ 已完成 |
-| Phase 3 | Orchestrator + 语义缓存（ChromaDB）| Phase 2 | 3-4 天 | 待开始 |
+| Phase 3 | Orchestrator + 语义缓存（ChromaDB）| Phase 2 | 3-4 天 | ✅ 已完成 |
 | Phase 4 | 安全层（PII/越狱/域分类）| Phase 2（可并行）| 1-2 天 | 待开始 |
 | Phase 5 | API 服务层（FastAPI + SSE）| Phase 1,2,3 | 2-3 天 | 待开始 |
 | Phase 6 | CLI 工具（init/model/status/chat）| Phase 1（可并行）| 1-2 天 | 待开始 |
@@ -81,13 +81,20 @@
 - [x] 路由统计（get_stats / reset_stats）
 - [x] `tests/test_phase2.py` 单元测试 — 64/64 通过
 
-### Phase 3: Orchestrator + 语义缓存
-- [ ] `core/cache.py` SemanticCache（ChromaDB）
-- [ ] `core/orchestrator.py` TaskOrchestrator
-- [ ] 从 v1 迁移 is_complex() / decompose() / aggregate() prompt
-- [ ] 流式 SSE 事件输出
-- [ ] 域分类集成
-- [ ] 集成测试
+### Phase 3: Orchestrator + 语义缓存 ✅ 已完成
+- [x] `core/cache.py` SemanticCache（ChromaDB PersistentClient，余弦相似度，TTL）
+- [x] `core/orchestrator.py` TaskOrchestrator（分解/执行/聚合/SSE流式）
+- [x] 从 v1 迁移 is_complex()（6条复杂度正则+长度+句子数检测）
+- [x] 从 v1 迁移 decompose() 系统 prompt + JSON 解析
+- [x] 从 v1 迁移 aggregate() 系统 prompt + 上下文注入
+- [x] 从 v1 迁移 SubTask/OrchestrationResult/SubTaskStatus 数据结构
+- [x] 从 v1 迁移 TASK_MODEL_PREFERENCE + _select_model() + plan_costs()
+- [x] 从 v1 迁移 COMPLEXITY_INDICATORS（6条正则）
+- [x] 流式 SSE 事件输出（orchestrate_stream 生成器：decompose/task_start/task_done/result）
+- [x] 域分类集成（sr_domain 参数传递到 SSE 事件）
+- [x] `_call_llm` 统一改用 litellm.completion（替代 urllib HTTP 调用）
+- [x] 安装 chromadb（pip3 install chromadb）
+- [x] `tests/test_phase3.py` 单元测试 — 52/52 通过
 
 ### Phase 4: 安全层
 - [ ] `core/security.py` PII 检测（7 类正则）
@@ -141,6 +148,26 @@
 ## 四、进度记录
 
 ### 2026-08-14
+- 完成 Phase 3：Orchestrator + 语义缓存（ChromaDB）
+  - 实现 `core/cache.py`：SemanticCache 类
+    - ChromaDB PersistentClient（本地文件，零外部服务依赖）
+    - 余弦相似度（similarity_threshold=0.95）+ TTL（86400s）
+    - put/get/clear/count + 优雅降级（无嵌入模型时自动禁用）
+    - get_cache() 全局单例
+  - 实现 `core/orchestrator.py`：TaskOrchestrator 类
+    - is_complex()：6 条复杂度正则 + 长度 > 100 + 句子数 > 2
+    - decompose()：LLM 分解 + JSON 解析 + 错误回退（单任务）
+    - execute_task()：SmartRouter 路由 + 语义缓存 + 推理模型流式
+    - aggregate()：LLM 汇总 + 上下文历史注入 + 错误回退（拼接）
+    - plan_costs()：基于 DB 定价估算子任务成本
+    - orchestrate()：非流式全流程（检测→分解→执行→聚合）
+    - orchestrate_stream()：SSE 生成器（decompose/task_start/task_done/result）
+    - _call_llm()：统一用 litellm.completion 替代 v1 urllib HTTP 调用
+  - 从 v1 迁移：SubTask/OrchestrationResult/SubTaskStatus 数据结构
+  - 从 v1 迁移：COMPLEXITY_INDICATORS（6 条）、TASK_MODEL_PREFERENCE、DECOMPOSE/AGGREGATE 系统 prompt
+  - 安装 chromadb（pip3 install chromadb）
+  - 创建 `tests/test_phase3.py`：52 项单元测试全部通过
+    - 缓存(2) / 复杂度检测(10) / 模型选择(8) / 成本规划(4) / 分解回退(3) / 数据结构(7) / 执行失败(3) / SSE格式(6) / SSE复杂查询(3) / 提示词迁移(6)
 - 完成 Phase 2：SmartRouter（两层分类/Fallback/成本感知）
   - 实现 `core/smart_router.py`：SmartRouter 类
     - 两层分类器：_rule_classify() 正则规则优先（零成本），_llm_classify() LLM 兜底
