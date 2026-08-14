@@ -32,7 +32,7 @@
 | Phase 2 | SmartRouter（两层分类/Fallback/成本感知）| Phase 1 | 2-3 天 | ✅ 已完成 |
 | Phase 3 | Orchestrator + 语义缓存（ChromaDB）| Phase 2 | 3-4 天 | ✅ 已完成 |
 | Phase 4 | 安全层（PII/越狱/域分类）| Phase 2（可并行）| 1-2 天 | ✅ 已完成 |
-| Phase 5 | API 服务层（FastAPI + SSE）| Phase 1,2,3 | 2-3 天 | 待开始 |
+| Phase 5 | API 服务层（FastAPI + SSE）| Phase 1,2,3 | 2-3 天 | ✅ 已完成 |
 | Phase 6 | CLI 工具（init/model/status/chat）| Phase 1（可并行）| 1-2 天 | 待开始 |
 | Phase 7 | Tauri GUI + 进程管理 | Phase 5 | 3-5 天 | 待开始 |
 | Phase 8 | 打包构建（PyInstaller + Ollama + Tauri）| Phase 7 | 2-3 天 | 待开始 |
@@ -106,13 +106,17 @@
 - [x] 统一 check() 管线（PII → 越狱 → 域分类，短路阻断）
 - [x] `tests/test_phase4.py` 单元测试 — 115/115 通过
 
-### Phase 5: API 服务层
-- [ ] `api/server.py` FastAPI 应用
-- [ ] REST 端点（models/usage/budget/config/health/stats）
-- [ ] SSE 端点（chat/stream, orchestrate/stream）
-- [ ] 对话历史 CRUD（JSON 文件）
-- [ ] CORS 配置
-- [ ] 端到端测试
+### Phase 5: API 服务层 ✅ 已完成
+- [x] `api/server.py` FastAPI 应用（23 条路由）
+- [x] REST 端点（health/models/usage/budgets/config/stats）
+- [x] SSE 端点（chat/stream — 安全检查 + 路由 + 流式响应）
+- [x] SSE 端点（orchestrate/stream — 安全检查 + 任务编排流式输出）
+- [x] 对话历史 CRUD（JSON 文件存储，自动标题生成）
+- [x] CORS 配置（allow_origins=["*"]）
+- [x] 安全层集成（PII 掩码/阻断、越狱拦截、域分类注入）
+- [x] 用量追踪集成（自动记录 token 使用和成本）
+- [x] 模块级初始化（init_db + seed_models + SmartRouter + Orchestrator）
+- [x] `tests/test_phase5.py` 单元测试 — 78/78 通过
 
 ### Phase 6: CLI 工具
 - [ ] `cli/lloom.py` click 框架
