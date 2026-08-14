@@ -34,7 +34,7 @@
 | Phase 4 | 安全层（PII/越狱/域分类）| Phase 2（可并行）| 1-2 天 | ✅ 已完成 |
 | Phase 5 | API 服务层（FastAPI + SSE）| Phase 1,2,3 | 2-3 天 | ✅ 已完成 |
 | Phase 6 | CLI 工具（init/model/status/chat）| Phase 1（可并行）| 1-2 天 | ✅ 已完成 |
-| Phase 7 | Tauri GUI + 进程管理 | Phase 5 | 3-5 天 | 待开始 |
+| Phase 7 | Tauri GUI + 进程管理 | Phase 5 | 3-5 天 | ✅ 已完成 |
 | Phase 8 | 打包构建（PyInstaller + Ollama + Tauri）| Phase 7 | 2-3 天 | 待开始 |
 | Phase 9 | 集成测试 + 文档 + GitHub Release | Phase 8 | 2-3 天 | 待开始 |
 
@@ -130,15 +130,29 @@
 - [x] Bug fix: jailbreak regex 支持多形容词组合（"ignore all previous instructions"）
 - [x] `tests/test_phase6.py` 单元测试 — 55/55 通过
 
-### Phase 7: Tauri GUI
-- [ ] 从 v1 迁移 tauri-app/ 目录
-- [ ] main.rs 重写进程管理（拉起 Ollama + Python API）
-- [ ] index.html 改 API URL（:7860）
-- [ ] 总览页：docker compose → API 调用
-- [ ] 用量页：Prometheus → API + SVG 图表
-- [ ] 对话页：SSE URL 改为 localhost:7860
-- [ ] 模型页：CLI JSON → REST API
-- [ ] 设置页：.env 读写 → API 配置端点
+### Phase 7: Tauri GUI ✅ 已完成
+- [x] `tauri-app/src-tauri/Cargo.toml` — Tauri v2 + serde + shell plugin
+- [x] `tauri-app/src-tauri/tauri.conf.json` — 窗口 1280x860 + 托盘图标 + 资源打包
+- [x] `tauri-app/src-tauri/build.rs` — Tauri 构建脚本
+- [x] `tauri-app/src-tauri/src/main.rs` — 进程管理 + 23 个 Tauri 命令
+  - Python API 进程管理（start_api / stop_api / check_api）
+  - Ollama 进程管理（start_ollama / check_ollama）
+  - .env 读写（read_env / write_env / write_env_batch）
+  - API 代理（get_usage_stats / get_quota / get_trends / chat_request / orchestrate_request）
+  - 模型管理（get_models / add_model / remove_model — 直接 API 调用）
+  - 对话 CRUD（list/load/save/delete_conversation — JSON 文件存储）
+  - 智能重启（smart_restart — 停止 API → 重启 → 健康检查）
+  - 系统托盘（显示/退出菜单）
+  - 子进程清理（窗口关闭时 kill API + Ollama）
+- [x] `tauri-app/src-tauri/ui/index.html` — 5 页 SPA（纯 JS，无框架）
+  - 总览页：服务健康 + 模型/花费/缓存统计 + 进程控制按钮
+  - 用量页：模型用量表 + 预算表 + 路由统计表
+  - 对话页：对话列表 + 聊天消息 + SSE 流式输出 + 自动保存
+  - 模型管理页：模型表格 + 添加弹窗（供应商预设）+ 删除
+  - 设置页：.env 编辑器（4 分区）+ 保存即智能重启
+  - 侧边栏状态指示（API/Ollama 健康检查，30s 轮询）
+- [x] `tauri-app/package.json` — NPM 配置（@tauri-apps/cli + api v2）
+- [x] 从 v1 迁移图标文件（6 个 PNG/ICO/ICNS）
 
 ### Phase 8: 打包构建
 - [ ] PyInstaller 打包 Python 核心（hiddenimports 调试）

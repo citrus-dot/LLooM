@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "LLooM",
+  "version": "2.0.0",
+  "identifier": "com.lloom.app",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "LLooM v2 — Intelligent LLM Routing",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 1024,
+        "minHeight": 720,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "dangerousDisableAssetCspModification": true
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "../../core/",
+      "../../api/",
+      "../../cli/",
+      "../../tests/",
+      "../../pyproject.toml",
+      "../../.env.example"
+    ]
+  }
+}
