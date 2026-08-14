@@ -1,0 +1,682 @@
+//! Axum HTTP server — pure REST API.
+//!
+//! All LLM work is delegated to the Python AI micro-service (`ai_client`).
+//! No RPC bridge, no stringly-typed dispatch — every endpoint is a typed
+//! handler on a real resource path.
+
+use crate::ai_client::{self, ModelSpec};
+use crate::config;
+use crate::conversations;
+use crate::db;
+use crate::error::{AppError, Result};
+use crate::models::*;
+use crate::router;
+use crate::security;
+use axum::body::Body;
+use axum::extract::{Path, Query, State};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+// ── AppState ──
+
+#[derive(Clone)]
+pub struct AppState {
+    pub children: Arc<Mutex<Children>>,
+}
+
+#[derive(Default)]
+pub struct Children {
+    pub api: Option<std::process::Child>,
+    pub ollama: Option<std::process::Child>,
+    pub ai: Option<std::process::Child>,
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            children: Arc::new(Mutex::new(Children::default())),
+        }
+    }
+}
+
+// ── Error → response ──
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let status = StatusCode::from_u16(self.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(json!({ "error": self.to_string() }))).into_response()
+    }
+}
+
+// ── DTOs ──
+
+#[derive(Debug, Deserialize)]
+struct ChatBody {
+    #[serde(default)]
+    model: Option<String>,
+    messages: Vec<Value>,
+    #[serde(default)]
+    sr_domain: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OrchestrateBody {
+    query: String,
+    #[serde(default)]
+    history: Vec<Value>,
+    #[serde(default)]
+    sr_domain: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfigUpdate {
+    updates: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConversationSave {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    messages: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ServiceAction {
+    #[serde(default)]
+    changed_keys: Vec<String>,
+}
+
+// ── Health / UI ──
+
+async fn ui_root() -> Response {
+    match config::ui_dir() {
+        Some(dir) => {
+            let content = std::fs::read_to_string(dir.join("index.html")).unwrap_or_default();
+            Response::builder()
+                .header(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))
+                .body(Body::from(content))
+                .unwrap()
+        }
+        None => (StatusCode::NOT_FOUND, "ui/index.html not found").into_response(),
+    }
+}
+
+async fn health() -> Json<Value> {
+    Json(json!({ "status": "ok", "version": "2.0.0" }))
+}
+
+// ── Models ──
+
+async fn list_models(Query(q): Query<Value>) -> Result<Json<Value>> {
+    let active_only = q
+        .get("active_only")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    Ok(Json(json!({ "models": db::list_models(active_only)? })))
+}
+
+async fn register_model(Json(m): Json<Model>) -> Result<Json<Value>> {
+    let id = db::insert_model(&m)?;
+    Ok(Json(json!({ "id": id, "name": m.name })))
+}
+
+async fn get_model(Path(name): Path<String>) -> Result<Json<Model>> {
+    Ok(Json(db::get_model(&name)?))
+}
+
+async fn update_model(Path(name): Path<String>, Json(updates): Json<serde_json::Map<String, Value>>) -> Result<Json<Value>> {
+    if !db::update_model(&name, &updates)? {
+        return Err(AppError::NotFound(format!("model ':name'")));
+    }
+    Ok(Json(json!({ "updated": true })))
+}
+
+async fn delete_model(Path(name): Path<String>) -> Result<Json<Value>> {
+    if !db::delete_model(&name)? {
+        return Err(AppError::NotFound(format!("model ':name'")));
+    }
+    Ok(Json(json!({ "deleted": true })))
+}
+
+// ── Usage / Budgets ──
+
+async fn get_usage(Query(q): Query<Value>) -> Result<Json<Value>> {
+    let model_name = q.get("model_name").and_then(|v| v.as_str());
+    let user_id = q.get("user_id").and_then(|v| v.as_str());
+    let since = q.get("since").and_then(|v| v.as_str());
+    let stats = db::get_usage_stats(model_name, user_id, since)?;
+    let total = db::get_total_spend(user_id, model_name, since)?;
+    Ok(Json(json!({ "usage": stats, "total_spend": total })))
+}
+
+async fn list_budgets() -> Result<Json<Value>> {
+    Ok(Json(json!({ "budgets": db::list_budgets()? })))
+}
+
+async fn set_budget(Json(req): Json<Budget>) -> Result<Json<Value>> {
+    db::upsert_budget(&req.scope, &req.scope_id, req.max_budget, &req.duration)?;
+    Ok(Json(json!({ "set": true })))
+}
+
+async fn check_budget(Query(q): Query<Value>) -> Result<Json<Value>> {
+    let scope = q.get("scope").and_then(|v| v.as_str()).unwrap_or("");
+    let scope_id = q.get("scope_id").and_then(|v| v.as_str()).unwrap_or("");
+    let prospective = q.get("prospective_cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let budget = db::get_budget(scope, scope_id)?;
+    let (within, spent) = match &budget {
+        Some(b) => {
+            let spent = db::get_total_spend(
+                if scope == "user" { Some(scope_id) } else { None },
+                if scope == "model" { Some(scope_id) } else { None },
+                None,
+            )?;
+            ((spent + prospective) <= b.max_budget, spent)
+        }
+        None => (true, 0.0),
+    };
+    Ok(Json(json!({ "within_budget": within, "budget": budget, "spent": spent })))
+}
+
+// ── Config / Stats ──
+
+async fn get_config() -> Json<Value> {
+    Json(json!(config::read_env()))
+}
+
+async fn update_config(Json(req): Json<ConfigUpdate>) -> Result<Json<Value>> {
+    write_env(&req.updates)?;
+    Ok(Json(json!({ "updated": req.updates.keys().collect::<Vec<_>>() })))
+}
+
+async fn get_stats() -> Result<Json<Value>> {
+    Ok(Json(json!({
+        "model_count": db::list_models(true)?.len(),
+        "total_spend": db::get_total_spend(None, None, None)?,
+        "model_spend": db::get_usage_stats(None, None, None)?,
+        "routing_stats": {},
+        "cache_enabled": true,
+    })))
+}
+
+// ── Conversations ──
+
+async fn list_conversations() -> Result<Json<Value>> {
+    Ok(Json(json!({ "conversations": conversations::list()? })))
+}
+
+async fn get_conversation(Path(id): Path<String>) -> Result<Json<Value>> {
+    Ok(Json(conversations::load(&id)?))
+}
+
+async fn save_conversation(Json(req): Json<ConversationSave>) -> Result<Json<Value>> {
+    let id = conversations::save_or_create(&req.id, &req.title, &req.messages)?;
+    Ok(Json(json!({ "id": id, "saved": true })))
+}
+
+async fn delete_conversation(Path(id): Path<String>) -> Result<Json<Value>> {
+    conversations::delete(&id)?;
+    Ok(Json(json!({ "deleted": true })))
+}
+
+// ── Chat / Orchestrate (SSE) ──
+
+async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
+    let user_text = security::extract_user_text(&req.messages);
+    let sec = security::check(&user_text, true, true);
+    if sec.blocked {
+        return blocked_response(&sec);
+    }
+
+    let processed_messages: Vec<Value> = if sec.processed_text != user_text {
+        let mut msgs = req.messages.clone();
+        if let Some(last_user) = msgs
+            .iter_mut()
+            .rev()
+            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+        {
+            last_user["content"] = Value::String(sec.processed_text.clone());
+        }
+        msgs
+    } else {
+        req.messages.clone()
+    };
+
+    // Routing: regex tier + domain enhancement
+    let models = match db::list_models(true) {
+        Ok(m) => m,
+        Err(e) => return err_response(e),
+    };
+    let classifier = pick_classifier(&models);
+    let sr_domain = req.sr_domain.clone().unwrap_or_default();
+    let mut routing = router::route(
+        req.model.as_deref().unwrap_or("auto"),
+        &user_text,
+        classifier.as_ref(),
+    )
+    .await;
+    if !sr_domain.is_empty() {
+        let (new_type, changed) = router::enhance_with_domain(&routing.task_type, &sr_domain);
+        if changed {
+            routing.task_type = new_type;
+        }
+    }
+
+    // Resolve the routed model's AI spec
+    let spec: ModelSpec = models
+        .iter()
+        .find(|m| m.name == routing.model)
+        .map(ModelSpec::from)
+        .unwrap_or_else(|| ModelSpec {
+            name: routing.model.clone(),
+            litellm_model: routing.model.clone(),
+            api_base: String::new(),
+            api_key: String::new(),
+            input_cost_per_token: 0.0,
+            output_cost_per_token: 0.0,
+        });
+
+    let head = format!(
+        "data: {}\n\n",
+        json!({
+            "routing": routing,
+            "security": { "domain": sec.domain, "domain_method": sec.domain_method, "pii": sec.pii }
+        })
+    );
+
+    // Direct async AI call (reqwest is async; safe on the tokio executor)
+    let tail = match ai_client::chat(&spec, &processed_messages, 500, 0.3).await {
+        Ok(res) => format!(
+            "data: {}\n\n",
+            json!({
+                "done": true,
+                "content": res.content,
+                "model": res.model,
+                "cost": res.cost,
+                "input_tokens": res.input_tokens,
+                "output_tokens": res.output_tokens,
+            })
+        ),
+        Err(e) => format!("data: {}\n\n", json!({ "error": true, "detail": e.to_string() })),
+    };
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .body(Body::from(format!("{head}{tail}")))
+        .unwrap()
+}
+
+async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
+    let sec = security::check(&req.query, true, true);
+    if sec.blocked {
+        return blocked_response(&sec);
+    }
+
+    let models = match db::list_models(true) {
+        Ok(m) => m,
+        Err(e) => return err_response(e),
+    };
+    let specs: Vec<ModelSpec> = models.iter().map(ModelSpec::from).collect();
+    let cache_dir = config::data_dir().join("chroma").to_string_lossy().to_string();
+
+    let events = match ai_client::orchestrate_stream(
+        &req.query,
+        &req.history,
+        req.sr_domain.as_deref().unwrap_or(""),
+        &specs,
+        &cache_dir,
+    )
+    .await
+    {
+        Ok(e) => e,
+        Err(e) => return err_response(AppError::AiService(e.to_string())),
+    };
+
+    let mut sse = String::new();
+    for ev in events {
+        sse.push_str(&format!("event: {}\ndata: {}\n\n", ev.event, ev.data.to_string()));
+    }
+    Response::builder()
+        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .body(Body::from(sse))
+        .unwrap()
+}
+
+// ── Services (process management) ──
+
+/// A service's real status: reports whether *our* spawned child is alive AND
+/// the port responds. If the port responds but our child is dead, the port is
+/// likely held by a stale process — reported as "conflict" instead of healthy.
+async fn services_status(State(state): State<AppState>) -> Json<Value> {
+    // Child handles we manage.
+    let ai_alive = child_alive(&state, "ai");
+    let ollama_alive = child_alive(&state, "ollama");
+
+    // Port probes (async HTTP).
+    let ai_health = crate::processes::check_ai_health().await;
+    let ai_responding = ai_health.status == "ok";
+    let ai_ready = ai_health.ready;
+    let ollama_responding = crate::processes::check_ollama_health().await;
+
+    let service = |name: &str, child_alive: bool, responding: bool| -> Value {
+        match (child_alive, responding) {
+            (true, true) => json!({
+                "name": name, "status": "Up (healthy)", "healthy": true, "detail": ""
+            }),
+            (false, true) => json!({
+                "name": name,
+                "status": "端口被残留进程占用",
+                "healthy": false,
+                "detail": "子进程未运行，但端口有响应（可能是旧进程占用）"
+            }),
+            (true, false) => json!({
+                "name": name,
+                "status": "进程存活但无响应",
+                "healthy": false,
+                "detail": "子进程在运行，但健康检查失败"
+            }),
+            (false, false) => json!({
+                "name": name, "status": "Down", "healthy": false, "detail": ""
+            }),
+        }
+    };
+
+    let ai_status = if ai_alive && ai_responding {
+        if ai_ready {
+            json!({"name": "AI Service", "status": "Up (healthy)", "healthy": true, "detail": ""})
+        } else {
+            json!({
+                "name": "AI Service",
+                "status": "运行但未配置模型",
+                "healthy": false,
+                "detail": "未配置任何云 API Key 且 Ollama 不可达"
+            })
+        }
+    } else {
+        service("AI Service", ai_alive, ai_responding)
+    };
+
+    let services = json!([
+        {
+            "name": "Core Server",
+            "status": "Up (healthy)",
+            "healthy": true,
+            "detail": "",
+        },
+        service("Ollama", ollama_alive, ollama_responding),
+        ai_status,
+    ]);
+    let healthy = services.as_array().unwrap().iter().filter(|s| s["healthy"].as_bool().unwrap_or(false)).count();
+    let running = services.as_array().unwrap().iter().filter(|s| s["status"].as_str().unwrap_or("").starts_with("Up")).count();
+    Json(json!({
+        "services": services,
+        "total": services.as_array().unwrap().len(),
+        "healthy": healthy,
+        "running": running,
+    }))
+}
+
+/// True if we hold a live child handle for the named service.
+fn child_alive(state: &AppState, name: &str) -> bool {
+    let mut guard = state.children.lock().unwrap();
+    let child = match name {
+        "ai" => guard.ai.as_mut(),
+        "ollama" => guard.ollama.as_mut(),
+        _ => return false,
+    };
+    match child {
+        Some(c) => c.try_wait().map(|st| st.is_none()).unwrap_or(false),
+        None => false,
+    }
+}
+
+async fn service_start(State(state): State<AppState>, Path(name): Path<String>) -> Json<Value> {
+    let result = match name.as_str() {
+        "ollama" => start_ollama_proc(&state).await,
+        "ai" => start_ai_proc(&state).await,
+        other => format!("unknown service: {other}"),
+    };
+    Json(json!({ "message": result }))
+}
+
+async fn service_stop(State(state): State<AppState>, Path(name): Path<String>) -> Json<Value> {
+    let result = match name.as_str() {
+        "ollama" => stop_ollama_proc(&state),
+        "ai" => stop_ai_proc(&state),
+        other => format!("unknown service: {other}"),
+    };
+    Json(json!({ "message": result }))
+}
+
+async fn service_restart(State(state): State<AppState>, Path(name): Path<String>) -> Json<Value> {
+    let result = match name.as_str() {
+        "ollama" => {
+            let _ = stop_ollama_proc(&state);
+            start_ollama_proc(&state).await
+        }
+        "ai" => {
+            let _ = stop_ai_proc(&state);
+            start_ai_proc(&state).await
+        }
+        other => format!("unknown service: {other}"),
+    };
+    Json(json!({ "message": result }))
+}
+
+async fn service_logs(Path(name): Path<String>) -> Json<Value> {
+    let file = match name.as_str() {
+        "ollama" => "ollama.log",
+        "ai" => "ai.log",
+        _ => "ai.log",
+    };
+    let path = config::log_dir().join(file);
+    let content = tokio::task::spawn_blocking(move || std::fs::read_to_string(path).unwrap_or_default())
+        .await
+        .unwrap_or_default();
+    let tail: Vec<&str> = content.lines().rev().take(200).collect();
+    let logs: String = tail.iter().rev().map(|s| s.to_string()).collect::<Vec<_>>().join("\n");
+    Json(json!({ "logs": logs }))
+}
+
+async fn smart_restart(State(state): State<AppState>, Json(action): Json<ServiceAction>) -> Json<Value> {
+    let mut restarted = Vec::new();
+    let mut errors = Vec::new();
+    let _ = action.changed_keys; // any config change triggers an AI service restart
+    {
+        let mut guard = state.children.lock().unwrap();
+        if let Some(child) = guard.ai.as_mut() {
+            let _ = child.kill();
+            guard.ai = None;
+        }
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    match crate::processes::start_ai().await {
+        Ok(child) => {
+            state.children.lock().unwrap().ai = child;
+            restarted.push("AI Service".to_string());
+        }
+        Err(e) => errors.push(format!("AI service restart failed: {e}")),
+    }
+    Json(json!({ "ok": errors.is_empty(), "restarted": restarted, "errors": errors }))
+}
+
+// ── System ──
+
+async fn open_folder(Json(body): Json<Value>) -> Json<Value> {
+    let path = body.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let ok = std::process::Command::new(opener)
+        .arg(path)
+        .spawn()
+        .map(|_| true)
+        .unwrap_or(false);
+    Json(json!({ "ok": ok }))
+}
+
+async fn open_web(Json(body): Json<Value>) -> Json<Value> {
+    let url = body.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let _ = std::process::Command::new(opener).arg(url).spawn();
+    Json(json!({ "ok": true }))
+}
+
+async fn run_cli(Json(body): Json<Value>) -> Json<Value> {
+    let args: Vec<String> = body
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    let install_dir = config::install_dir();
+    // Blocking child-process wait must run off the async executor.
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("python3")
+            .arg("cli/lloom.py")
+            .args(&args)
+            .current_dir(install_dir)
+            .output()
+    })
+    .await
+    .unwrap_or(Err(std::io::Error::other("task join failed")));
+    match output {
+        Ok(o) => Json(json!({
+            "stdout": String::from_utf8_lossy(&o.stdout),
+            "stderr": String::from_utf8_lossy(&o.stderr),
+        })),
+        Err(e) => Json(json!({ "error": e.to_string() })),
+    }
+}
+
+// ── Router ──
+
+pub fn build_router(state: AppState) -> Router {
+    Router::new()
+        // UI + health
+        .route("/", get(ui_root))
+        .route("/index.html", get(ui_root))
+        .route("/api/health", get(health))
+        // Models
+        .route("/api/models", get(list_models).post(register_model))
+        .route("/api/models/{name}", get(get_model).put(update_model).delete(delete_model))
+        // Usage + budgets
+        .route("/api/usage", get(get_usage))
+        .route("/api/budgets", get(list_budgets).post(set_budget))
+        .route("/api/budgets/check", get(check_budget))
+        // Config + stats
+        .route("/api/config", get(get_config).post(update_config))
+        .route("/api/stats", get(get_stats))
+        // Conversations
+        .route("/api/conversations", get(list_conversations).post(save_conversation))
+        .route("/api/conversations/{id}", get(get_conversation).delete(delete_conversation))
+        // Chat + orchestrate (SSE)
+        .route("/api/chat/stream", post(chat_stream))
+        .route("/api/orchestrate/stream", post(orchestrate_stream))
+        // Services (process management)
+        .route("/api/services/status", get(services_status))
+        .route("/api/services/{name}/start", post(service_start))
+        .route("/api/services/{name}/stop", post(service_stop))
+        .route("/api/services/{name}/restart", post(service_restart))
+        .route("/api/services/{name}/logs", get(service_logs))
+        .route("/api/services/smart-restart", post(smart_restart))
+        // System
+        .route("/api/system/open-folder", post(open_folder))
+        .route("/api/system/open-web", post(open_web))
+        .route("/api/system/cli", post(run_cli))
+        .with_state(state)
+}
+
+// ── Private helpers ──
+
+fn pick_classifier(models: &[Model]) -> Option<ModelSpec> {
+    for name in ["qwen3.6-flash", "qwen3-max", "qwen-plus"] {
+        if let Some(m) = models.iter().find(|m| &m.name == name) {
+            return Some(m.into());
+        }
+    }
+    models.first().map(ModelSpec::from)
+}
+
+fn blocked_response(sec: &SecurityReport) -> Response {
+    let body = json!({
+        "error": true,
+        "block_reason": sec.block_reason,
+        "detail": sec.pii,
+    });
+    Response::builder()
+        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .body(Body::from(format!("data: {}\n\n", body.to_string())))
+        .unwrap()
+}
+
+fn err_response(e: AppError) -> Response {
+    let status = StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, Json(json!({ "error": e.to_string() }))).into_response()
+}
+
+fn write_env(updates: &HashMap<String, String>) -> Result<()> {
+    let env_path = config::env_file_path();
+    let mut env = config::read_env();
+    for (k, v) in updates {
+        env.insert(k.clone(), v.clone());
+    }
+    let mut keys: Vec<&String> = env.keys().collect();
+    keys.sort();
+    let mut out = String::new();
+    for k in keys {
+        out.push_str(&format!("{k}={}\n", env.get(k).unwrap()));
+    }
+    std::fs::write(&env_path, out).map_err(AppError::Io)
+}
+
+async fn start_ollama_proc(state: &AppState) -> String {
+    // start_ollama does a port probe internally; do it before locking.
+    match crate::processes::start_ollama().await {
+        Ok(child) => {
+            let mut guard = state.children.lock().unwrap();
+            guard.ollama = child; // None → already running, keep handle
+            "Ollama started".to_string()
+        }
+        Err(e) => format!("Failed to start Ollama: {e}"),
+    }
+}
+
+fn stop_ollama_proc(state: &AppState) -> String {
+    let mut guard = state.children.lock().unwrap();
+    if let Some(child) = guard.ollama.as_mut() {
+        let _ = child.kill();
+        guard.ollama = None;
+        "Ollama stopped".to_string()
+    } else {
+        "Ollama not running".to_string()
+    }
+}
+
+async fn start_ai_proc(state: &AppState) -> String {
+    // start_ai does a health probe internally; do it before locking.
+    match crate::processes::start_ai().await {
+        Ok(child) => {
+            let mut guard = state.children.lock().unwrap();
+            guard.ai = child; // None → already running, keep handle
+            "AI service started".to_string()
+        }
+        Err(e) => format!("Failed to start AI service: {e}"),
+    }
+}
+
+fn stop_ai_proc(state: &AppState) -> String {
+    let mut guard = state.children.lock().unwrap();
+    if let Some(child) = guard.ai.as_mut() {
+        let _ = child.kill();
+        guard.ai = None;
+        "AI service stopped".to_string()
+    } else {
+        "AI service not running".to_string()
+    }
+}

@@ -1,755 +1,118 @@
-// LLooM v2 — Tauri backend: process management + API proxy + conversation CRUD
-//
-// v2 changes from v1:
-// - Python API server replaces Docker Compose (spawn as child process)
-// - Port 7860 replaces port 3002
-// - Direct API calls replace CLI JSON commands for model management
-// - No Docker dependency
+//! LLooM v2 — entry point.
+//!
+//! Two run modes:
+//!   `lloom`                → GUI (Tauri desktop window + tray)
+//!   `lloom --headless`     → headless axum server (browser UI)
+//!
+//! In both modes the Rust axum server (`:7861`) is the single REST contract.
+//! The GUI frontend talks to the same REST API as the WebUI — the Tauri shell
+//! only provides the desktop window and system tray.
 
-use std::collections::HashMap;
-use std::env;
-use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
-use tauri::{Manager, State};
+use lloom::config;
+use lloom::db;
+use lloom::server::{AppState, build_router};
+use tauri::Manager;
 
-// ── State ──
-
-struct AppState {
-    api_child: Mutex<Option<Child>>,
-    ollama_child: Mutex<Option<Child>>,
+fn is_headless() -> bool {
+    std::env::args().any(|a| a == "--headless" || a == "-H")
 }
 
-// ── Helpers ──
-
-fn get_install_dir() -> String {
-    env::var("LLOOM_INSTALL_DIR")
-        .unwrap_or_else(|_| ".".to_string())
-}
-
-fn get_api_binary_path() -> Option<String> {
-    let install_dir = get_install_dir();
-    // Production: resources are under {install_dir}/resources/lloom-server/
-    for sub in &["resources/lloom-server", "lloom-server"] {
-        let bin = std::path::Path::new(&install_dir)
-            .join(sub)
-            .join("lloom-server");
-        if bin.exists() && bin.is_file() {
-            return Some(bin.to_string_lossy().to_string());
-        }
-    }
-    None
-}
-
-fn get_ollama_binary_path() -> String {
-    let install_dir = get_install_dir();
-    for sub in &["resources", ""] {
-        let bin = std::path::Path::new(&install_dir).join(sub).join("ollama");
-        if bin.exists() && bin.is_file() {
-            return bin.to_string_lossy().to_string();
-        }
-    }
-    "ollama".to_string()
-}
-
-fn enhanced_path() -> String {
-    let current = env::var("PATH").unwrap_or_default();
-    let extra = [
-        "/usr/local/bin",
-        "/opt/homebrew/bin",
-        "/usr/bin",
-        "/bin",
-        "/usr/sbin",
-        "/sbin",
-        "/Library/Frameworks/Python.framework/Versions/3.11/bin",
-        "/Library/Frameworks/Python.framework/Versions/3.10/bin",
-    ];
-    let mut parts: Vec<&str> = extra.to_vec();
-    for p in current.split(':') {
-        if !parts.contains(&p) {
-            parts.push(p);
-        }
-    }
-    parts.join(":")
-}
-
-fn cmd(binary: &str) -> Command {
-    let mut c = Command::new(binary);
-    c.env("PATH", enhanced_path());
-    c.env_remove("PYTHONHOME");
-    c.env_remove("PYTHONPATH");
-    c
-}
-
-fn curl_get(url: &str) -> String {
-    let output = cmd("curl")
-        .arg("-s")
-        .arg("--connect-timeout")
-        .arg("3")
-        .arg("-m")
-        .arg("10")
-        .arg(url)
-        .output();
-    match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-        Err(e) => format!("{{\"error\": \"curl failed: {e}\"}}"),
-    }
-}
-
-fn curl_post(url: &str, body: &str) -> String {
-    let output = cmd("curl")
-        .arg("-s")
-        .arg("--connect-timeout")
-        .arg("3")
-        .arg("-m")
-        .arg("30")
-        .arg("-X")
-        .arg("POST")
-        .arg("-H")
-        .arg("Content-Type: application/json")
-        .arg("-d")
-        .arg(body)
-        .arg(url)
-        .output();
-    match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-        Err(e) => format!("{{\"error\": \"curl failed: {e}\"}}"),
-    }
-}
-
-fn curl_delete(url: &str) -> String {
-    let output = cmd("curl")
-        .arg("-s")
-        .arg("--connect-timeout")
-        .arg("3")
-        .arg("-m")
-        .arg("10")
-        .arg("-X")
-        .arg("DELETE")
-        .arg(url)
-        .output();
-    match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-        Err(e) => format!("{{\"error\": \"curl failed: {e}\"}}"),
-    }
-}
-
-fn curl_post_sse(url: &str, body: &str) -> String {
-    let output = cmd("curl")
-        .arg("-s")
-        .arg("-N")
-        .arg("--connect-timeout")
-        .arg("5")
-        .arg("-m")
-        .arg("120")
-        .arg("-X")
-        .arg("POST")
-        .arg("-H")
-        .arg("Content-Type: application/json")
-        .arg("-d")
-        .arg(body)
-        .arg(url)
-        .output();
-    match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-        Err(e) => format!("{{\"error\": \"curl SSE failed: {e}\"}}"),
-    }
-}
-
-// ── Process log files ──
-
-fn log_file_path(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(&get_install_dir())
-        .join("data")
-        .join("logs")
-        .join(name)
-}
-
-fn attach_log(c: &mut Command, log_name: &str) {
-    let _ = std::fs::create_dir_all(log_file_path(log_name).parent().unwrap());
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_file_path(log_name))
-    {
-        Ok(f) => {
-            let f_err = f.try_clone();
-            c.stdout(Stdio::from(f));
-            match f_err {
-                Ok(fe) => c.stderr(Stdio::from(fe)),
-                Err(_) => c.stderr(Stdio::null()),
-            };
-        }
-        Err(_) => {
-            c.stdout(Stdio::null());
-            c.stderr(Stdio::null());
-        }
-    }
-}
-
-// ── Data structures ──
-
-#[derive(serde::Serialize)]
-struct ServiceStatus {
-    name: String,
-    status: String,
-    healthy: bool,
-}
-
-#[derive(serde::Serialize)]
-struct SuiteStatus {
-    services: Vec<ServiceStatus>,
-    total: usize,
-    healthy: usize,
-    running: usize,
-}
-
-#[derive(serde::Serialize)]
-struct ConversationMeta {
-    id: String,
-    title: String,
-    updated_at: String,
-    message_count: usize,
-}
-
-#[derive(serde::Serialize)]
-struct SmartRestartResult {
-    ok: bool,
-    restarted: Vec<String>,
-    errors: Vec<String>,
-}
-
-// ── Tauri Commands ──
-
-#[tauri::command]
-fn get_services_status() -> SuiteStatus {
-    let mut services: Vec<ServiceStatus> = Vec::new();
-
-    // API server
-    let api_health = curl_get("http://localhost:7860/api/health");
-    let api_ok = api_health.contains("\"ok\"");
-    services.push(ServiceStatus {
-        name: "API Server".to_string(),
-        status: if api_ok { "Up (healthy)".to_string() } else { "Down".to_string() },
-        healthy: api_ok,
-    });
-
-    // Ollama
-    let ollama_health = curl_get("http://localhost:11434/api/tags");
-    let ollama_ok = ollama_health.contains("\"models\"") || ollama_health.contains("name");
-    services.push(ServiceStatus {
-        name: "Ollama".to_string(),
-        status: if ollama_ok { "Up (healthy)".to_string() } else { "Down".to_string() },
-        healthy: ollama_ok,
-    });
-
-    let total = services.len();
-    let healthy = services.iter().filter(|s| s.healthy).count();
-    let running = services.iter().filter(|s| s.status.starts_with("Up")).count();
-
-    SuiteStatus { services, total, healthy, running }
-}
-
-#[tauri::command]
-fn start_api(state: State<AppState>) -> String {
-    let install_dir = get_install_dir();
-    let mut c = if let Some(bin) = get_api_binary_path() {
-        let mut c = cmd(&bin);
-        // Set working dir to the binary's parent (where _internal/ is)
-        let bin_dir = std::path::Path::new(&bin)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or(install_dir.clone());
-        c.current_dir(&bin_dir);
-        c
+fn main() {
+    if is_headless() {
+        run_headless();
     } else {
-        let mut c = cmd("python3");
-        c.arg("api/server.py").current_dir(&install_dir);
-        c
-    };
-    attach_log(&mut c, "api.log");
-
-    match c.spawn() {
-        Ok(child) => {
-            *state.api_child.lock().unwrap() = Some(child);
-            "API server started".to_string()
-        }
-        Err(e) => format!("Failed to start API: {e}"),
+        run_gui();
     }
 }
 
-#[tauri::command]
-fn stop_api(state: State<AppState>) -> String {
-    let mut guard = state.api_child.lock().unwrap();
-    if let Some(child) = guard.as_mut() {
-        let _ = child.kill();
-        *guard = None;
-        "API server stopped".to_string()
-    } else {
-        "API server not running".to_string()
+/// Start the Python AI micro-service, Ollama, and the axum REST server.
+/// The server runs in a background tokio runtime; returns the AppState so the
+/// caller can manage child processes.
+fn start_core() -> AppState {
+    let install_dir = config::resolve_install_dir();
+    std::env::set_var("LLOOM_INSTALL_DIR", install_dir.to_string_lossy().to_string());
+
+    if let Err(e) = db::init_db() {
+        eprintln!("[core] db init failed: {e}");
+        std::process::exit(1);
     }
-}
 
-#[tauri::command]
-fn start_ollama(state: State<AppState>) -> String {
-    let ollama_bin = get_ollama_binary_path();
-    let mut c = cmd(&ollama_bin);
-    c.arg("serve");
-    attach_log(&mut c, "ollama.log");
+    let state = AppState::new();
+    let state_for_spawn = state.clone();
+    let web_port = config::web_port();
+    let router = build_router(state.clone());
 
-    match c.spawn() {
-        Ok(child) => {
-            *state.ollama_child.lock().unwrap() = Some(child);
-            "Ollama started".to_string()
-        }
-        Err(e) => format!("Failed to start Ollama: {e}"),
-    }
-}
-
-#[tauri::command]
-fn stop_ollama(state: State<AppState>) -> String {
-    let mut guard = state.ollama_child.lock().unwrap();
-    if let Some(child) = guard.as_mut() {
-        let _ = child.kill();
-        *guard = None;
-        "Ollama stopped".to_string()
-    } else {
-        "Ollama not running".to_string()
-    }
-}
-
-#[tauri::command]
-fn restart_service(service_name: String, state: State<AppState>) -> String {
-    if service_name == "Ollama" {
-        {
-            let mut guard = state.ollama_child.lock().unwrap();
-            if let Some(child) = guard.as_mut() {
-                let _ = child.kill();
-                *guard = None;
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
+        rt.block_on(async move {
+            println!("[core] starting Python AI service...");
+            match lloom::processes::start_ai().await {
+                Ok(child) => state_for_spawn.children.lock().unwrap().ai = child,
+                Err(e) => eprintln!("[core] ⚠ AI service start failed: {e}"),
             }
-        }
-        start_ollama(state)
-    } else {
-        {
-            let mut guard = state.api_child.lock().unwrap();
-            if let Some(child) = guard.as_mut() {
-                let _ = child.kill();
-                *guard = None;
+            println!("[core] starting Ollama...");
+            match lloom::processes::start_ollama().await {
+                Ok(child) => state_for_spawn.children.lock().unwrap().ollama = child,
+                Err(e) => eprintln!("[core] ⚠ Ollama start failed: {e}"),
             }
-        }
-        start_api(state)
-    }
-}
 
-#[tauri::command]
-fn get_service_logs(service_name: String, lines: Option<usize>) -> String {
-    let file = if service_name == "Ollama" { "ollama.log" } else { "api.log" };
-    let content = std::fs::read_to_string(log_file_path(file)).unwrap_or_default();
-    let n = lines.unwrap_or(200);
-    let tail: Vec<&str> = content.lines().rev().take(n).collect();
-    let logs: String = tail.iter().rev().map(|s| s.to_string()).collect::<Vec<_>>().join("\n");
-    serde_json::json!({ "logs": logs }).to_string()
-}
-
-#[tauri::command]
-fn open_folder(path: String) -> bool {
-    cmd("open").arg(&path).spawn().is_ok()
-}
-
-#[tauri::command]
-fn update_budget(scope: String, scope_id: String, max_budget: f64, duration: String) -> String {
-    let body = serde_json::json!({
-        "scope": scope,
-        "scope_id": scope_id,
-        "max_budget": max_budget,
-        "duration": duration,
-    });
-    curl_post("http://localhost:7860/api/budgets", &body.to_string())
-}
-
-#[tauri::command]
-fn check_budget(scope: String, scope_id: String) -> String {
-    let url = format!(
-        "http://localhost:7860/api/budgets/check?scope={}&scope_id={}",
-        scope, scope_id
-    );
-    curl_get(&url)
-}
-
-#[tauri::command]
-fn check_ollama() -> bool {
-    let result = curl_get("http://localhost:11434/api/tags");
-    result.contains("\"models\"") || result.contains("name")
-}
-
-#[tauri::command]
-fn check_api() -> bool {
-    let result = curl_get("http://localhost:7860/api/health");
-    result.contains("\"ok\"")
-}
-
-// ── .env Config ──
-
-#[tauri::command]
-fn read_env() -> HashMap<String, String> {
-    let install_dir = get_install_dir();
-    let env_path = std::path::Path::new(&install_dir).join(".env");
-    let mut result = HashMap::new();
-    if let Ok(content) = std::fs::read_to_string(&env_path) {
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some((key, value)) = line.split_once('=') {
-                result.insert(key.trim().to_string(), value.trim().to_string());
-            }
-        }
-    }
-    result
-}
-
-#[tauri::command]
-fn write_env(key: String, value: String) -> bool {
-    let install_dir = get_install_dir();
-    let env_path = std::path::Path::new(&install_dir).join(".env");
-    let mut lines = Vec::new();
-    let mut found = false;
-
-    if let Ok(content) = std::fs::read_to_string(&env_path) {
-        for line in content.lines() {
-            if line.trim().starts_with(&format!("{key}=")) || line.trim() == key {
-                lines.push(format!("{key}={value}"));
-                found = true;
-            } else {
-                lines.push(line.to_string());
-            }
-        }
-    }
-    if !found {
-        lines.push(format!("{key}={value}"));
-    }
-    std::fs::write(&env_path, lines.join("\n") + "\n").is_ok()
-}
-
-#[tauri::command]
-fn write_env_batch(updates: HashMap<String, String>) -> bool {
-    let install_dir = get_install_dir();
-    let env_path = std::path::Path::new(&install_dir).join(".env");
-    let mut lines = Vec::new();
-    let mut existing: HashMap<String, String> = HashMap::new();
-
-    if let Ok(content) = std::fs::read_to_string(&env_path) {
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                lines.push(line.to_string());
-                continue;
-            }
-            if let Some((k, v)) = line.split_once('=') {
-                existing.insert(k.trim().to_string(), v.trim().to_string());
-            }
-        }
-    }
-
-    existing.extend(updates);
-    let mut out: Vec<String> = existing.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    out.sort();
-    std::fs::write(&env_path, out.join("\n") + "\n").is_ok()
-}
-
-// ── API Proxy ──
-
-#[tauri::command]
-fn get_usage_stats() -> String {
-    curl_get("http://localhost:7860/api/stats")
-}
-
-#[tauri::command]
-fn get_quota() -> String {
-    curl_get("http://localhost:7860/api/budgets")
-}
-
-#[tauri::command]
-fn get_trends() -> String {
-    curl_get("http://localhost:7860/api/usage")
-}
-
-#[tauri::command]
-fn chat_request(query: String, history: Option<String>) -> String {
-    let mut body = format!("{{\"model\":\"auto\",\"messages\":[");
-    if let Some(h) = history {
-        if let Ok(hist) = serde_json::from_str::<serde_json::Value>(&h) {
-            if let Some(arr) = hist.as_array() {
-                for (i, msg) in arr.iter().enumerate() {
-                    if i > 0 {
-                        body.push(',');
-                    }
-                    body.push_str(&msg.to_string());
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if lloom::processes::check_ai_health().await.status == "ok" {
+                    println!("[core] AI service healthy on :{}", config::ai_port());
+                    break;
                 }
             }
-        }
-    }
-    body.push_str(&format!(",{{\"role\":\"user\",\"content\":{}}}]}}",
-        serde_json::Value::String(query)));
+            let listener = tokio::net::TcpListener::bind(("0.0.0.0", web_port))
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("[core] failed to bind port {web_port}: {e}");
+                    std::process::exit(1);
+                });
+            println!("[core] REST server on :{web_port}");
+            axum::serve(listener, router).await.expect("server error");
+        });
+    });
 
-    let raw = curl_post_sse("http://localhost:7860/api/chat/stream", &body);
-
-    // Parse SSE data lines into JSON array
-    let mut events: Vec<serde_json::Value> = Vec::new();
-    for line in raw.lines() {
-        if line.starts_with("data: ") {
-            let json_str = &line[6..];
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
-                events.push(val);
-            }
-        }
-    }
-    serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string())
+    state
 }
 
-#[tauri::command]
-fn orchestrate_request(query: String, history: Option<String>) -> String {
-    let body = if let Some(h) = history {
-        format!("{{\"query\":{},\"history\":{}}}",
-            serde_json::Value::String(query), h)
-    } else {
-        format!("{{\"query\":{}}}", serde_json::Value::String(query))
-    };
+fn run_headless() {
+    println!("[headless] LLooM v2 running without GUI");
+    start_core();
+    println!("[headless] Web UI: http://localhost:{}/", config::web_port());
+    println!("[headless] Press Ctrl+C to stop");
 
-    let raw = curl_post_sse("http://localhost:7860/api/orchestrate/stream", &body);
+    // Park the main thread; child processes and the server run in background.
+    std::thread::park();
+}
 
-    let mut events: Vec<serde_json::Value> = Vec::new();
-    for line in raw.lines() {
-        if line.starts_with("event:") {
-            let ev_type = line[7..].trim().to_string();
-            events.push(serde_json::json!({"event": ev_type}));
-        }
-        if line.starts_with("data: ") {
-            let json_str = &line[6..];
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
-                if let Some(last) = events.last_mut() {
-                    if last.get("data").is_none() {
-                        last["data"] = val;
-                        continue;
-                    }
+fn run_gui() {
+    let state = start_core();
+
+    tauri::Builder::default()
+        .manage(state.clone())
+        .setup(|app| {
+            create_tray(app.handle());
+            Ok(())
+        })
+        .on_window_event(move |_window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let children = state.children.clone();
+                let mut guard = children.lock().unwrap();
+                if let Some(child) = guard.ai.as_mut() {
+                    let _ = child.kill();
                 }
-                events.push(serde_json::json!({"data": val}));
-            }
-        }
-    }
-    serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string())
-}
-
-// ── Model Management (via API) ──
-
-#[tauri::command]
-fn get_models() -> String {
-    curl_get("http://localhost:7860/api/models")
-}
-
-#[tauri::command]
-fn add_model(config: String) -> String {
-    curl_post("http://localhost:7860/api/models", &config)
-}
-
-#[tauri::command]
-fn remove_model(model_name: String) -> String {
-    let url = format!("http://localhost:7860/api/models/{}", model_name);
-    curl_delete(&url)
-}
-
-// ── Conversations CRUD ──
-
-fn conversations_dir() -> std::path::PathBuf {
-    let install_dir = get_install_dir();
-    let dir = std::path::Path::new(&install_dir).join("data").join("conversations");
-    let _ = std::fs::create_dir_all(&dir);
-    dir
-}
-
-#[tauri::command]
-fn list_conversations() -> Vec<ConversationMeta> {
-    let dir = conversations_dir();
-    let mut convs: Vec<ConversationMeta> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map(|e| e != "json").unwrap_or(true) {
-                continue;
-            }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let id = data["id"].as_str().unwrap_or("").to_string();
-                    let title = data["title"].as_str().unwrap_or("").to_string();
-                    let updated_at = data["updated_at"].as_str().unwrap_or("").to_string();
-                    let message_count = data["messages"].as_array().map(|a| a.len()).unwrap_or(0);
-                    convs.push(ConversationMeta { id, title, updated_at, message_count });
+                if let Some(child) = guard.ollama.as_mut() {
+                    let _ = child.kill();
                 }
             }
-        }
-    }
-    convs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    convs
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running LLooM v2");
 }
 
-#[tauri::command]
-fn load_conversation(id: String) -> String {
-    let path = conversations_dir().join(format!("{id}.json"));
-    std::fs::read_to_string(&path).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
-}
-
-#[tauri::command]
-fn save_conversation(conversation_json: String) -> String {
-    let data = serde_json::from_str::<serde_json::Value>(&conversation_json);
-    match data {
-        Ok(val) => {
-            let id = val["id"].as_str().unwrap_or("default").to_string();
-            let path = conversations_dir().join(format!("{id}.json"));
-            match std::fs::write(&path, &conversation_json) {
-                Ok(_) => format!("{{\"id\": \"{id}\", \"saved\": true}}"),
-                Err(e) => format!("{{\"error\": \"{e}\"}}"),
-            }
-        }
-        Err(e) => format!("{{\"error\": \"invalid JSON: {e}\"}}"),
-    }
-}
-
-#[tauri::command]
-fn delete_conversation(id: String) -> bool {
-    let path = conversations_dir().join(format!("{id}.json"));
-    std::fs::remove_file(&path).is_ok()
-}
-
-// ── Smart Restart ──
-
-#[tauri::command]
-fn smart_restart(changed_keys: Vec<String>, state: State<AppState>) -> SmartRestartResult {
-    let mut restarted = Vec::new();
-    let mut errors = Vec::new();
-
-    // Any key change requires API restart (env_file is read at startup)
-    if !changed_keys.is_empty() {
-        // Stop existing API
-        {
-            let mut guard = state.api_child.lock().unwrap();
-            if let Some(child) = guard.as_mut() {
-                let _ = child.kill();
-                *guard = None;
-            }
-        }
-
-        // Wait briefly
-        std::thread::sleep(std::time::Duration::from_secs(1));
-
-        // Restart API
-        let install_dir = get_install_dir();
-        let mut c = if let Some(bin) = get_api_binary_path() {
-            let mut c = cmd(&bin);
-            let bin_dir = std::path::Path::new(&bin)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or(install_dir.clone());
-            c.current_dir(&bin_dir);
-            c
-        } else {
-            let mut c = cmd("python3");
-            c.arg("api/server.py").current_dir(&install_dir);
-            c
-        };
-        c.stdout(Stdio::null()).stderr(Stdio::null());
-
-        match c.spawn() {
-            Ok(child) => {
-                *state.api_child.lock().unwrap() = Some(child);
-                restarted.push("API Server".to_string());
-            }
-            Err(e) => errors.push(format!("API restart failed: {e}")),
-        }
-
-        // Health check (poll up to 30s)
-        for _ in 0..60 {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let health = curl_get("http://localhost:7860/api/health");
-            if health.contains("\"ok\"") {
-                break;
-            }
-        }
-    }
-
-    SmartRestartResult {
-        ok: errors.is_empty(),
-        restarted,
-        errors,
-    }
-}
-
-// ── System ──
-
-#[tauri::command]
-fn open_web_interface(url: String) {
-    let _ = cmd("open").arg(&url).spawn();
-}
-
-#[tauri::command]
-fn run_cli(args: Vec<String>) -> String {
-    let install_dir = get_install_dir();
-    let output = cmd("python3")
-        .arg("cli/lloom.py")
-        .args(&args)
-        .current_dir(&install_dir)
-        .output();
-    match output {
-        Ok(o) => {
-            let stdout = String::from_utf8_lossy(&o.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
-            if !stderr.is_empty() {
-                format!("{stdout}\n{stderr}")
-            } else {
-                stdout
-            }
-        }
-        Err(e) => format!("CLI error: {e}"),
-    }
-}
-
-// ── First-Run Setup ──
-
-#[tauri::command]
-fn first_run_setup() -> String {
-    let install_dir = get_install_dir();
-    // Check resources/ subdirectory (production) then root (dev)
-    let script_path = std::path::Path::new(&install_dir)
-        .join("resources")
-        .join("first_run_setup.py");
-    let (script, work_dir) = if script_path.exists() {
-        (script_path.to_string_lossy().to_string(), install_dir.clone())
-    } else {
-        let dev_path = std::path::Path::new(&install_dir).join("first_run_setup.py");
-        if dev_path.exists() {
-            (dev_path.to_string_lossy().to_string(), install_dir.clone())
-        } else {
-            ("scripts/first_run_setup.py".to_string(), install_dir.clone())
-        }
-    };
-    let output = cmd("python3")
-        .arg(&script)
-        .current_dir(&work_dir)
-        .output();
-    match output {
-        Ok(o) => {
-            let stdout = String::from_utf8_lossy(&o.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
-            if !stderr.is_empty() {
-                format!("{stdout}\n{stderr}")
-            } else {
-                stdout
-            }
-        }
-        Err(e) => format!("First-run setup error: {e}"),
-    }
-}
-
-// ── System Tray ──
+// ── System tray ──
 
 fn create_tray(app: &tauri::AppHandle) {
     use tauri::menu::{Menu, MenuItem};
@@ -781,72 +144,4 @@ fn create_tray(app: &tauri::AppHandle) {
             })
             .build(app);
     }
-}
-
-// ── Main ──
-
-fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .manage(AppState {
-            api_child: Mutex::new(None),
-            ollama_child: Mutex::new(None),
-        })
-        .setup(|app| {
-            // In production, set install dir to resource directory
-            if let Ok(resource_dir) = app.path().resource_dir() {
-                env::set_var("LLOOM_INSTALL_DIR", resource_dir.to_string_lossy().to_string());
-            }
-            create_tray(app.handle());
-            Ok(())
-        })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                // Kill child processes on close
-                let state: State<AppState> = window.app_handle().state();
-                let mut api_guard = state.api_child.lock().unwrap();
-                if let Some(child) = api_guard.as_mut() {
-                    let _ = child.kill();
-                }
-                let mut ollama_guard = state.ollama_child.lock().unwrap();
-                if let Some(child) = ollama_guard.as_mut() {
-                    let _ = child.kill();
-                }
-            }
-        })
-        .invoke_handler(tauri::generate_handler![
-            get_services_status,
-            start_api,
-            stop_api,
-            start_ollama,
-            stop_ollama,
-            restart_service,
-            get_service_logs,
-            open_folder,
-            update_budget,
-            check_budget,
-            check_ollama,
-            check_api,
-            read_env,
-            write_env,
-            write_env_batch,
-            get_usage_stats,
-            get_quota,
-            get_trends,
-            chat_request,
-            orchestrate_request,
-            get_models,
-            add_model,
-            remove_model,
-            list_conversations,
-            load_conversation,
-            save_conversation,
-            delete_conversation,
-            smart_restart,
-            open_web_interface,
-            run_cli,
-            first_run_setup,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running LLooM v2");
 }

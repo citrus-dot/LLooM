@@ -159,34 +159,93 @@ tr.clickable:hover { background:#f8f9fe; }
 <div id="modal-container"></div>
 
 <script>
-// ── Tauri invoke wrapper ──
-function waitForTauri(maxWait) {
-  maxWait = maxWait || 5000;
-  return new Promise((resolve, reject) => {
-    if (window.__TAURI__ && window.__TAURI__.core) return resolve();
-    const start = Date.now();
-    const timer = setInterval(() => {
-      if (window.__TAURI__ && window.__TAURI__.core) {
-        clearInterval(timer);
-        resolve();
-      } else if (Date.now() - start > maxWait) {
-        clearInterval(timer);
-        reject('Tauri not ready (timeout)');
-      }
-    }, 50);
-  });
+// ── API 基础地址 ──
+// GUI 的 WebView 页面源是 tauri://localhost，所以 REST 必须用绝对地址
+// 指向 Rust axum 服务器。headless/浏览器模式同源，绝对地址同样有效。
+const API_BASE = 'http://localhost:7861';
+
+// ── invoke wrapper ──
+// 统一走 REST（单一契约）。GUI 和 WebUI 无差异。
+function invoke(cmd, args) {
+  return restCall(cmd, args || {});
 }
 
-function invoke(cmd, args) {
-  if (window.__TAURI__ && window.__TAURI__.core) {
-    return window.__TAURI__.core.invoke(cmd, args || {});
-  }
-  return waitForTauri().then(() => {
-    if (window.__TAURI__ && window.__TAURI__.core) {
-      return window.__TAURI__.core.invoke(cmd, args || {});
+// ── REST mapping ──
+// Each Tauri-style command maps to one or more REST calls on the Rust server.
+async function restCall(cmd, args) {
+  const jget = (path) => fetch(API_BASE + path).then(r => r.json());
+  const jpost = (path, body) => fetch(API_BASE + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}),
+  }).then(r => r.json());
+  const jdelete = (path) => fetch(API_BASE + path, { method: 'DELETE' }).then(r => r.json());
+
+  // Map display names → REST service ids.
+  const svcName = (n) => {
+    const s = String(n || '').toLowerCase();
+    if (s.includes('ollama')) return 'ollama';
+    if (s.includes('ai')) return 'ai';
+    return 'api';
+  };
+
+  switch (cmd) {
+    case 'get_services_status': return jget('/api/services/status');
+    case 'check_api': return (await jget('/api/health')).status === 'ok';
+    case 'check_ai': return (await jget('/api/services/status')).services.find(s => s.name === 'AI Service')?.healthy || false;
+    case 'check_ollama': return (await jget('/api/services/status')).services.find(s => s.name === 'Ollama')?.healthy || false;
+    case 'get_usage_stats': return jget('/api/stats');
+    case 'get_trends': return jget('/api/usage');
+    case 'get_quota': return jget('/api/budgets');
+    case 'check_budget': return jget(`/api/budgets/check?scope=${encodeURIComponent(args.scope)}&scope_id=${encodeURIComponent(args.scopeId)}`);
+    case 'get_models': return jget('/api/models');
+    case 'load_conversation': return jget('/api/conversations/' + encodeURIComponent(args.id));
+    case 'save_conversation': return jpost('/api/conversations', JSON.parse(args.conversationJson || '{}'));
+    case 'get_service_logs': return jget('/api/services/' + encodeURIComponent(svcName(args.serviceName)) + '/logs');
+    case 'update_budget': return jpost('/api/budgets', { scope: args.scope, scope_id: args.scopeId, max_budget: args.maxBudget, duration: args.duration });
+    case 'add_model': return jpost('/api/models', JSON.parse(args.config || '{}'));
+    case 'remove_model': return jdelete('/api/models/' + encodeURIComponent(args.modelName));
+    case 'read_env': return jget('/api/config');
+    case 'write_env': return jpost('/api/config', { updates: { [args.key]: args.value } });
+    case 'write_env_batch': return jpost('/api/config', { updates: args.updates || {} });
+    case 'smart_restart': return jpost('/api/services/smart-restart', { changed_keys: args.changedKeys || [] });
+    case 'start_ai': return jpost('/api/services/ai/start');
+    case 'stop_ai': return jpost('/api/services/ai/stop');
+    case 'start_ollama': return jpost('/api/services/ollama/start');
+    case 'stop_ollama': return jpost('/api/services/ollama/stop');
+    case 'restart_service': return jpost('/api/services/' + encodeURIComponent(svcName(args.serviceName)) + '/restart');
+    case 'list_conversations': return (await jget('/api/conversations')).conversations;
+    case 'delete_conversation': return jdelete('/api/conversations/' + encodeURIComponent(args.id));
+    case 'open_folder': return jpost('/api/system/open-folder', { path: args.path });
+    case 'open_web_interface': return jpost('/api/system/open-web', { url: args.url });
+    case 'run_cli': return jpost('/api/system/cli', { args: args.args || [] }).then(r => (r.stdout || '') + (r.stderr || ''));
+    case 'chat_request':
+    case 'orchestrate_request': {
+      // SSE → materialize events (same shape as the Tauri command result)
+      const body = cmd === 'orchestrate_request'
+        ? { query: args.query, history: args.history ? JSON.parse(args.history) : [] }
+        : { messages: [{ role: 'user', content: args.query }] };
+      const res = await fetch(API_BASE + '/api/' + (cmd === 'orchestrate_request' ? 'orchestrate' : 'chat') + '/stream', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      const events = [];
+      let cur = null;
+      for (const line of text.split('\n')) {
+        if (line.startsWith('event:')) {
+          if (cur) { events.push(cur); cur = null; }
+          cur = { event: line.slice(7).trim() };
+        } else if (line.startsWith('data: ')) {
+          const d = line.slice(6);
+          try {
+            if (cur && cur.data === undefined) { cur.data = JSON.parse(d); }
+            else { events.push({ data: JSON.parse(d) }); }
+          } catch(e) {}
+        }
+      }
+      if (cur) events.push(cur);
+      return events;
     }
-    return Promise.reject('Tauri not ready');
-  });
+    default: throw new Error('unknown command: ' + cmd);
+  }
 }
 
 function toast(msg, type) {
@@ -363,7 +422,7 @@ async function renderOverview(el) {
     <h2 style="margin-bottom:14px;">总览</h2>
     <div class="grid grid-4" id="overview-stats" style="margin-bottom:14px;">
       <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">服务状态</div></div>
-      <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">API Server</div></div>
+      <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">核心服务</div></div>
       <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">Ollama</div></div>
       <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">累计花费</div></div>
     </div>
@@ -404,7 +463,7 @@ async function renderOverview(el) {
           <a class="quick-link" onclick="openWeb('http://localhost:7860/api/health')"><span class="icon">🔌</span> API 健康检查 <span class="url">:7860</span></a>
           <a class="quick-link" onclick="openWeb('http://localhost:7860/docs')"><span class="icon">📚</span> API 文档 (Swagger) <span class="url">:7860/docs</span></a>
           <a class="quick-link" onclick="openDataFolder()"><span class="icon">📁</span> 数据目录 <span class="url">data/</span></a>
-          <a class="quick-link" onclick="showServiceLogs('API Server', false)"><span class="icon">📝</span> 服务日志 <span class="url">logs/</span></a>
+          <a class="quick-link" onclick="showServiceLogs('Core Server', false)"><span class="icon">📝</span> 服务日志 <span class="url">logs/</span></a>
         </div>
       </div>
     </div>
@@ -416,8 +475,7 @@ async function renderOverview(el) {
 
 async function loadRoutingStats() {
   try {
-    const raw = await invoke('get_usage_stats');
-    const data = JSON.parse(raw);
+    const data = await invoke('get_usage_stats');
     const rs = data.routing_stats || {};
     let routeTotal = 0, ruleTotal = 0, llmTotal = 0;
     for (const [k, v] of Object.entries(rs)) {
@@ -450,14 +508,14 @@ async function refreshOverview() {
   try {
     const status = await invoke('get_services_status');
     let totalSpend = 0;
-    try { const raw = await invoke('get_usage_stats'); const d = JSON.parse(raw); totalSpend = d.total_spend || 0; } catch(e) {}
+    try { const d = await invoke('get_usage_stats'); totalSpend = d.total_spend || 0; } catch(e) {}
 
     const stats = document.getElementById('overview-stats');
     if (stats) {
       stats.children[0].innerHTML = `<div class="num ${status.healthy===status.total?'green':'orange'}">${status.healthy}/${status.total}</div><div class="label">服务健康</div>`;
-      const apiOk = status.services.find(s => s.name === 'API Server');
+      const coreOk = status.services.find(s => s.name === 'Core Server');
       const ollamaOk = status.services.find(s => s.name === 'Ollama');
-      stats.children[1].innerHTML = `<div class="num ${apiOk&&apiOk.healthy?'green':'red'}">${apiOk&&apiOk.healthy?'运行中':'未运行'}</div><div class="label">API Server</div>`;
+      stats.children[1].innerHTML = `<div class="num ${coreOk&&coreOk.healthy?'green':'red'}">${coreOk&&coreOk.healthy?'运行中':'未运行'}</div><div class="label">核心服务</div>`;
       stats.children[2].innerHTML = `<div class="num ${ollamaOk&&ollamaOk.healthy?'green':'red'}">${ollamaOk&&ollamaOk.healthy?'运行中':'未运行'}</div><div class="label">Ollama</div>`;
       stats.children[3].innerHTML = `<div class="num orange">$${totalSpend.toFixed(6)}</div><div class="label">累计花费</div>`;
     }
@@ -494,8 +552,7 @@ async function showServiceLogs(name, isUnhealthy) {
     </div>
   </div></div>`;
   try {
-    const raw = await invoke('get_service_logs', { serviceName: name, lines: 200 });
-    const data = JSON.parse(raw);
+    const data = await invoke('get_service_logs', { serviceName: name, lines: 200 });
     const out = document.getElementById('log-output');
     if (out) out.textContent = data.logs || '无日志输出';
   } catch(e) {
@@ -508,15 +565,15 @@ function closeModal() { document.getElementById('modal-container').innerHTML = '
 
 async function startAll() {
   try {
+    await invoke('start_ai');
     await invoke('start_ollama');
-    await invoke('start_api');
     toast('服务启动中...', 'success');
     setTimeout(refreshOverview, 3000);
   } catch(e) { toast('启动失败: ' + e, 'error'); }
 }
 async function stopAll() {
   try {
-    await invoke('stop_api');
+    await invoke('stop_ai');
     await invoke('stop_ollama');
     toast('服务已停止', 'info');
     setTimeout(refreshOverview, 2000);
@@ -550,7 +607,7 @@ async function renderUsage(el) {
       <span class="auto-refresh-tag"><span class="dot"></span>自动刷新 (30s)</span>
     </div>
     <div class="grid grid-4" id="usage-stats" style="margin-bottom:14px;">
-      <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">API Server</div></div>
+      <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">核心服务</div></div>
       <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">可用模型</div></div>
       <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">语义缓存</div></div>
       <div class="card stat"><div class="num"><span class="spinner"></span></div><div class="label">累计花费</div></div>
@@ -611,12 +668,12 @@ async function loadUsageData() {
       invoke('get_usage_stats'),
       invoke('get_trends')
     ]);
-    const data = JSON.parse(statsRaw);
-    const usage = JSON.parse(usageRaw);
+    const data = statsRaw;
+    const usage = usageRaw;
 
     const stats = document.getElementById('usage-stats');
     if (stats) {
-      stats.children[0].innerHTML = `<div class="num green">正常</div><div class="label">API Server</div>`;
+      stats.children[0].innerHTML = `<div class="num green">正常</div><div class="label">核心服务</div>`;
       stats.children[1].innerHTML = `<div class="num green">${data.model_count || 0}</div><div class="label">可用模型</div>`;
       stats.children[2].innerHTML = `<div class="num ${data.cache_enabled?'green':'orange'}">${data.cache_enabled?'✓':'✗'}</div><div class="label">语义缓存</div>`;
       stats.children[3].innerHTML = `<div class="num orange">$${(data.total_spend || 0).toFixed(6)}</div><div class="label">累计花费</div>`;
@@ -684,8 +741,7 @@ function drawBarChart(containerId, data, prefix, color) {
 
 async function loadQuotaData() {
   try {
-    const raw = await invoke('get_quota');
-    const data = JSON.parse(raw);
+    const data = await invoke('get_quota');
     const el = document.getElementById('quota-section');
     if (!el) return;
 
@@ -697,8 +753,7 @@ async function loadQuotaData() {
       for (const b of budgets) {
         let spent = 0;
         try {
-          const chkRaw = await invoke('check_budget', { scope: b.scope, scopeId: b.scope_id });
-          const chk = JSON.parse(chkRaw);
+          const chk = await invoke('check_budget', { scope: b.scope, scopeId: b.scope_id });
           spent = chk.spent || 0;
         } catch(e) {}
         const progress = b.max_budget > 0 ? (spent / b.max_budget * 100) : 0;
@@ -763,8 +818,7 @@ async function saveBudget(scope, scopeId) {
 
 async function loadPricingTable() {
   try {
-    const raw = await invoke('get_models');
-    const data = JSON.parse(raw);
+    const data = await invoke('get_models');
     const pt = document.getElementById('pricing-table');
     if (!pt) return;
     const models = data.models || [];
@@ -871,8 +925,7 @@ function formatConvTime(ts) {
 async function selectConversation(id) {
   currentConvId = id;
   try {
-    const raw = await invoke('load_conversation', { id });
-    const conv = JSON.parse(raw);
+    const conv = await invoke('load_conversation', { id });
     chatMessages = conv.messages || [];
     renderConversationList();
     renderChatMessages();
@@ -955,8 +1008,7 @@ async function saveCurrentConv() {
   };
 
   try {
-    const raw = await invoke('save_conversation', { conversationJson: JSON.stringify(conv) });
-    const data = JSON.parse(raw);
+    const data = await invoke('save_conversation', { conversationJson: JSON.stringify(conv) });
     if (data.id && !currentConvId) currentConvId = data.id;
     conversationList = await invoke('list_conversations');
     renderConversationList();
@@ -990,8 +1042,7 @@ async function sendChat() {
   history.pop();
 
   try {
-    const raw = await invoke('orchestrate_request', { query: msg, history: history.length > 0 ? JSON.stringify(history) : null });
-    const events = JSON.parse(raw || '[]');
+    const events = await invoke('orchestrate_request', { query: msg, history: history.length > 0 ? JSON.stringify(history) : null });
 
     let decomp = null;
     let result = null;
@@ -1099,8 +1150,7 @@ async function renderModels(el) {
 
 async function loadModelList() {
   try {
-    const raw = await invoke('get_models');
-    const data = JSON.parse(raw);
+    const data = await invoke('get_models');
     const table = document.getElementById('model-table');
     if (!table) return;
     if (!data.models || data.models.length === 0) {
@@ -1246,7 +1296,7 @@ async function loadInitWizard() {
   el.innerHTML = '<span class="spinner"></span> 检查中...';
   try {
     const [apiOk, ollamaOk, envRaw] = await Promise.all([
-      invoke('check_api'),
+      invoke('check_ai'),
       invoke('check_ollama'),
       invoke('read_env'),
     ]);
@@ -1261,7 +1311,7 @@ async function loadInitWizard() {
 
     el.innerHTML = `
       <h3 style="margin-bottom:8px;">环境检查</h3>
-      ${checkItem(apiOk, 'API Server', apiOk ? '运行中 (:7860)' : '未运行')}
+      ${checkItem(apiOk, 'AI 服务', apiOk ? '运行中 (:7862)' : '未运行')}
       ${checkItem(ollamaOk, 'Ollama', ollamaOk ? '运行中 (:11434)' : '未运行')}
       ${checkItem(hasDashScope, 'DashScope API Key', hasDashScope ? '已配置' : '未配置')}
       ${checkItem(hasOpenAI, 'OpenAI API Key', hasOpenAI ? '已配置' : '未配置')}
@@ -1352,12 +1402,12 @@ async function renderSettings(el) {
 async function checkEnv() {
   try {
     const [apiOk, ollamaOk, status] = await Promise.all([
-      invoke('check_api'), invoke('check_ollama'), invoke('get_services_status')
+      invoke('check_ai'), invoke('check_ollama'), invoke('get_services_status')
     ]);
     const el = document.getElementById('env-check');
     if (!el) return;
     el.innerHTML = `
-      <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f2f6;"><span>API Server (:7860)</span><span class="badge ${apiOk?'badge-green':'badge-red'}">${apiOk?'运行中':'未运行'}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f2f6;"><span>AI 服务 (:7862)</span><span class="badge ${apiOk?'badge-green':'badge-red'}">${apiOk?'运行中':'未运行'}</span></div>
       <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f2f6;"><span>Ollama (:11434)</span><span class="badge ${ollamaOk?'badge-green':'badge-red'}">${ollamaOk?'运行中':'未运行'}</span></div>
       <div style="display:flex;justify-content:space-between;padding:6px 0;"><span>服务健康</span><span class="badge ${status.running?'badge-green':'badge-red'}">${status.healthy}/${status.total}</span></div>
     `;
@@ -1500,8 +1550,7 @@ async function smartApplyConfig() {
 
 async function loadModelsPre() {
   try {
-    const raw = await invoke('get_models');
-    const data = JSON.parse(raw);
+    const data = await invoke('get_models');
     const out = document.getElementById('models-output');
     if (!out) return;
     const models = data.models || [];
@@ -1530,15 +1579,13 @@ async function runCliStatus() {
 async function runHealthCheck() {
   toast('正在执行健康检查...', 'info');
   try {
-    const [apiOk, ollamaOk, statsRaw] = await Promise.all([
-      invoke('check_api'),
+    const [apiOk, ollamaOk, stats] = await Promise.all([
+      invoke('check_ai'),
       invoke('check_ollama'),
       invoke('get_usage_stats'),
     ]);
-    let stats = {};
-    try { stats = JSON.parse(statsRaw); } catch(e) {}
     const report = [
-      `API Server (:7860):  ${apiOk ? '✓ 健康' : '✗ 未运行'}`,
+      `AI 服务 (:7862):  ${apiOk ? '✓ 健康' : '✗ 未运行'}`,
       `Ollama (:11434):     ${ollamaOk ? '✓ 健康' : '✗ 未运行'}`,
       `可用模型:            ${stats.model_count || 0}`,
       `语义缓存:            ${stats.cache_enabled ? '✓ 启用' : '✗ 未启用'}`,
@@ -1567,11 +1614,9 @@ async function runHealthCheck() {
 }
 
 // ── Init ──
-waitForTauri().then(() => {
-  renderPage('overview');
-}).catch(err => {
-  document.getElementById('content').innerHTML = `<div class="card"><div class="muted">等待 Tauri 运行时超时: ${escapeHtml(String(err))}<br>请重新打开应用</div></div>`;
-});
+// Render immediately in both modes. Tauri commands and REST calls share the
+// same invoke() abstraction, so no runtime detection is needed here.
+renderPage('overview');
 </script>
 </body>
 </html>

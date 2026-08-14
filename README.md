@@ -45,24 +45,26 @@ A self-contained desktop application that manages multiple LLM models, routes re
 
 ## Architecture
 
+LLooM is split into three layers with the **REST API as the single contract** between the UI and the business core. This means any frontend (WebUI, a future TUI, or the desktop GUI) plugs into the same API.
+
 ```
-LLooM.app (308MB, self-contained)
-├── Tauri Binary (Rust backend)
-│   ├── Process management (spawn API + Ollama)
-│   ├── API proxy (curl-based, avoids mixed content)
-│   ├── Conversation CRUD
-│   └── System tray
-├── Python Core (PyInstaller bundle, 222MB)
-│   ├── FastAPI Server (port 7860, REST + SSE)
-│   ├── SmartRouter (classification + routing)
-│   ├── TaskOrchestrator (decompose + aggregate)
-│   ├── Security (PII + jailbreak + domain)
-│   ├── SemanticCache (ChromaDB)
-│   ├── ModelManager (CRUD + usage + budget)
-│   └── litellm SDK (unified LLM API)
-├── Ollama Binary (63MB, local LLM runtime)
-└── Resources (scripts, .env template)
+UI layer (WebUI / TUI / Tauri GUI)  ← any frontend, UI-agnostic
+        │  HTTP REST / Tauri IPC
+Rust core + axum REST server (:7861) ← single contract, typed JSON objects
+        │  function calls
+Rust core modules (db / router / security / processes / conversations)
+        │  only the LLM-calling part
+Python AI micro-service (:7862)       ← litellm wrapper (stateless)
+        │
+LLM providers (DashScope / Ollama / OpenAI / Anthropic)
 ```
+
+Key points:
+- **Rust axum server** (`:7861`) is the primary server and owns all business logic (SQLite, routing, security, process management).
+- **Python is reduced to a thin stateless AI micro-service** (`:7862`) that only wraps litellm — the one thing Rust cannot replace (100+ provider coverage).
+- **Frontends receive typed JSON objects, never JSON strings** — no manual parsing anywhere.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API reference, ports, and data flows.
 
 **Zero external dependencies**: SQLite replaces PostgreSQL, ChromaDB replaces Qdrant, embedded Python replaces Docker, bundled Ollama replaces system install.
 

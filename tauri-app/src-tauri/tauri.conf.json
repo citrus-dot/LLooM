@@ -42,7 +42,8 @@
       "resources/lloom-server",
       "resources/ollama",
       "resources/first_run_setup.py",
-      "resources/.env.example"
+      "resources/.env.example",
+      "ui"
     ]
   }
 }

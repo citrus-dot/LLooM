@@ -45,24 +45,26 @@
 
 ## 架构
 
+LLooM 分为三层，**REST API 是 UI 与业务核心之间的唯一契约**。这意味着任何前端（WebUI、未来的 TUI、桌面 GUI）都接入同一套 API。
+
 ```
-LLooM.app（308MB，自包含）
-├── Tauri 二进制（Rust 后端）
-│   ├── 进程管理（启动 API + Ollama）
-│   ├── API 代理（基于 curl，避免混合内容）
-│   ├── 对话 CRUD
-│   └── 系统托盘
-├── Python 核心（PyInstaller 打包，222MB）
-│   ├── FastAPI 服务器（端口 7860，REST + SSE）
-│   ├── SmartRouter（分类 + 路由）
-│   ├── TaskOrchestrator（分解 + 聚合）
-│   ├── Security（PII + 越狱 + 领域）
-│   ├── SemanticCache（ChromaDB）
-│   ├── ModelManager（CRUD + 用量 + 预算）
-│   └── litellm SDK（统一 LLM API）
-├── Ollama 二进制（63MB，本地 LLM 运行时）
-└── Resources（脚本、.env 模板）
+UI 层（WebUI / TUI / Tauri GUI）   ← 任意前端，与业务无关
+        │  HTTP REST / Tauri IPC
+Rust 核心 + axum REST 服务器（:7861）← 唯一契约，返回类型化 JSON 对象
+        │  直接函数调用
+Rust 核心模块（db / router / security / processes / conversations）
+        │  仅 LLM 调用部分
+Python AI 微服务（:7862）           ← litellm 封装（无状态）
+        │
+LLM 提供商（DashScope / Ollama / OpenAI / Anthropic）
 ```
+
+要点：
+- **Rust axum 服务器**（`:7861`）是主服务器，承载全部业务逻辑（SQLite、路由、安全、进程管理）
+- **Python 瘦身为无状态 AI 微服务**（`:7862`），仅封装 litellm —— 这是 Rust 无法替代的部分（100+ 提供商覆盖）
+- **前端拿到的是类型化 JSON 对象，绝不套字符串** —— 任何前端都无需手动解析
+
+详见 [ARCHITECTURE.md](ARCHITECTURE.md)（分层详解、REST API 参考、端口、数据流）。
 
 **零外部依赖**：SQLite 替代 PostgreSQL，ChromaDB 替代 Qdrant，内嵌 Python 替代 Docker，内置 Ollama 替代系统安装。
 
