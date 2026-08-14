@@ -55,7 +55,9 @@ class ModelManager:
             return None
         params: dict[str, Any] = {"model": model["litellm_model"]}
         if model["api_base"]:
-            params["api_base"] = model["api_base"]
+            api_base = get_env(model["api_base"]) or model["api_base"]
+            if api_base.startswith("http"):
+                params["api_base"] = api_base
         if model["api_key_env"]:
             api_key = get_env(model["api_key_env"])
             if api_key:

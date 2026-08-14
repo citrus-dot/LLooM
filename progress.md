@@ -33,7 +33,7 @@
 | Phase 3 | Orchestrator + 语义缓存（ChromaDB）| Phase 2 | 3-4 天 | ✅ 已完成 |
 | Phase 4 | 安全层（PII/越狱/域分类）| Phase 2（可并行）| 1-2 天 | ✅ 已完成 |
 | Phase 5 | API 服务层（FastAPI + SSE）| Phase 1,2,3 | 2-3 天 | ✅ 已完成 |
-| Phase 6 | CLI 工具（init/model/status/chat）| Phase 1（可并行）| 1-2 天 | 待开始 |
+| Phase 6 | CLI 工具（init/model/status/chat）| Phase 1（可并行）| 1-2 天 | ✅ 已完成 |
 | Phase 7 | Tauri GUI + 进程管理 | Phase 5 | 3-5 天 | 待开始 |
 | Phase 8 | 打包构建（PyInstaller + Ollama + Tauri）| Phase 7 | 2-3 天 | 待开始 |
 | Phase 9 | 集成测试 + 文档 + GitHub Release | Phase 8 | 2-3 天 | 待开始 |
@@ -118,13 +118,17 @@
 - [x] 模块级初始化（init_db + seed_models + SmartRouter + Orchestrator）
 - [x] `tests/test_phase5.py` 单元测试 — 78/78 通过
 
-### Phase 6: CLI 工具
-- [ ] `cli/lloom.py` click 框架
-- [ ] init 命令（交互式向导）
-- [ ] model add/remove/list 命令
-- [ ] status 命令
-- [ ] chat / orchestrate 命令
-- [ ] serve 命令
+### Phase 6: CLI 工具 ✅ 已完成
+- [x] `cli/lloom.py` click 框架（7 命令：init/model/status/chat/orchestrate/serve）
+- [x] init 命令（数据库初始化 + 模型种子 + .env 创建）
+- [x] model add/remove/list 命令（非交互模式支持 flags）
+- [x] status 命令（模型数/用量/预算/配置/缓存状态一览）
+- [x] chat 命令（安全检查 → 路由 → litellm 流式输出）
+- [x] orchestrate 命令（安全检查 → 任务分解 → SSE 事件解析输出）
+- [x] serve 命令（启动 uvicorn API 服务）
+- [x] Bug fix: get_litellm_params 正确解析 api_base 环境变量名
+- [x] Bug fix: jailbreak regex 支持多形容词组合（"ignore all previous instructions"）
+- [x] `tests/test_phase6.py` 单元测试 — 55/55 通过
 
 ### Phase 7: Tauri GUI
 - [ ] 从 v1 迁移 tauri-app/ 目录

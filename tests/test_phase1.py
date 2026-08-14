@@ -192,6 +192,10 @@ def test_litellm_params():
     print("\n[5] litellm Params")
     mgr = ModelManager()
     reset_db()
+    import os as _os
+
+    _os.environ["DASHSCOPE_API_BASE"] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    _os.environ["DASHSCOPE_API_KEY"] = "test-key-123"
 
     mgr.register_model(
         name="param-test",
@@ -203,7 +207,17 @@ def test_litellm_params():
 
     params = mgr.get_litellm_params("param-test")
     check("params has model", params and params.get("model") == "openai/qwen-plus")
-    check("params has api_base", params and "api_base" in params)
+    check("params has api_base (env resolved)", params and params.get("api_base", "").startswith("http"))
+    check("params has api_key (env resolved)", params and params.get("api_key") == "test-key-123")
+
+    mgr.register_model(
+        name="direct-url-test",
+        provider="ollama",
+        litellm_model="ollama/qwen2.5:latest",
+        api_base="http://localhost:11434",
+    )
+    params2 = mgr.get_litellm_params("direct-url-test")
+    check("direct url in api_base", params2 and params2.get("api_base") == "http://localhost:11434")
 
     params_none = mgr.get_litellm_params("nonexistent")
     check("nonexistent returns None", params_none is None)

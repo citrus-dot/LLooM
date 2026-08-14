@@ -52,8 +52,8 @@ PII_ACTION_WARN = "warn"
 
 JAILBREAK_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'you\s+are\s+(now\s+)?(?:DAN|do\s+anything\s+now)', re.IGNORECASE), "DAN_ATTACK"),
-    (re.compile(r'ignore\s+(?:previous|prior|above|all)\s+(?:instructions?|prompts?|rules?|guidelines?)', re.IGNORECASE), "INSTRUCTION_OVERRIDE"),
-    (re.compile(r'disregard\s+(?:previous|prior|above|all)\s*(?:instructions?|prompts?)', re.IGNORECASE), "INSTRUCTION_OVERRIDE"),
+    (re.compile(r'ignore\s+(?:(?:previous|prior|above|all)\s+)+(?:instructions?|prompts?|rules?|guidelines?)', re.IGNORECASE), "INSTRUCTION_OVERRIDE"),
+    (re.compile(r'disregard\s+(?:(?:previous|prior|above|all)\s+)+(?:instructions?|prompts?)', re.IGNORECASE), "INSTRUCTION_OVERRIDE"),
     (re.compile(r'forget\s+(?:everything|all|previous)', re.IGNORECASE), "INSTRUCTION_OVERRIDE"),
     (re.compile(r'(?:pretend|act\s+as|roleplay)\s+(?:you\s+are\s+)?(?:a|an)?\s*(?:different|unrestricted|unfiltered|unlimited|free|evil|hacker)', re.IGNORECASE), "ROLE_MANIPULATION"),
     (re.compile(r'you\s+are\s+now\s+(?:in\s+)?(?:developer|root|admin|god|unlimited)\s+mode', re.IGNORECASE), "ROLE_MANIPULATION"),
