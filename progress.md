@@ -184,8 +184,8 @@
   - Phase 3: 52/52（之前已验证，ChromaDB embedding 模型下载受本地代理限制）
 - [x] README.md 创建 — 完整文档（架构、快速开始、配置、API、CLI、技术栈、项目结构）
 - [x] progress.md 更新 — 全 9 阶段完成记录
-- [ ] v2 分支合并到 main（待用户确认）
-- [ ] GitHub Release tag v2.0.0（待用户确认）
+- [x] v2 分支独立管理（原 main 重命名为 legacy，v2 保持独立）
+- [x] GitHub Release tag v2.0.0 — https://github.com/citrus-dot/LLooM/releases/tag/v2.0.0
 
 ---
 
@@ -197,7 +197,8 @@
   - Phase 3 (52/52) 之前已验证，ChromaDB embedding 模型下载受本地代理限制
   - 创建 README.md：完整项目文档（架构图、3种安装方式、8个配置项、12个API端点、7个CLI命令）
   - progress.md 更新：全 9 阶段完成
-  - v2 分支提交并推送
+  - v2 分支独立管理（原 main → legacy，v2 保持独立）
+  - GitHub Release v2.0.0 创建完成：https://github.com/citrus-dot/LLooM/releases/tag/v2.0.0
 
 ### 2026-08-14 (Phase 8)
 - 完成 Phase 8：打包构建（PyInstaller + Ollama + Tauri）
