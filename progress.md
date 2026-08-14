@@ -29,7 +29,7 @@
 |-------|------|------|----------|------|
 | Phase 0 | 项目骨架 + 打包验证 | 无 | 1-2 天 | ✅ 已完成 |
 | Phase 1 | ModelManager（模型注册/用量追踪/预算）| Phase 0 | 2-3 天 | ✅ 已完成 |
-| Phase 2 | SmartRouter（两层分类/Fallback/成本感知）| Phase 1 | 2-3 天 | 待开始 |
+| Phase 2 | SmartRouter（两层分类/Fallback/成本感知）| Phase 1 | 2-3 天 | ✅ 已完成 |
 | Phase 3 | Orchestrator + 语义缓存（ChromaDB）| Phase 2 | 3-4 天 | 待开始 |
 | Phase 4 | 安全层（PII/越狱/域分类）| Phase 2（可并行）| 1-2 天 | 待开始 |
 | Phase 5 | API 服务层（FastAPI + SSE）| Phase 1,2,3 | 2-3 天 | 待开始 |
@@ -71,13 +71,15 @@
 - [x] `core/seed_models.py` 从 v1 config_worker.yaml 迁移 7 个模型定价数据
 - [x] `tests/test_phase1.py` 单元测试 — 35/35 通过
 
-### Phase 2: SmartRouter
-- [ ] `core/smart_router.py` SmartRouter 类
-- [ ] 两层分类器（正则规则 + LLM 兜底）
-- [ ] 从 v1 迁移 TASK_MODEL_MAP / INFERENCE_MODELS
-- [ ] litellm.Router 集成 + Fallback 链构建
-- [ ] 推理模型自动流式
-- [ ] 单元测试
+### Phase 2: SmartRouter ✅ 已完成
+- [x] `core/smart_router.py` SmartRouter 类
+- [x] 两层分类器（正则规则 + LLM 兜底）— _rule_classify() + _llm_classify()
+- [x] 从 v1 迁移 TASK_MODEL_MAP / INFERENCE_MODELS / TASK_RULES / CLASSIFY_SYSTEM_PROMPT
+- [x] litellm.Router 集成 + Fallback 链构建（build_fallbacks / get_router / completion）
+- [x] 推理模型自动流式（INFERENCE_MODELS → stream=True）
+- [x] Semantic Router 域分类增强（_enhance_with_domain）
+- [x] 路由统计（get_stats / reset_stats）
+- [x] `tests/test_phase2.py` 单元测试 — 64/64 通过
 
 ### Phase 3: Orchestrator + 语义缓存
 - [ ] `core/cache.py` SemanticCache（ChromaDB）
@@ -139,6 +141,21 @@
 ## 四、进度记录
 
 ### 2026-08-14
+- 完成 Phase 2：SmartRouter（两层分类/Fallback/成本感知）
+  - 实现 `core/smart_router.py`：SmartRouter 类
+    - 两层分类器：_rule_classify() 正则规则优先（零成本），_llm_classify() LLM 兜底
+    - 自动选择分类器：DASHSCOPE_API_KEY 有值 → qwen3.6-flash（云端），无值 → qwen2.5:latest（Ollama 本地）
+    - route() 主入口：auto 模型自动分类路由，直接指定模型则透传
+    - 推理模型（INFERENCE_MODELS）自动启用 stream=True
+    - Semantic Router 域分类增强：STEM 域 → math_logic，CS/工程域 → coding
+    - build_fallbacks()：从 v1 迁移 5 级 fallback 链（qwen3-max → plus → qwen-plus → flash → local）
+    - get_router()：基于 DB 注册模型构建 litellm.Router 实例
+    - completion()：一键调用（route → Router.completion → fallback to litellm.completion）
+    - 路由统计（get_stats / reset_stats）
+  - 从 v1 迁移：TASK_MODEL_MAP / INFERENCE_MODELS / TASK_RULES（4类13条正则）/ CLASSIFY_SYSTEM_PROMPT
+  - 创建 `tests/test_phase2.py`：64 项单元测试全部通过
+    - 规则分类(16) / Auto路由(9) / 直接路由(6) / 域增强(7) / Fallback链(5) / 缺失模型Fallback(3) / 统计(5) / 元数据(4) / 文本提取(3) / 分类器参数选择(4) / auto-route变体(1) / 空/空白处理(1)
+  - 安装 litellm Python SDK（pip3 install litellm）
 - 完成 Phase 1：ModelManager（模型注册/用量追踪/预算控制）
   - 实现 `core/model_manager.py`：ModelManager 类
     - register_model / remove_model / get_model / list_models / update_model
