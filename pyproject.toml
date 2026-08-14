@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lloom"
+version = "2.0.0"
+description = "LLooM - Intelligent LLM Routing Platform (v2: Core + GUI)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "litellm>=1.82.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "chromadb>=0.5.0",
+    "click>=8.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=6.0",
+    "pytest>=8.0",
+]
+
+[project.scripts]
+lloom = "cli.lloom:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "api*", "cli*"]
