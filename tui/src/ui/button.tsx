@@ -11,6 +11,8 @@ export function Button(props: ParentProps<{
   variant?: ButtonVariant
   disabled?: boolean
   selected?: boolean
+  /** Invert colors: for buttons rendered on a highlighted (selected) row. */
+  inverse?: boolean
   onClick?: (evt?: { button?: number }) => void
   onRightClick?: () => void
   title?: string
@@ -19,6 +21,7 @@ export function Button(props: ParentProps<{
 
   const fg = () => {
     if (props.disabled) return theme.textDim
+    if (props.inverse) return theme.background
     if (props.selected) return theme.background
     switch (props.variant ?? "ghost") {
       case "primary": return theme.primary
@@ -29,6 +32,7 @@ export function Button(props: ParentProps<{
   }
   const bg = () => {
     if (props.disabled) return theme.backgroundPanel
+    if (props.inverse) return "transparent"
     if (props.selected) return theme.primary
     if (hover()) return theme.backgroundElement
     return theme.backgroundPanel
@@ -38,7 +42,7 @@ export function Button(props: ParentProps<{
     <box
       backgroundColor={bg()}
       border={["left"]}
-      borderColor={props.selected ? theme.primary : hover() ? theme.borderActive : theme.border}
+      borderColor={props.inverse ? theme.background : props.selected ? theme.primary : hover() ? theme.borderActive : theme.border}
       borderStyle="rounded"
       paddingLeft={2}
       paddingRight={2}
