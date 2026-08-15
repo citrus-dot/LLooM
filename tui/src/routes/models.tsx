@@ -174,8 +174,8 @@ export function Models(props: { setStatus: (s: string) => void }) {
           { title: "LiteLLM 模型", width: "40%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.litellm_model}</text> },
           {
             title: "操作",
-            render: (m, { selected }) => (
-              <Button fg={selected ? theme.background : theme.error} onClick={() => del(m.name)}>删除</Button>
+            render: (m) => (
+              <Button fg={theme.error} onClick={() => del(m.name)}>删除</Button>
             ),
           },
         ]}
