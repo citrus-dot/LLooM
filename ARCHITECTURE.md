@@ -114,10 +114,62 @@
 
 | 端口 | 用途 |
 |---|---|
-| 7860 | （可选）旧版 Python API，兼容阶段保留 |
-| 7861 | **Rust axum 主服务器**（REST + WebUI） |
+| 7861 | **Rust axum 主服务器**（REST + WebUI，唯一对外端口） |
 | 7862 | Python AI 微服务 |
 | 11434 | Ollama |
+
+> 旧版 Python API（7860）已移除。Rust 服务器即主服务器，无遗留服务。
+
+## 服务状态（诚实报告）
+
+`/api/services/status` 报告真实状态，不做"假 healthy"。每个服务同时检查三件事：
+
+1. **我们 spawn 的子进程是否存活**（child handle `try_wait`）
+2. **端口是否响应**（async HTTP 探测）
+3. **AI 服务自检**（`/v1/health` 的 `ready` 字段）
+
+由此区分四种状态：
+
+| 状态 | 含义 |
+|---|---|
+| Up (healthy) | 子进程存活 + 端口响应 |
+| Down | 子进程未运行 + 端口无响应 |
+| 端口被残留进程占用 | 子进程未运行但端口有响应（旧进程占用） |
+| 进程存活但无响应 | 子进程在跑但健康检查失败 |
+| 运行但未配置模型 | AI 服务活着但无云 Key 且 Ollama 不可达 |
+
+**AI 服务自检**（`/v1/health`）：
+```json
+{
+  "status": "ok",
+  "ready": true,
+  "backends": { "cloud_key_configured": false, "ollama_reachable": true }
+}
+```
+`ready=false` 表示没有任何可用 LLM 后端（无云 Key 且 Ollama 挂了），Rust 端据此显示"运行但未配置模型"而非 healthy。
+
+## 进程管理（防重复启动）
+
+`processes::start_ai` / `start_ollama` 在 spawn 前先做异步探测：
+- 端口已有健康实例 → 返回 `Ok(None)`，**复用**不重复启动
+- 否则才 spawn 新进程
+
+这消除了 "address already in use" 和孤儿进程问题。开发模式下自动识别 `.venv/bin/python`（依赖装在 venv）。
+
+## 异步约定
+
+- 所有网络调用（健康探测、AI 服务、chat/编排）用 **async reqwest**，无 curl 子进程
+- 阻塞型操作（子进程等待、日志读取）用 `tokio::task::spawn_blocking`
+- 无 `block_on` 嵌套（不用 `runtime::Builder` 在 async 上下文里建 runtime）
+- SQLite（rusqlite）保持同步——本地微秒级操作，Rust 生态标准做法
+
+## 冒烟测试
+
+`scripts/smoke_test.sh` 覆盖 19 项：健康检查、服务状态、AI 自检、模型注册、聊天、编排、用量、对话 CRUD、预算、服务重启。运行：
+
+```bash
+bash scripts/smoke_test.sh
+```
 
 ## 数据流示例：一次聊天
 
@@ -140,6 +192,9 @@
 | Python 角色 | 全部业务 | 仅 litellm 调用（瘦身 ~75%） |
 | GUI 前端接入 | Tauri IPC 命令 | **REST（与 WebUI 完全一致）** |
 | 前端数据 | JSON 字符串 + 手动 parse | 类型化对象 |
+| 健康探测 | curl 子进程（同步） | async reqwest |
+| 服务状态 | 仅端口探测（假 healthy） | **子进程 + 端口 + AI 自检（诚实）** |
+| 重复启动 | 可能 address already in use | **端口已健康则复用** |
 | 通信 | Rust↔Python 双端口转发 | Rust 为主，按需调 AI 服务 |
 
 ## 技术栈版本

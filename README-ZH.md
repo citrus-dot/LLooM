@@ -1,8 +1,32 @@
-# LLooM v2 — 智能大模型路由平台
+# LLooM — 智能大模型路由平台
 
 [English](README.md) | **中文**
 
-一个自包含的桌面应用，管理多个大语言模型，根据任务类型智能路由请求，追踪 Token 用量和成本，并提供安全过滤 — 无需任何外部基础设施。
+一个自包含的 LLM 路由平台。Rust 核心服务器负责模型管理、按任务类型路由、Token 用量与成本追踪、安全过滤；仅剩一个薄薄的 Python 服务，用于 Rust 无法替代的 LLM 调用。
+
+## 架构
+
+LLooM 分层设计，**REST API 是 UI 与业务核心之间的唯一契约**。任何前端 —— 内置 WebUI、Tauri 桌面 GUI、未来的 TUI —— 都接入同一套 API。
+
+```
+UI 层（WebUI / Tauri GUI / 未来 TUI）   ← 任意前端，与业务无关
+        │  HTTP REST（全部类型化 JSON 对象）
+Rust 核心 + axum REST 服务器（:7861）    ← 主服务器，承载全部业务逻辑
+        │  直接函数调用
+Rust 核心模块（db / router / security / processes / conversations）
+        │  异步 HTTP
+Python AI 微服务（:7862）                ← 无状态 litellm 封装
+        │
+LLM 提供商（DashScope / Ollama / OpenAI / Anthropic）
+```
+
+要点：
+- **Rust axum 服务器**（`:7861`）是主服务器，承载 SQLite、任务路由、安全过滤、进程管理，并内置 WebUI
+- **Python 瘦身为无状态 AI 微服务**（`:7862`），仅封装 litellm —— 这是 Rust 无法替代的部分（100+ 提供商覆盖）
+- **所有前端拿到的是类型化 JSON 对象，绝不套字符串** —— 任何前端都无需手动解析
+- **诚实的状态报告**：`GET /api/services/status` 反映真实状态（子进程存活 + 端口响应 + AI 就绪），能区分 Down / 端口冲突 / 未配置模型 —— 绝不伪装 healthy
+
+详见 [ARCHITECTURE.md](ARCHITECTURE.md)（分层详解、REST API 参考、端口、数据流）。
 
 ## 功能特性
 
@@ -36,107 +60,52 @@
 - 对重复的简单问答返回缓存响应（零成本）
 - 嵌入模型不可用时优雅降级
 
-### 桌面 GUI（Tauri）
-- 5 页界面：概览、用量、聊天、模型、设置
-- 进程管理：从 UI 启动/停止 API 服务器和 Ollama
-- API 密钥配置与智能重启（配置变更后自动重载服务器）
-- 对话历史持久化（本地 JSON 文件）
-- 系统托盘快捷访问
-
-## 架构
-
-LLooM 分为三层，**REST API 是 UI 与业务核心之间的唯一契约**。这意味着任何前端（WebUI、未来的 TUI、桌面 GUI）都接入同一套 API。
-
-```
-UI 层（WebUI / TUI / Tauri GUI）   ← 任意前端，与业务无关
-        │  HTTP REST / Tauri IPC
-Rust 核心 + axum REST 服务器（:7861）← 唯一契约，返回类型化 JSON 对象
-        │  直接函数调用
-Rust 核心模块（db / router / security / processes / conversations）
-        │  仅 LLM 调用部分
-Python AI 微服务（:7862）           ← litellm 封装（无状态）
-        │
-LLM 提供商（DashScope / Ollama / OpenAI / Anthropic）
-```
-
-要点：
-- **Rust axum 服务器**（`:7861`）是主服务器，承载全部业务逻辑（SQLite、路由、安全、进程管理）
-- **Python 瘦身为无状态 AI 微服务**（`:7862`），仅封装 litellm —— 这是 Rust 无法替代的部分（100+ 提供商覆盖）
-- **前端拿到的是类型化 JSON 对象，绝不套字符串** —— 任何前端都无需手动解析
-
-详见 [ARCHITECTURE.md](ARCHITECTURE.md)（分层详解、REST API 参考、端口、数据流）。
-
-**零外部依赖**：SQLite 替代 PostgreSQL，ChromaDB 替代 Qdrant，内嵌 Python 替代 Docker，内置 Ollama 替代系统安装。
+### 界面
+- **WebUI** — 浏览器访问 `http://localhost:7861/`
+- **Tauri 桌面 GUI** — 窗口 + 系统托盘，走同一套 REST API
+- **诚实的服务管理** — 启动/停止 Ollama 和 AI 服务，真实状态报告
 
 ## 快速开始
 
 ### 方式 A：下载应用
 
-1. 从 [GitHub Releases](https://github.com/citrus-dot/LLooM/releases) 下载 `LLooM.app`
-2. 拖入应用程序文件夹
-3. 双击启动
-4. 在设置 → API 密钥中配置密钥
-5. 开始聊天
+1. 从 [GitHub Releases](https://github.com/citrus-dot/LLooM/releases) 下载最新版本
+2. 启动（或安装 `.deb`/`.rpm` 包）
+3. 在设置 → API 密钥中配置密钥
+4. 开始聊天
 
-### 方式 B：从源码构建
-
-#### 前置要求
-
-- Python 3.10+ 及 pip
-- Rust 工具链（`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`）
-- Node.js 18+ 及 npm
-- Xcode 命令行工具（`xcode-select --install`）
-- 已安装 [Ollama](https://ollama.com)（用于本地模型支持）
-
-#### 构建步骤
+### 方式 B：开发模式
 
 ```bash
 git clone -b v2 https://github.com/citrus-dot/LLooM.git
 cd LLooM
 
-# 安装 Python 依赖
+# 安装 Python 依赖（Python AI 微服务）
 pip install -e ".[dev]"
 
-# 运行完整构建
-bash scripts/build.sh
-
-# 或分步构建：
-bash scripts/build.sh --skip-ollama      # 跳过 Ollama 下载
-bash scripts/build.sh --skip-tauri       # 跳过 Tauri 构建（仅 PyInstaller）
-bash scripts/build.sh --skip-pyinstaller # 跳过 Python 打包
-```
-
-构建产物：
-- `dist/lloom-server/` — PyInstaller 打包（222MB）
-- `tauri-app/src-tauri/target/release/bundle/macos/LLooM.app` — 最终应用（308MB）
-
-### 方式 C：开发模式
-
-```bash
-git clone -b v2 https://github.com/citrus-dot/LLooM.git
-cd LLooM
-
-# 安装依赖
-pip install -e ".[dev]"
+# 安装 Tauri 前端依赖
 cd tauri-app && npm install && cd ..
 
 # 复制并编辑环境配置
 cp .env.example .env
 # 在 .env 中填入你的 API 密钥
 
-# 运行测试
-python3 tests/test_phase1.py  # 37 个测试
-python3 tests/test_phase2.py  # 64 个测试
-python3 tests/test_phase4.py  # 115 个测试
-python3 tests/test_phase5.py  # 78 个测试
-python3 tests/test_phase6.py  # 55 个测试
+# 启动 Rust 服务器（无头模式，WebUI 在 :7861）
+cd tauri-app/src-tauri && cargo run -- --headless
 
-# 启动 API 服务器
-python3 -m uvicorn api.server:app --port 7860
-
-# 启动 Tauri 开发模式
+# 或启动 Tauri GUI（也会启动同一个 Rust 服务器）
 cd tauri-app && npx tauri dev
 ```
+
+Rust 服务器（`:7861`）是唯一入口，会自动拉起 Python AI 微服务（`:7862`）和 Ollama（`:11434`）。
+
+### 冒烟测试
+
+```bash
+bash scripts/smoke_test.sh
+```
+
+覆盖 19 项检查：健康检查、服务状态、AI 自检、模型注册、聊天、编排、用量、对话 CRUD、预算、服务重启。
 
 ## 配置
 
@@ -149,17 +118,12 @@ cd tauri-app && npx tauri dev
 | `OPENAI_API_KEY` | （空） | OpenAI API 密钥 |
 | `OPENAI_BASE_URL` | （空） | OpenAI 基础 URL 覆盖 |
 | `ANTHROPIC_API_KEY` | （空） | Anthropic API 密钥 |
-| `LLOOM_API_PORT` | `7860` | FastAPI 服务器端口 |
-| `LLOOM_DATA_DIR` | `./data` | 数据目录（SQLite、ChromaDB、对话） |
+| `LLOOM_WEB_PORT` | `7861` | Rust 服务器 + WebUI 端口 |
+| `LLOOM_AI_SERVICE_URL` | `http://localhost:7862` | Python AI 微服务 URL |
+| `LLOOM_DATA_DIR` | `./data` | 数据目录（SQLite、对话） |
 | `OLLAMA_API_BASE` | `http://localhost:11434` | Ollama 端点 |
 
-### 默认预算
-
-- 最大预算：$10
-- 周期：30 天
-- 上限：$1000 / 365 天
-
-## API 端点
+## REST API
 
 | 方法 | 路径 | 说明 |
 |--------|------|------|
@@ -176,80 +140,57 @@ cd tauri-app && npx tauri dev
 | POST | `/api/chat/stream` | 聊天（SSE 流式） |
 | POST | `/api/orchestrate/stream` | 任务编排（SSE 流式） |
 | GET/POST/DELETE | `/api/conversations` | 对话 CRUD |
-
-## 命令行工具
-
-```bash
-# 初始化数据库
-python3 cli/lloom.py init
-
-# 列出模型
-python3 cli/lloom.py model list
-
-# 添加模型
-python3 cli/lloom.py model add --name my-model --provider openai --litellm-model openai/gpt-4o
-
-# 查看状态
-python3 cli/lloom.py status
-
-# 聊天
-python3 cli/lloom.py chat "2+2 等于几？"
-
-# 编排复杂任务
-python3 cli/lloom.py orchestrate "写一个 Python 网页爬虫并解释它的工作原理"
-
-# 启动 API 服务器
-python3 cli/lloom.py serve
-```
+| GET | `/api/services/status` | 诚实的服务状态 |
+| POST | `/api/services/{name}/start` | 启动服务（ollama/ai） |
+| POST | `/api/services/{name}/stop` | 停止服务 |
+| POST | `/api/services/{name}/restart` | 重启服务 |
+| GET | `/api/services/{name}/logs` | 服务日志 |
+| POST | `/api/services/smart-restart` | 配置变更后重启 AI 服务 |
+| POST | `/api/system/open-folder` | 打开目录 |
+| POST | `/api/system/open-web` | 打开网页 |
+| POST | `/api/system/cli` | 运行 CLI |
 
 ## 技术栈
 
 | 组件 | 技术 | 用途 |
 |-----------|-----------|---------|
-| LLM API | litellm SDK | 所有 LLM 供应商的统一接口 |
-| API 服务器 | FastAPI + Uvicorn | REST + SSE 端点 |
-| 数据库 | SQLite（WAL 模式） | 模型注册、用量追踪、预算 |
+| API 服务器 | **Rust + axum 0.8** | 主 REST + SSE 服务器，全部业务逻辑 |
+| 异步运行时 | tokio | 事件循环、异步 HTTP |
+| 数据库 | SQLite（WAL 模式，rusqlite） | 模型注册、用量追踪、预算 |
+| LLM API | litellm SDK（Python） | 所有 LLM 供应商的统一接口 |
+| AI 微服务 | FastAPI + Uvicorn | litellm 的无状态封装 |
 | 向量缓存 | ChromaDB（PersistentClient） | 问答语义缓存 |
-| 命令行 | Click | 开发者友好的命令接口 |
-| 桌面端 | Tauri v2（Rust） | 进程管理 + 原生 GUI |
-| 打包 | PyInstaller | 打包 Python 运行时及所有依赖 |
-| 本地 LLM | Ollama（内置二进制） | 零成本兜底模型运行时 |
+| HTTP 客户端 | reqwest 0.13 | 异步调用 AI 服务 / 健康探测 |
+| 正则 | fancy-regex 0.19 | PII/越狱/领域模式（支持 lookaround） |
+| 桌面端 | Tauri v2（Rust） | 窗口 + 系统托盘，前端走 REST |
+| 本地 LLM | Ollama | 零成本兜底模型运行时 |
 
 ## 项目结构
 
 ```
 LLooM/
-├── core/                    # 业务逻辑
-│   ├── config.py            # 环境配置
-│   ├── database.py          # SQLite CRUD（模型、用量、预算）
-│   ├── model_manager.py     # 模型生命周期 + 成本计算
-│   ├── smart_router.py      # 两层分类 + 路由
-│   ├── orchestrator.py      # 任务分解 + 聚合
-│   ├── cache.py             # ChromaDB 语义缓存
-│   ├── security.py          # PII + 越狱 + 领域分类
-│   ├── callbacks.py         # litellm 用量追踪回调
-│   └── seed_models.py       # 默认模型定价数据
+├── tauri-app/src-tauri/src/      # Rust 核心 + 服务器
+│   ├── main.rs                   # 入口：GUI/headless + 系统托盘
+│   ├── server.rs                 # axum REST 服务器
+│   ├── db.rs                     # SQLite 层
+│   ├── router.rs                 # 任务分类 + 模型选择
+│   ├── security.rs               # 正则安全层（PII/越狱/领域）
+│   ├── ai_client.rs              # AI 微服务异步客户端
+│   ├── processes.rs              # 子进程管理
+│   ├── conversations.rs          # 对话文件 CRUD
+│   ├── models.rs                 # 类型定义
+│   ├── config.rs                 # 路径 / 端口 / 环境
+│   └── error.rs                  # 统一错误类型
+├── tauri-app/src-tauri/ui/       # WebUI 前端（index.html SPA）
 ├── api/
-│   └── server.py            # FastAPI REST + SSE 服务器
-├── cli/
-│   └── lloom.py             # Click CLI（7 个命令）
-├── tauri-app/
-│   ├── src-tauri/
-│   │   ├── src/main.rs      # Rust 后端（24 个 Tauri 命令）
-│   │   ├── ui/index.html    # 5 页 SPA 前端
-│   │   ├── tauri.conf.json  # Tauri 打包配置
-│   │   └── resources/       # 打包的 PyInstaller + Ollama
-│   └── package.json
-├── tests/                   # 6 阶段测试套件（401 个测试）
+│   └── ai_service.py             # Python AI 微服务（litellm 封装）
 ├── scripts/
-│   ├── build.sh             # 完整构建流水线
-│   ├── download_ollama.sh   # Ollama 二进制下载
-│   └── first_run_setup.py   # 首次运行数据库初始化 + 模型拉取
-├── lloom_server.py          # PyInstaller 入口
-├── lloom.spec               # PyInstaller 配置
-├── pyproject.toml           # Python 项目配置
-├── .env.example             # 环境模板
-└── progress.md              # 开发进度追踪
+│   ├── smoke_test.sh             # 19 项冒烟测试
+│   ├── build.sh                  # 构建流水线
+│   └── download_ollama.sh        # Ollama 二进制下载
+├── ARCHITECTURE.md               # 分层详解 + REST 参考
+├── pyproject.toml                # Python 项目配置（AI 服务）
+└── .env.example                  # 环境模板
 ```
 
 ## 许可证

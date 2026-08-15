@@ -1,8 +1,32 @@
-# LLooM v2 — Intelligent LLM Routing Platform
+# LLooM — Intelligent LLM Routing Platform
 
 **English** | [中文](README-ZH.md)
 
-A self-contained desktop application that manages multiple LLM models, routes requests intelligently based on task type, tracks token usage and costs, and provides security filtering — all without external infrastructure.
+A self-contained LLM routing platform. A Rust core server manages models, routes requests by task type, tracks token usage and costs, and filters requests for security — with a thin Python service only for the LLM calls that Rust can't replace.
+
+## Architecture
+
+LLooM is layered with the **REST API as the single contract** between the UI and the business core. Any frontend — the built-in WebUI, the Tauri desktop GUI, or a future TUI — plugs into the same API.
+
+```
+UI layer (WebUI / Tauri GUI / future TUI)   ← any frontend, UI-agnostic
+        │  HTTP REST (all typed JSON objects)
+Rust core + axum REST server (:7861)        ← primary server, all business logic
+        │  function calls
+Rust core modules (db / router / security / processes / conversations)
+        │  async HTTP to the AI service
+Python AI micro-service (:7862)             ← stateless litellm wrapper
+        │
+LLM providers (DashScope / Ollama / OpenAI / Anthropic)
+```
+
+Key points:
+- **Rust axum server** (`:7861`) is the primary server. It owns SQLite, task routing, security filtering, process management, and the WebUI.
+- **Python is reduced to a thin stateless AI micro-service** (`:7862`) that only wraps litellm — the one thing Rust cannot replace (100+ provider coverage).
+- **All UIs receive typed JSON objects, never JSON strings** — no manual parsing anywhere.
+- **Honest service status**: `GET /api/services/status` reports real state (child process alive + port responding + AI readiness), distinguishing Down / port conflict / misconfigured — never a fake "healthy".
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API reference, ports, and data flows.
 
 ## Features
 
@@ -36,107 +60,52 @@ A self-contained desktop application that manages multiple LLM models, routes re
 - Returns cached responses for repeated simple Q&A (zero cost)
 - Graceful degradation when embedding model unavailable
 
-### Desktop GUI (Tauri)
-- 5-page interface: Overview, Usage, Chat, Models, Settings
-- Process management: Start/stop API server and Ollama from the UI
-- API key configuration with smart restart (auto-reloads server on config change)
-- Conversation history persistence (local JSON files)
-- System tray with quick access
-
-## Architecture
-
-LLooM is split into three layers with the **REST API as the single contract** between the UI and the business core. This means any frontend (WebUI, a future TUI, or the desktop GUI) plugs into the same API.
-
-```
-UI layer (WebUI / TUI / Tauri GUI)  ← any frontend, UI-agnostic
-        │  HTTP REST / Tauri IPC
-Rust core + axum REST server (:7861) ← single contract, typed JSON objects
-        │  function calls
-Rust core modules (db / router / security / processes / conversations)
-        │  only the LLM-calling part
-Python AI micro-service (:7862)       ← litellm wrapper (stateless)
-        │
-LLM providers (DashScope / Ollama / OpenAI / Anthropic)
-```
-
-Key points:
-- **Rust axum server** (`:7861`) is the primary server and owns all business logic (SQLite, routing, security, process management).
-- **Python is reduced to a thin stateless AI micro-service** (`:7862`) that only wraps litellm — the one thing Rust cannot replace (100+ provider coverage).
-- **Frontends receive typed JSON objects, never JSON strings** — no manual parsing anywhere.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API reference, ports, and data flows.
-
-**Zero external dependencies**: SQLite replaces PostgreSQL, ChromaDB replaces Qdrant, embedded Python replaces Docker, bundled Ollama replaces system install.
+### UIs
+- **WebUI** — browser UI at `http://localhost:7861/`
+- **Tauri desktop GUI** — window + system tray, uses the same REST API
+- **Honest service management** — start/stop Ollama and the AI service with real status reporting
 
 ## Quick Start
 
 ### Option A: Download the App
 
-1. Download `LLooM.app` from [GitHub Releases](https://github.com/citrus-dot/LLooM/releases)
-2. Drag to Applications folder
-3. Double-click to launch
-4. Configure API keys in Settings → API Keys
-5. Start chatting
+1. Download the latest release from [GitHub Releases](https://github.com/citrus-dot/LLooM/releases)
+2. Launch it (or the bundled `.deb`/`.rpm`)
+3. Configure API keys in Settings → API Keys
+4. Start chatting
 
-### Option B: Build from Source
-
-#### Prerequisites
-
-- Python 3.10+ with pip
-- Rust toolchain (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
-- Node.js 18+ and npm
-- Xcode Command Line Tools (`xcode-select --install`)
-- [Ollama](https://ollama.com) installed (for local model support)
-
-#### Build Steps
+### Option B: Development Mode
 
 ```bash
 git clone -b v2 https://github.com/citrus-dot/LLooM.git
 cd LLooM
 
-# Install Python dependencies
+# Install Python dependencies (Python AI micro-service)
 pip install -e ".[dev]"
 
-# Run the full build
-bash scripts/build.sh
-
-# Or build step by step:
-bash scripts/build.sh --skip-ollama   # Skip Ollama download
-bash scripts/build.sh --skip-tauri    # Skip Tauri build (PyInstaller only)
-bash scripts/build.sh --skip-pyinstaller  # Skip Python packaging
-```
-
-The build produces:
-- `dist/lloom-server/` — PyInstaller bundle (222MB)
-- `tauri-app/src-tauri/target/release/bundle/macos/LLooM.app` — Final app (308MB)
-
-### Option C: Development Mode
-
-```bash
-git clone -b v2 https://github.com/citrus-dot/LLooM.git
-cd LLooM
-
-# Install dependencies
-pip install -e ".[dev]"
+# Install Tauri frontend deps
 cd tauri-app && npm install && cd ..
 
 # Copy and edit environment
 cp .env.example .env
 # Edit .env with your API keys
 
-# Run tests
-python3 tests/test_phase1.py  # 37 tests
-python3 tests/test_phase2.py  # 64 tests
-python3 tests/test_phase4.py  # 115 tests
-python3 tests/test_phase5.py  # 78 tests
-python3 tests/test_phase6.py  # 55 tests
+# Run the Rust server (headless, Web UI on :7861)
+cd tauri-app/src-tauri && cargo run -- --headless
 
-# Start API server
-python3 -m uvicorn api.server:app --port 7860
-
-# Start Tauri dev mode
+# Or start the Tauri GUI (also starts the same Rust server)
 cd tauri-app && npx tauri dev
 ```
+
+The Rust server (`:7861`) is the single entry point. It spawns the Python AI micro-service (`:7862`) and Ollama (`:11434`) automatically.
+
+### Smoke Test
+
+```bash
+bash scripts/smoke_test.sh
+```
+
+Covers 19 checks: health, service status, AI self-check, model registration, chat, orchestration, usage, conversation CRUD, budgets, and service restart.
 
 ## Configuration
 
@@ -149,31 +118,12 @@ All configuration is via environment variables in `.env`:
 | `OPENAI_API_KEY` | (empty) | OpenAI API key |
 | `OPENAI_BASE_URL` | (empty) | OpenAI base URL override |
 | `ANTHROPIC_API_KEY` | (empty) | Anthropic API key |
-| `LLOOM_API_PORT` | `7860` | FastAPI server port |
-| `LLOOM_DATA_DIR` | `./data` | Data directory (SQLite, ChromaDB, conversations) |
+| `LLOOM_WEB_PORT` | `7861` | Rust server + Web UI port |
+| `LLOOM_AI_SERVICE_URL` | `http://localhost:7862` | Python AI micro-service URL |
+| `LLOOM_DATA_DIR` | `./data` | Data directory (SQLite, conversations) |
 | `OLLAMA_API_BASE` | `http://localhost:11434` | Ollama endpoint |
 
-### Default Models
-
-7 models pre-seeded with pricing data:
-
-| Model | Provider | Task Type | Input Cost (per 1K tokens) | Output Cost |
-|-------|----------|-----------|---------------------------|------------|
-| qwen-plus | DashScope | general | $0.005 | $0.02 |
-| qwen3.6-flash | DashScope | classification | $0.001 | $0.003 |
-| qwen3.6-plus | DashScope | coding | $0.008 | $0.02 |
-| qwen3-max | DashScope | math_logic | $0.02 | $0.06 |
-| deepseek-v3 | DashScope | general | $0.002 | $0.008 |
-| qwen2.5-local | Ollama | fallback | Free | Free |
-| gpt-4o | OpenAI | general | $0.005 | $0.015 |
-
-### Default Budget
-
-- Max budget: $10
-- Duration: 30 days
-- Upper bound: $1000 / 365 days
-
-## API Endpoints
+## REST API
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -190,80 +140,57 @@ All configuration is via environment variables in `.env`:
 | POST | `/api/chat/stream` | Chat with SSE streaming |
 | POST | `/api/orchestrate/stream` | Task orchestration with SSE |
 | GET/POST/DELETE | `/api/conversations` | Conversation CRUD |
-
-## CLI Usage
-
-```bash
-# Initialize database
-python3 cli/lloom.py init
-
-# List models
-python3 cli/lloom.py model list
-
-# Add a model
-python3 cli/lloom.py model add --name my-model --provider openai --litellm-model openai/gpt-4o
-
-# View status
-python3 cli/lloom.py status
-
-# Chat
-python3 cli/lloom.py chat "What is 2+2?"
-
-# Orchestrate complex task
-python3 cli/lloom.py orchestrate "Write a Python web scraper and explain how it works"
-
-# Start API server
-python3 cli/lloom.py serve
-```
+| GET | `/api/services/status` | Honest service status |
+| POST | `/api/services/{name}/start` | Start a service (ollama/ai) |
+| POST | `/api/services/{name}/stop` | Stop a service |
+| POST | `/api/services/{name}/restart` | Restart a service |
+| GET | `/api/services/{name}/logs` | Service logs |
+| POST | `/api/services/smart-restart` | Restart AI service after config change |
+| POST | `/api/system/open-folder` | Open a folder |
+| POST | `/api/system/open-web` | Open a URL |
+| POST | `/api/system/cli` | Run the CLI |
 
 ## Tech Stack
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| LLM API | litellm SDK | Unified interface for all LLM providers |
-| API Server | FastAPI + Uvicorn | REST + SSE endpoints |
-| Database | SQLite (WAL mode) | Model registry, usage tracking, budgets |
+| API Server | **Rust + axum 0.8** | Primary REST + SSE server, all business logic |
+| Async runtime | tokio | Event loop, async HTTP |
+| Database | SQLite (WAL mode, rusqlite) | Model registry, usage tracking, budgets |
+| LLM API | litellm SDK (Python) | Unified interface for all LLM providers |
+| AI micro-service | FastAPI + Uvicorn | Stateless wrapper around litellm |
 | Vector Cache | ChromaDB (PersistentClient) | Semantic cache for Q&A |
-| CLI | Click | Developer-friendly command interface |
-| Desktop | Tauri v2 (Rust) | Process management + native GUI |
-| Packaging | PyInstaller | Bundles Python runtime + all deps |
-| Local LLM | Ollama (bundled binary) | Zero-cost fallback model runtime |
+| HTTP client | reqwest 0.13 | Async calls to AI service / probes |
+| Regex | fancy-regex 0.19 | PII/jailbreak/domain patterns (lookaround support) |
+| Desktop | Tauri v2 (Rust) | Window + system tray, frontend over REST |
+| Local LLM | Ollama | Zero-cost fallback model runtime |
 
 ## Project Structure
 
 ```
 LLooM/
-├── core/                    # Business logic
-│   ├── config.py            # Environment configuration
-│   ├── database.py          # SQLite CRUD (models, usage, budgets)
-│   ├── model_manager.py     # Model lifecycle + cost calculation
-│   ├── smart_router.py      # Two-layer classification + routing
-│   ├── orchestrator.py      # Task decomposition + aggregation
-│   ├── cache.py             # ChromaDB semantic cache
-│   ├── security.py          # PII + jailbreak + domain classification
-│   ├── callbacks.py         # litellm usage tracking callback
-│   └── seed_models.py       # Default model pricing data
+├── tauri-app/src-tauri/src/      # Rust core + server
+│   ├── main.rs                   # Entry: GUI/headless + system tray
+│   ├── server.rs                 # axum REST server
+│   ├── db.rs                     # SQLite layer
+│   ├── router.rs                 # Task classification + model selection
+│   ├── security.rs               # Regex security (PII/jailbreak/domain)
+│   ├── ai_client.rs              # AI micro-service async client
+│   ├── processes.rs              # Child-process management
+│   ├── conversations.rs          # Conversation file CRUD
+│   ├── models.rs                 # Type definitions
+│   ├── config.rs                 # Paths / ports / env
+│   └── error.rs                  # Unified error type
+├── tauri-app/src-tauri/ui/       # WebUI frontend (index.html SPA)
 ├── api/
-│   └── server.py            # FastAPI REST + SSE server
-├── cli/
-│   └── lloom.py             # Click CLI (7 commands)
-├── tauri-app/
-│   ├── src-tauri/
-│   │   ├── src/main.rs      # Rust backend (24 Tauri commands)
-│   │   ├── ui/index.html    # 5-page SPA frontend
-│   │   ├── tauri.conf.json  # Tauri bundle config
-│   │   └── resources/       # Bundled PyInstaller + Ollama
-│   └── package.json
-├── tests/                   # 6-phase test suite (401 tests)
+│   └── ai_service.py             # Python AI micro-service (litellm wrapper)
 ├── scripts/
-│   ├── build.sh             # Full build pipeline
-│   ├── download_ollama.sh   # Ollama binary download
-│   └── first_run_setup.py   # First-run DB init + model pull
-├── lloom_server.py          # PyInstaller entry point
-├── lloom.spec               # PyInstaller spec
-├── pyproject.toml           # Python project config
-├── .env.example             # Environment template
-└── progress.md              # Development progress tracker
+│   ├── smoke_test.sh             # 19-check smoke test
+│   ├── build.sh                  # Build pipeline
+│   └── download_ollama.sh        # Ollama binary download
+├── ARCHITECTURE.md               # Layer breakdown + REST reference
+├── pyproject.toml                # Python project config (AI service)
+└── .env.example                  # Environment template
 ```
 
 ## License
