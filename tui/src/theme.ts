@@ -17,6 +17,8 @@ export interface Theme {
   secondary: RGBA
   accent: RGBA
   error: RGBA
+  /** Darker error red for text on bright (selected/primary) backgrounds. */
+  errorDim: RGBA
   warning: RGBA
   success: RGBA
   info: RGBA
@@ -37,6 +39,7 @@ export const theme: Theme = {
   secondary: RGBA.fromInts(0xc0, 0x99, 0xff),
   accent: RGBA.fromInts(0xff, 0x96, 0x6c),
   error: RGBA.fromInts(0xff, 0x75, 0x7f),
+  errorDim: RGBA.fromInts(0xc9, 0x4f, 0x59),
   warning: RGBA.fromInts(0xff, 0xc7, 0x77),
   success: RGBA.fromInts(0xc3, 0xe8, 0x8d),
   info: RGBA.fromInts(0x86, 0xe1, 0xfc),
