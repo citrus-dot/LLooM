@@ -130,12 +130,12 @@ export function Usage(props: { setStatus: (s: string) => void }) {
       {/* Usage table */}
       <Table
         columns={[
-          { title: "模型", width: "30%", render: (r) => <text fg={theme.text}>{r.model_name}</text> },
-          { title: "输入", width: "15%", render: (r) => <text fg={theme.textMuted}>{r.total_input_tokens}</text> },
-          { title: "输出", width: "15%", render: (r) => <text fg={theme.textMuted}>{r.total_output_tokens}</text> },
-          { title: "请求", width: "10%", render: (r) => <text fg={theme.textMuted}>{r.request_count}</text> },
-          { title: "缓存", width: "12%", render: (r) => <text fg={theme.textMuted}>{r.cache_hits ?? 0}</text> },
-          { title: "花费", render: (r) => <text fg={theme.warning}>${r.total_cost.toFixed(4)}</text> },
+          { title: "模型", width: "30%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{r.model_name}</text> },
+          { title: "输入", width: "15%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_input_tokens}</text> },
+          { title: "输出", width: "15%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_output_tokens}</text> },
+          { title: "请求", width: "10%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.request_count}</text> },
+          { title: "缓存", width: "12%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.cache_hits ?? 0}</text> },
+          { title: "花费", render: (r, { selected }) => <text fg={selected ? theme.background : theme.warning}>${r.total_cost.toFixed(4)}</text> },
         ]}
         rows={rows()}
         selectedIndex={selIdx()}
@@ -150,10 +150,10 @@ export function Usage(props: { setStatus: (s: string) => void }) {
         <text fg={theme.textMuted} attributes={1}>模型定价 ($/1K tokens)</text>
         <Table
           columns={[
-            { title: "模型", width: "30%", render: (m) => <text fg={theme.text}>{m.name}</text> },
-            { title: "提供商", width: "15%", render: (m) => <text fg={theme.textMuted}>{m.provider}</text> },
-            { title: "输入", width: "25%", render: (m) => <text fg={theme.textMuted}>${(m.input_cost_per_token * 1000).toFixed(6)}</text> },
-            { title: "输出", render: (m) => <text fg={theme.textMuted}>${(m.output_cost_per_token * 1000).toFixed(6)}</text> },
+            { title: "模型", width: "30%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.name}</text> },
+            { title: "提供商", width: "15%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{m.provider}</text> },
+            { title: "输入", width: "25%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>${(m.input_cost_per_token * 1000).toFixed(6)}</text> },
+            { title: "输出", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>${(m.output_cost_per_token * 1000).toFixed(6)}</text> },
           ]}
           rows={models()}
           emptyText="暂无模型定价"

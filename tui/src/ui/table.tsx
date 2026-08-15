@@ -1,7 +1,7 @@
 // Table — shared data table with a header row and selectable/hoverable rows.
 // Columns have fixed widths; the row renders highlight for selection/hover.
 
-import { For, Show, type JSX } from "solid-js"
+import { For, Show, createMemo, type JSX } from "solid-js"
 import { theme } from "../theme"
 
 type Width = number | `${number}%`
@@ -9,7 +9,7 @@ type Width = number | `${number}%`
 export type TableColumn<T> = {
   title: string
   width?: Width
-  render: (row: T) => JSX.Element
+  render: (row: T, state: { selected: boolean; hovered: boolean }) => JSX.Element
 }
 
 export function Table<T = unknown>(props: {
@@ -23,6 +23,12 @@ export function Table<T = unknown>(props: {
   onRowUp?: (row: T, evt?: { button?: number }) => void
   emptyText?: string
 }) {
+  // Track selection/hover reactively so row highlight updates when they change.
+  // For each rows.map(...) via a memo so a selectedIndex change re-runs For.
+  const rows = createMemo(() =>
+    props.rows.map((row, i) => ({ row, isSel: i === props.selectedIndex, isHover: i === props.hoverIndex })),
+  )
+
   return (
     <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left", "right"]} borderStyle="rounded" borderColor={theme.border} paddingTop={1} paddingBottom={1}>
       {/* Header */}
@@ -40,31 +46,27 @@ export function Table<T = unknown>(props: {
         <text fg={theme.textDim} paddingLeft={3}>  {props.emptyText ?? "暂无数据"}</text>
       )}
 
-      <For each={props.rows}>
-        {(row, i) => {
-          const isSel = i() === props.selectedIndex
-          const isHover = i() === props.hoverIndex
-          return (
-            <box
-              flexDirection="row"
-              backgroundColor={isSel ? theme.primary : isHover ? theme.backgroundElement : theme.backgroundPanel}
-              paddingLeft={3}
-              paddingRight={3}
-              onMouseOver={() => props.onHover?.(i())}
-              onMouseOut={() => props.onHover?.(null)}
-              onMouseDown={() => props.onSelect?.(i())}
-              onMouseUp={(evt: { button?: number }) => props.onRowUp?.(row, evt)}
-            >
-              <For each={props.columns}>
-                {(col) => (
-                  <box width={col.width}>
-                    {col.render(row)}
-                  </box>
-                )}
-              </For>
-            </box>
-          )
-        }}
+      <For each={rows()}>
+        {(entry, i) => (
+          <box
+            flexDirection="row"
+            backgroundColor={entry.isSel ? theme.primary : entry.isHover ? theme.backgroundElement : theme.backgroundPanel}
+            paddingLeft={3}
+            paddingRight={3}
+            onMouseOver={() => props.onHover?.(i())}
+            onMouseOut={() => props.onHover?.(null)}
+            onMouseDown={() => props.onSelect?.(i())}
+            onMouseUp={(evt: { button?: number }) => props.onRowUp?.(entry.row, evt)}
+          >
+            <For each={props.columns}>
+              {(col) => (
+                <box width={col.width}>
+                  {col.render(entry.row, { selected: entry.isSel, hovered: entry.isHover })}
+                </box>
+              )}
+            </For>
+          </box>
+        )}
       </For>
     </box>
   )

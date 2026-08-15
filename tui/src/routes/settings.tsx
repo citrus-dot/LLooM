@@ -221,26 +221,26 @@ export function Settings(props: { setStatus: (s: string) => void }) {
             {
               title: "状态",
               width: "6%",
-              render: (key) => {
+              render: (key, { selected }) => {
                 const isSet = (env()[key] ?? "").trim().length > 0
-                return <text fg={isSet ? theme.success : theme.textMuted}>{isSet ? "✓" : "○"}</text>
+                return <text fg={selected ? theme.background : isSet ? theme.success : theme.textMuted}>{isSet ? "✓" : "○"}</text>
               },
             },
             {
               title: "配置项",
               width: "25%",
-              render: (key) => {
+              render: (key, { selected }) => {
                 const label = ENV_SCHEMA.find((s) => s.items.some((it) => it.key === key))?.items.find((it) => it.key === key)?.label ?? key
-                return <text fg={theme.text}>{label}</text>
+                return <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{label}</text>
               },
             },
-            { title: "Key", width: "20%", render: (key) => <text fg={theme.textMuted}>{key}</text> },
-            { title: "分组", width: "15%", render: (key) => <text fg={theme.textDim}>{sectionOf(key)}</text> },
+            { title: "Key", width: "20%", render: (key, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{key}</text> },
+            { title: "分组", width: "15%", render: (key, { selected }) => <text fg={selected ? theme.background : theme.textDim}>{sectionOf(key)}</text> },
             {
               title: "值",
-              render: (key) => {
+              render: (key, { selected }) => {
                 const isSet = (env()[key] ?? "").trim().length > 0
-                return <text fg={theme.textDim}>{isSet ? "••••••" : "(空)"}</text>
+                return <text fg={selected ? theme.background : theme.textDim}>{isSet ? "••••••" : "(空)"}</text>
               },
             },
           ]}

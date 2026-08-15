@@ -99,6 +99,19 @@ export function Session(props: { setStatus: (s: string) => void }) {
         desc: "Next conversation",
       },
       {
+        key: "return",
+        cmd: () => {
+          setFocus("conv")
+          if (selIdx() === 0) {
+            newConv()
+            return
+          }
+          const c = convs()[selIdx() - 1]
+          if (c) openConv(c.id)
+        },
+        desc: "Open conversation",
+      },
+      {
         key: "n",
         cmd: () => newConv(),
         desc: "New conversation",
