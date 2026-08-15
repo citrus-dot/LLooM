@@ -1,9 +1,10 @@
 // Models route — model list with hover/click, OpenCode dialog-select style.
 
-import { createSignal, onMount, onCleanup } from "solid-js"
+import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
 import { getModels, deleteModel, type Model } from "../api"
-import { setNavHandler, navHandler } from "../app"
+import { dialogOpen } from "../app"
+import { useBindings } from "@opentui/keymap/solid"
 
 export function Models(props: { setStatus: (s: string) => void }) {
   const [models, setModels] = createSignal<Model[]>([])
@@ -20,21 +21,38 @@ export function Models(props: { setStatus: (s: string) => void }) {
 
   onMount(() => {
     refresh()
-    setNavHandler((key) => {
-      const n = models().length
-      if (n === 0) return
-      if (key === "up" || key === "down") {
-        const dir = key === "down" ? 1 : -1
-        setSelIdx((selIdx() + dir + n) % n)
-      } else if (key === "d") {
-        if (models()[selIdx()]) del(models()[selIdx()].name)
-      }
-    })
   })
 
-  onCleanup(() => {
-    if (navHandler()) setNavHandler(null)
-  })
+  useBindings(() => ({
+    enabled: () => !dialogOpen(),
+    bindings: [
+      {
+        key: "up",
+        cmd: () => {
+          const n = models().length
+          if (n === 0) return
+          setSelIdx((selIdx() - 1 + n) % n)
+        },
+        desc: "Previous model",
+      },
+      {
+        key: "down",
+        cmd: () => {
+          const n = models().length
+          if (n === 0) return
+          setSelIdx((selIdx() + 1) % n)
+        },
+        desc: "Next model",
+      },
+      {
+        key: "d",
+        cmd: () => {
+          if (models()[selIdx()]) del(models()[selIdx()].name)
+        },
+        desc: "Delete model",
+      },
+    ],
+  }))
 
   const del = async (name: string) => {
     try {

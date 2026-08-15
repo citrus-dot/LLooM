@@ -153,6 +153,40 @@ pub async fn start_ollama() -> Result<Option<Child>> {
     Ok(Some(child))
 }
 
+/// Stop a running Ollama regardless of who started it. If this process spawned
+/// it (child handle held), the caller kills the handle; otherwise find and
+/// terminate the `ollama serve` process (external / system-managed instance).
+pub fn stop_ollama() -> String {
+    match Command::new("pkill").args(["-f", "ollama serve"]).status() {
+        Ok(s) if s.success() => "Ollama stopped".to_string(),
+        Ok(_) => "Ollama not running".to_string(),
+        Err(e) => format!("Failed to stop Ollama: {e}"),
+    }
+}
+
+/// Stop a running AI service regardless of who started it. Matches the dev
+/// (`uvicorn api.ai_service`) and installed-script invocation patterns.
+pub fn stop_ai() -> String {
+    let pats = [
+        "uvicorn api.ai_service:app",
+        "ai_service.py --port",
+        "ai-service/ai-service",
+    ];
+    let mut stopped = false;
+    for pat in pats {
+        if let Ok(s) = Command::new("pkill").args(["-f", pat]).status() {
+            if s.success() {
+                stopped = true;
+            }
+        }
+    }
+    if stopped {
+        "AI service stopped".to_string()
+    } else {
+        "AI service not running".to_string()
+    }
+}
+
 // ── Health helpers ──
 
 /// Async HTTP GET, returning the body. Used for health probes.

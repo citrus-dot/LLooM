@@ -388,10 +388,13 @@ def _call_llm(
     timeout: int = 60,
     cache: SemanticCache | None = None,
     cache_key: str | None = None,
+    cache_hit_ref: list[bool] | None = None,
 ) -> str:
     if cache and cache_key:
         hit = cache.get(cache_key, model_spec.name)
         if hit:
+            if cache_hit_ref is not None:
+                cache_hit_ref.append(True)
             return hit["response"]
     kwargs = _litellm_kwargs(
         model_spec,
@@ -435,6 +438,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 name=model_name, litellm_model=model_name
             )
             start = time.time()
+            cache_hit: list[bool] = []
             try:
                 content = _call_llm(
                     model_spec,
@@ -447,6 +451,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                     timeout=120,
                     cache=cache,
                     cache_key=req.query,
+                    cache_hit_ref=cache_hit,
                 )
                 ok = True
             except Exception as e:
@@ -457,6 +462,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             yield _sse("task_done", {
                 "id": 1, "model": model_name,
                 "duration": duration, "cost": 0.0, "tokens": 0,
+                "cache_hit": bool(cache_hit),
             })
             yield _sse("result", {
                 "response": content,
@@ -465,6 +471,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 "total_duration": duration,
                 "sr_info": f"SR域分类: {req.sr_domain}" if req.sr_domain else "",
                 "ok": ok,
+                "cache_hit": bool(cache_hit),
             })
             return
 

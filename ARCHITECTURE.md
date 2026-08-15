@@ -10,10 +10,10 @@
 │                                                         │
 │  ┌───────────┐  ┌───────────┐  ┌───────────┐           │
 │  │  WebUI    │  │  CLI      │  │  TUI      │           │
-│  │ index.html│  │ lloom-cli │  │ lloom-tui │           │
+│  │ index.html│  │ lloom-cli │  │  tui/     │           │
 │  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘           │
 │        │              │              │                 │
-│        │ HTTP/REST    │ 直接函数调用  │ 直接函数调用     │
+│        │ HTTP/REST    │ 直接函数调用  │ HTTP/REST       │
 └────────┼──────────────┼──────────────┼─────────────────┘
          │              │              │
 ┌────────▼──────────────▼──────────────▼─────────────────┐
@@ -53,10 +53,10 @@
 |---|---|---|
 | WebUI | HTTP → `http://localhost:7861/api/*` | 浏览器访问，前端 `restCall()` 映射 REST |
 | CLI（lloom-cli） | 直接函数调用 `lloom_core::db/ai_client` | 本地操作离线可用，chat 调 AI 服务 |
-| TUI（lloom-tui） | 直接函数调用 `lloom_core::db/ai_client` | 终端仪表盘，同上 |
+| TUI（tui/） | HTTP → `http://localhost:7861/api/*` | OpenTUI + SolidJS 终端仪表盘，走 REST |
 
 **关键约定**：
-- **REST 是唯一对外契约**。WebUI 走 HTTP；CLI/TUI 是 Rust 二进制，直接链接 `lloom-core` lib（无需服务器运行）。
+- **REST 是唯一对外契约**。WebUI 与 TUI 走 HTTP；CLI 是 Rust 二进制，直接链接 `lloom-core` lib（无需服务器运行）。
 - 所有 UI 拿到的是类型化 JSON **对象**，不是字符串。前端不做任何 `JSON.parse` 包装。
 - CLI/TUI 的本地操作（模型/预算/用量）完全离线；只有 `chat` 需要 AI 服务运行。
 
@@ -229,7 +229,13 @@ LLooM/
 │       └── error.rs              # 统一错误
 ├── crates/lloom-server/          # 主服务器（REST + WebUI）
 ├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）
-├── crates/lloom-tui/             # TUI（ratatui，链接 lloom-core）
+├── tui/                          # TUI（OpenTUI + SolidJS，bun，走 REST）
+│   ├── src/
+│   │   ├── app.tsx               # 顶层布局 + keymap 绑定
+│   │   ├── index.tsx             # 入口（renderer + keymap）
+│   │   ├── routes/               # home/session/models/usage/settings
+│   │   └── ui/                   # dialog（prompt/logs/menu 弹框）
+│   └── package.json
 ├── webui/
 │   └── index.html                # WebUI 前端（SPA，独立）
 ├── api/

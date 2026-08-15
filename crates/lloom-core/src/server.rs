@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct AppState {
     pub children: Arc<Mutex<Children>>,
+    pub started_at: std::time::Instant,
 }
 
 #[derive(Default)]
@@ -41,6 +42,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             children: Arc::new(Mutex::new(Children::default())),
+            started_at: std::time::Instant::now(),
         }
     }
 }
@@ -390,9 +392,11 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
     let services = json!([
         {
             "name": "Core Server",
-            "status": "Up (healthy)",
+            // Reaching this handler proves the server process is alive and
+            // responding; expose uptime so the UI can show real state.
+            "status": format!("Up ({}s)", state.started_at.elapsed().as_secs()),
             "healthy": true,
-            "detail": "",
+            "detail": "HTTP 自检通过",
         },
         service("Ollama", ollama_owns, ollama_responding),
         ai_status,
@@ -609,14 +613,21 @@ async fn start_ollama_proc(state: &AppState) -> String {
 }
 
 fn stop_ollama_proc(state: &AppState) -> String {
-    let mut guard = state.children.lock().unwrap();
-    if let Some(child) = guard.ollama.as_mut() {
-        let _ = child.kill();
-        guard.ollama = None;
-        "Ollama stopped".to_string()
-    } else {
-        "Ollama not running".to_string()
+    let owned = {
+        let mut guard = state.children.lock().unwrap();
+        if let Some(child) = guard.ollama.as_mut() {
+            let _ = child.kill();
+            guard.ollama = None;
+            true
+        } else {
+            false
+        }
+    };
+    if owned {
+        return "Ollama stopped".to_string();
     }
+    // Not spawned by us (external/system-managed instance): terminate it by name.
+    crate::processes::stop_ollama()
 }
 
 async fn start_ai_proc(state: &AppState) -> String {
@@ -632,12 +643,19 @@ async fn start_ai_proc(state: &AppState) -> String {
 }
 
 fn stop_ai_proc(state: &AppState) -> String {
-    let mut guard = state.children.lock().unwrap();
-    if let Some(child) = guard.ai.as_mut() {
-        let _ = child.kill();
-        guard.ai = None;
-        "AI service stopped".to_string()
-    } else {
-        "AI service not running".to_string()
+    let owned = {
+        let mut guard = state.children.lock().unwrap();
+        if let Some(child) = guard.ai.as_mut() {
+            let _ = child.kill();
+            guard.ai = None;
+            true
+        } else {
+            false
+        }
+    };
+    if owned {
+        return "AI service stopped".to_string();
     }
+    // Not spawned by us (external/dev instance): terminate it by name.
+    crate::processes::stop_ai()
 }

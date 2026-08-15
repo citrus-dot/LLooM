@@ -50,6 +50,8 @@ enum ServiceCmd {
     Stop { name: String },
     /// Restart a service (ai / ollama)
     Restart { name: String },
+    /// Show recent logs for a service (ai / ollama)
+    Logs { name: String },
 }
 
 #[derive(Subcommand)]
@@ -165,11 +167,16 @@ async fn del(client: &Client, path: &str) -> Result<Value, Box<dyn std::error::E
     Ok(res.json().await?)
 }
 
-fn svc_id(name: &str) -> &str {
-    if name.to_lowercase().contains("ollama") {
-        "ollama"
+fn svc_id(name: &str) -> Result<&str, &'static str> {
+    let n = name.to_lowercase();
+    if n == "ai" || n.contains("ai service") {
+        Ok("ai")
+    } else if n.contains("ollama") {
+        Ok("ollama")
+    } else if n.contains("core") {
+        Err("Core Server 是宿主进程，不能通过 CLI 管理；请用 ai / ollama")
     } else {
-        "ai"
+        Ok("ai")
     }
 }
 
@@ -192,16 +199,29 @@ async fn cmd_service(client: &Client, cmd: ServiceCmd) -> Result<(), Box<dyn std
     match cmd {
         ServiceCmd::Status => cmd_status(client).await?,
         ServiceCmd::Start { name } => {
-            let r = post(client, &format!("/api/services/{}/start", svc_id(&name)), Value::Null).await?;
+            let id = svc_id(&name)?;
+            let r = post(client, &format!("/api/services/{id}/start"), Value::Null).await?;
             println!("{}", r["message"].as_str().unwrap_or("ok"));
         }
         ServiceCmd::Stop { name } => {
-            let r = post(client, &format!("/api/services/{}/stop", svc_id(&name)), Value::Null).await?;
+            let id = svc_id(&name)?;
+            let r = post(client, &format!("/api/services/{id}/stop"), Value::Null).await?;
             println!("{}", r["message"].as_str().unwrap_or("ok"));
         }
         ServiceCmd::Restart { name } => {
-            let r = post(client, &format!("/api/services/{}/restart", svc_id(&name)), Value::Null).await?;
+            let id = svc_id(&name)?;
+            let r = post(client, &format!("/api/services/{id}/restart"), Value::Null).await?;
             println!("{}", r["message"].as_str().unwrap_or("ok"));
+        }
+        ServiceCmd::Logs { name } => {
+            let id = svc_id(&name)?;
+            let r = get(client, &format!("/api/services/{id}/logs")).await?;
+            let logs = r["logs"].as_str().unwrap_or("");
+            if logs.is_empty() {
+                println!("(暂无日志)");
+            } else {
+                print!("{logs}");
+            }
         }
     }
     Ok(())

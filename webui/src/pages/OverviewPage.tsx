@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Row, Col, Card, Statistic, Table, Button, Tag, Space, message, Descriptions } from 'antd';
+import { Row, Col, Card, Statistic, Table, Button, Tag, Space, message, Descriptions, Modal } from 'antd';
 import {
   PlayCircleOutlined,
   StopOutlined,
   ReloadOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import {
   getServicesStatus,
   getStats,
+  getServiceLogs,
   startService,
   stopService,
   restartService,
@@ -17,10 +19,16 @@ import {
   UsageStats,
 } from '../api';
 
+const SERVICE_KEY: Record<string, string> = {
+  Ollama: 'ollama',
+  'AI Service': 'ai',
+};
+
 export default function OverviewPage() {
   const [services, setServices] = useState<ServiceStatus[]>([]);
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [logModal, setLogModal] = useState<{ name: string; content: string } | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -63,6 +71,21 @@ export default function OverviewPage() {
     setTimeout(refresh, 2000);
   };
 
+  const handleStopOne = async (name: string, displayName: string) => {
+    await stopService(name);
+    message.success(`${displayName} 已停止`);
+    setTimeout(refresh, 1000);
+  };
+
+  const handleLogs = async (name: string, displayName: string) => {
+    try {
+      const r = await getServiceLogs(name);
+      setLogModal({ name: displayName, content: r.logs || '(暂无日志)' });
+    } catch (e) {
+      message.error(`获取日志失败: ${e}`);
+    }
+  };
+
   const columns = [
     {
       title: '服务名',
@@ -94,12 +117,30 @@ export default function OverviewPage() {
     {
       title: '操作',
       key: 'action',
-      render: (_: unknown, r: ServiceStatus) =>
-        r.name === 'Core Server' ? null : (
-          <Button size="small" onClick={() => handleRestart(r.name.toLowerCase().split(' ')[0])}>
-            重启
-          </Button>
-        ),
+      render: (_: unknown, r: ServiceStatus) => {
+        if (r.name === 'Core Server') return null;
+        const key = SERVICE_KEY[r.name];
+        if (!key) return null;
+        return (
+          <Space>
+            <Button size="small" icon={<FileTextOutlined />} onClick={() => handleLogs(key, r.name)}>
+              日志
+            </Button>
+            <Button size="small" icon={<ReloadOutlined />} onClick={() => handleRestart(key)}>
+              重启
+            </Button>
+            {r.healthy ? (
+              <Button size="small" danger icon={<StopOutlined />} onClick={() => handleStopOne(key, r.name)}>
+                停止
+              </Button>
+            ) : (
+              <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={() => handleRestart(key)}>
+                启动
+              </Button>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -167,6 +208,39 @@ export default function OverviewPage() {
           </Descriptions.Item>
         </Descriptions>
       </Card>
+
+      <Modal
+        title={`${logModal?.name ?? ''} 日志`}
+        open={logModal !== null}
+        onCancel={() => setLogModal(null)}
+        footer={
+          <Button
+            type="primary"
+            onClick={() => {
+              const key = SERVICE_KEY[logModal?.name ?? ''];
+              if (key) handleLogs(key, logModal!.name);
+            }}
+          >
+            刷新
+          </Button>
+        }
+        width={720}
+      >
+        <pre
+          style={{
+            maxHeight: 480,
+            overflow: 'auto',
+            background: '#1e2030',
+            color: '#c8d3f5',
+            padding: 12,
+            borderRadius: 6,
+            fontSize: 12,
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {logModal?.content}
+        </pre>
+      </Modal>
     </Space>
   );
 }

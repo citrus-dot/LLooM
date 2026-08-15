@@ -58,13 +58,15 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API re
 ### Semantic Cache
 - ChromaDB vector similarity search (cosine, 0.95 threshold, 24h TTL)
 - Returns cached responses for repeated simple Q&A (zero cost)
+- Cache hits are flagged (`cache_hit`) and shown as "来自缓存" in the UIs, so a
+  reply while services are down is clearly identified as cached
 - Graceful degradation when embedding model unavailable
 
 ### UIs
-- **WebUI** — browser UI at `http://localhost:7861/`
+- **WebUI** — browser UI at `http://localhost:7861/` (service status, chat, models, usage, settings)
 - **CLI** — `lloom-cli` for scripts and quick ops
-- **TUI** — `lloom-tui` terminal dashboard
-- **Honest service management** — start/stop Ollama and the AI service with real status reporting
+- **TUI** — OpenTUI + SolidJS terminal dashboard (`tui/`)
+- **Honest service management** — start/stop/restart Ollama and the AI service with real status reporting (WebUI buttons, TUI right-click menus, CLI commands), plus per-service log viewing
 
 ## Quick Start
 
@@ -108,9 +110,11 @@ bash scripts/build.sh --skip-ollama   # skip Ollama download
 Build outputs:
 - `target/release/lloom-server` — main server (REST + WebUI)
 - `target/release/lloom-cli` — command-line interface
-- `target/release/lloom-tui` — terminal interface
 - `dist/ai-service/ai-service` — standalone AI micro-service (~26MB, wraps litellm)
 - `dist/ollama/ollama` — bundled Ollama binary
+
+The TUI is a separate Node/SolidJS app in `tui/` (see below), not part of the
+Rust build.
 
 ### Smoke Test
 
@@ -175,7 +179,7 @@ All configuration is via environment variables in `.env`:
 | HTTP client | reqwest 0.13 | Async calls to AI service / probes |
 | Regex | fancy-regex 0.19 | PII/jailbreak/domain patterns (lookaround support) |
 | CLI | clap | Command-line interface (lloom-cli) |
-| TUI | ratatui + crossterm | Terminal dashboard (lloom-tui) |
+| TUI | OpenTUI + SolidJS (bun) | Terminal dashboard (tui/) |
 | Local LLM | Ollama | Zero-cost fallback model runtime |
 
 ## CLI & TUI
@@ -207,20 +211,36 @@ lloom-cli budgets check user default
 lloom-cli usage
 lloom-cli status
 
+# Service management
+lloom-cli service status
+lloom-cli service start ollama
+lloom-cli service stop ollama
+lloom-cli service restart ai
+lloom-cli service logs ollama
+
 # Chat (requires AI service running: cargo run -p lloom-server)
 lloom-cli chat "What is 2+2?"
 ```
 
-### TUI (`lloom-tui`)
+### TUI (`tui/`)
+
+A terminal dashboard built with OpenTUI + SolidJS (run with bun; connects to
+the running server over REST).
 
 ```bash
-cargo build -p lloom-tui
-lloom-tui
+cd tui
+bun install
+bun run src/index.tsx
 ```
 
-Three tabs: **Overview** (service status + usage), **Chat** (interactive,
-Enter to send), **Models** (registered models). Switch with `Tab`/`←`/`→`,
-quit with `Ctrl+C`.
+Five tabs: **Home** (logo + prompt), **Chat** (conversation list + streaming
+chat), **Models** (registered models), **Usage** (costs), **Settings** (API
+keys + service management). Switch with `Tab`, quit with `Ctrl+C`.
+
+- `Enter` submits, `Shift+Enter` inserts a newline
+- Right-click a conversation to open a menu (open / delete)
+- Right-click a service in Settings to open a menu (logs / restart / stop / start)
+- Right-click an API key row to edit it in a dialog
 
 ## Project Structure
 
@@ -233,7 +253,9 @@ LLooM/
 │                                 # models.rs, config.rs, error.rs
 ├── crates/lloom-server/          # Main server (REST + WebUI)
 ├── crates/lloom-cli/             # CLI (clap, links lloom-core)
-├── crates/lloom-tui/             # TUI (ratatui, links lloom-core)
+├── tui/                          # TUI (OpenTUI + SolidJS, bun)
+│   ├── src/                      # app.tsx, index.tsx, routes/, ui/
+│   └── package.json
 ├── webui/                        # WebUI frontend (React + Vite + Ant Design)
 │   ├── src/                      # pages: Overview/Usage/Chat/Models/Settings
 │   └── dist/                     # build output (served by lloom-server)

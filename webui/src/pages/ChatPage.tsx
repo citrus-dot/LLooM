@@ -103,12 +103,15 @@ export default function ChatPage() {
       let response = '';
       const modelsUsed: string[] = [];
       let errorMsg: string | null = null;
+      let cached = false;
 
       for (const ev of events) {
         const d = ev.data || ev;
         if (ev.event === 'task_start' && d.model) modelsUsed.push(d.model);
-        else if (ev.event === 'result' && d.response !== undefined) response = d.response;
-        else if (d.error) errorMsg = d.block_reason || d.detail || '未知错误';
+        else if (ev.event === 'result' && d.response !== undefined) {
+          response = d.response;
+          cached = !!d.cache_hit;
+        } else if (d.error) errorMsg = d.block_reason || d.detail || '未知错误';
       }
 
       if (errorMsg) {
@@ -118,10 +121,12 @@ export default function ChatPage() {
         await persist(finalMsgs);
       } else {
         const uniq = [...new Set(modelsUsed)];
+        let detail = uniq.length ? `调用模型: ${uniq.join(' | ')}` : undefined;
+        if (cached) detail = detail ? `${detail} · 来自缓存` : '来自语义缓存';
         const aiMsg: DisplayMsg = {
           role: 'assistant',
           content: response || '(无返回)',
-          detail: uniq.length ? `调用模型: ${uniq.join(' | ')}` : undefined,
+          detail,
         };
         const finalMsgs = [...next, aiMsg];
         setMsgs(finalMsgs);

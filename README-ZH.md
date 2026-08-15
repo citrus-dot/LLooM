@@ -58,13 +58,14 @@ LLM 提供商（DashScope / Ollama / OpenAI / Anthropic）
 ### 语义缓存
 - ChromaDB 向量相似度搜索（余弦相似度 0.95，24 小时 TTL）
 - 对重复的简单问答返回缓存响应（零成本）
+- 缓存命中会被标记（`cache_hit`）并在各界面显示"来自缓存"，因此服务 down 时仍能回复也一目了然
 - 嵌入模型不可用时优雅降级
 
 ### 界面
-- **WebUI** — 浏览器访问 `http://localhost:7861/`
+- **WebUI** — 浏览器访问 `http://localhost:7861/`（服务状态、聊天、模型、用量、设置）
 - **CLI** — `lloom-cli`，脚本与快速操作
-- **TUI** — `lloom-tui`，终端仪表盘
-- **诚实的服务管理** — 启动/停止 Ollama 和 AI 服务，真实状态报告
+- **TUI** — OpenTUI + SolidJS 终端仪表盘（`tui/`）
+- **诚实的服务管理** — 启动/停止/重启 Ollama 和 AI 服务，真实状态报告（WebUI 按钮、TUI 右键菜单、CLI 命令），并可查看各服务日志
 
 ## 快速开始
 
@@ -109,9 +110,9 @@ bash scripts/build.sh --skip-ollama   # 跳过 Ollama 下载
 - `dist/ai-service/ai-service` — 独立 AI 微服务可执行（约 26MB，封装 litellm）
 - `target/release/lloom-server` — 主服务器（REST + WebUI）
 - `target/release/lloom-cli` — 命令行界面
-- `target/release/lloom-tui` — 终端界面
-- `dist/ai-service/ai-service` — 独立 AI 微服务可执行
 - `dist/ollama/ollama` — 内置 Ollama 二进制
+
+TUI 是独立的 Node/SolidJS 应用（`tui/`，见下文），不属于 Rust 构建。
 
 Rust 二进制是主体；AI 微服务以独立可执行打进应用 resources，目标机器无需安装 Python。
 
@@ -179,7 +180,7 @@ bash scripts/smoke_test.sh
 | HTTP 客户端 | reqwest 0.13 | 异步调用 AI 服务 / 健康探测 |
 | 正则 | fancy-regex 0.19 | PII/越狱/领域模式（支持 lookaround） |
 | CLI | clap | 命令行界面（lloom-cli） |
-| TUI | ratatui + crossterm | 终端仪表盘（lloom-tui） |
+| TUI | OpenTUI + SolidJS（bun） | 终端仪表盘（tui/） |
 | 本地 LLM | Ollama | 零成本兜底模型运行时 |
 
 ## CLI 与 TUI
@@ -211,18 +212,33 @@ lloom-cli budgets check user default
 lloom-cli usage
 lloom-cli status
 
+# 服务管理
+lloom-cli service status
+lloom-cli service start ollama
+lloom-cli service stop ollama
+lloom-cli service restart ai
+lloom-cli service logs ollama
+
 # 聊天（需 AI 服务运行：cargo run -- --headless）
 lloom-cli chat "2+2 等于几？"
 ```
 
-### TUI（`lloom-tui`）
+### TUI（`tui/`）
+
+OpenTUI + SolidJS 终端仪表盘（用 bun 运行，通过 REST 连接正在运行的服务器）。
 
 ```bash
-cargo build -p lloom-tui
-lloom-tui
+cd tui
+bun install
+bun run src/index.tsx
 ```
 
-三个标签页：**概览**（服务状态 + 用量）、**聊天**（交互式，Enter 发送）、**模型**（已注册模型）。`Tab`/`←`/`→` 切换，`Ctrl+C` 退出。
+五个标签页：**首页**（Logo + 提示词）、**聊天**（会话列表 + 流式聊天）、**模型**（已注册模型）、**用量**（成本）、**设置**（API 密钥 + 服务管理）。`Tab` 切换，`Ctrl+C` 退出。
+
+- `Enter` 发送，`Shift+Enter` 换行
+- 右键会话项弹出菜单（打开 / 删除）
+- 在设置页右键服务名弹出菜单（日志 / 重启 / 停止 / 启动）
+- 右键密钥行弹出编辑弹框
 
 ## 项目结构
 
@@ -235,7 +251,9 @@ LLooM/
 │                                 # models.rs, config.rs, error.rs
 ├── crates/lloom-server/          # 主服务器（REST + WebUI）
 ├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）
-├── crates/lloom-tui/             # TUI（ratatui，链接 lloom-core）
+├── tui/                          # TUI（OpenTUI + SolidJS，bun）
+│   ├── src/                      # app.tsx, index.tsx, routes/, ui/
+│   └── package.json
 ├── webui/index.html              # WebUI 前端（SPA，独立）
 ├── api/ai_service.py             # Python AI 微服务（litellm 封装）
 ├── scripts/

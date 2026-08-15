@@ -1,9 +1,10 @@
 // Usage route — spend stats + usage table, OpenCode-style.
 
-import { createSignal, onMount, onCleanup } from "solid-js"
+import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
 import { getStats, getUsage, getBudgets, type UsageRow } from "../api"
-import { setNavHandler, navHandler } from "../app"
+import { dialogOpen } from "../app"
+import { useBindings } from "@opentui/keymap/solid"
 
 export function Usage(props: { setStatus: (s: string) => void }) {
   const [rows, setRows] = createSignal<UsageRow[]>([])
@@ -23,19 +24,31 @@ export function Usage(props: { setStatus: (s: string) => void }) {
     } catch (e) {
       props.setStatus(`无法连接: ${e}`)
     }
-    setNavHandler((key) => {
-      const n = rows().length
-      if (n === 0) return
-      if (key === "up" || key === "down") {
-        const dir = key === "down" ? 1 : -1
-        setSelIdx((selIdx() + dir + n) % n)
-      }
-    })
   })
 
-  onCleanup(() => {
-    if (navHandler()) setNavHandler(null)
-  })
+  useBindings(() => ({
+    enabled: () => !dialogOpen(),
+    bindings: [
+      {
+        key: "up",
+        cmd: () => {
+          const n = rows().length
+          if (n === 0) return
+          setSelIdx((selIdx() - 1 + n) % n)
+        },
+        desc: "Previous row",
+      },
+      {
+        key: "down",
+        cmd: () => {
+          const n = rows().length
+          if (n === 0) return
+          setSelIdx((selIdx() + 1) % n)
+        },
+        desc: "Next row",
+      },
+    ],
+  }))
 
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>

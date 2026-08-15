@@ -80,6 +80,10 @@ export async function restartService(name: string): Promise<{ message: string }>
   return post(`/api/services/${name}/restart`)
 }
 
+export async function getServiceLogs(name: string): Promise<{ logs: string }> {
+  return get(`/api/services/${name}/logs`)
+}
+
 export async function getModels(): Promise<{ models: Model[] }> {
   return get("/api/models")
 }

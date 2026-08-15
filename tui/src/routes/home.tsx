@@ -1,9 +1,10 @@
 // Home route — centered logo, service status, and a prompt (OpenCode-style).
 
-import { createSignal, onMount, Show } from "solid-js"
+import { createSignal, createEffect, onMount, Show } from "solid-js"
 import { theme } from "../theme"
 import { getServicesStatus, type ServicesStatus } from "../api"
-import { setRoute, setActiveSessionId } from "../app"
+import { setRoute, setActiveSessionId, setInitialQuery } from "../app"
+import type { TextareaRenderable } from "@opentui/core"
 
 const LOGO = [
   " ██╗     ██╗      ██████╗  ██████╗ ███╗   ███╗",
@@ -16,10 +17,19 @@ const LOGO = [
 export function Home(props: { setStatus: (s: string) => void }) {
   const [services, setServices] = createSignal<ServicesStatus | null>(null)
   const [prompt, setPrompt] = createSignal("")
+  let inputRef: TextareaRenderable | undefined
+
+  createEffect(() => {
+    if (inputRef && !inputRef.focused) inputRef.focus()
+  })
+  onMount(() => {
+    if (inputRef && !inputRef.focused) inputRef.focus()
+  })
 
   onMount(async () => {
     try {
       setServices(await getServicesStatus())
+      if (inputRef && !inputRef.focused) inputRef.focus()
     } catch (e) {
       props.setStatus(`无法连接服务器: ${e} — 请先启动 lloom-server`)
     }
@@ -29,12 +39,13 @@ export function Home(props: { setStatus: (s: string) => void }) {
   const total = () => services()?.total ?? 0
 
   const submit = () => {
-    const q = prompt().trim()
+    const q = (inputRef?.plainText ?? "").trim()
     if (!q) return
+    setPrompt("")
+    inputRef?.clear()
+    setInitialQuery(q)
     setActiveSessionId(null)
     setRoute("session")
-    // pass the query to session via a module signal
-    import("../app").then((m) => m.setInitialQuery(q))
   }
 
   return (
@@ -61,11 +72,17 @@ export function Home(props: { setStatus: (s: string) => void }) {
         paddingBottom={1}
       >
         <textarea
-          value={prompt()}
-          onContentChange={(v: string) => setPrompt(v)}
+          ref={(r: TextareaRenderable) => {
+            inputRef = r
+          }}
+          onContentChange={() => setPrompt(inputRef?.plainText ?? "")}
           onSubmit={() => submit()}
           placeholder="Ask anything... 按 Enter 发送，Tab 切换页面"
           width="100%"
+          keyBindings={[
+            { name: "return", action: "submit" },
+            { name: "return", shift: true, action: "newline" },
+          ]}
         />
       </box>
 

@@ -1,13 +1,14 @@
 #!/bin/bash
 # LLooM 构建脚本
 #
-# 架构：Rust workspace（lloom-core + lloom-server + lloom-cli + lloom-tui），
-# Python 只剩一个 AI 微服务（litellm 封装）。
+# 架构：Rust workspace（lloom-core + lloom-server + lloom-cli），
+# TUI 为 SolidJS+OpenTUI (tui/)，Python 只剩 AI 微服务。
 # 构建产物：
 #   - target/release/lloom-server   — 主服务器（REST + WebUI）
 #   - target/release/lloom-cli      — 命令行界面
-#   - target/release/lloom-tui      — 终端界面
 #   - dist/ai-service/ai-service    — PyInstaller 打包的 AI 微服务可执行
+#
+# TUI 运行（需 bun）：cd tui && bun install && bun run src/index.tsx
 #
 # 用法:
 #   bash scripts/build.sh                   # 完整构建
@@ -128,7 +129,6 @@ cargo build --workspace --release 2>&1 || {
 echo "✓ Rust 编译完成:"
 echo "    target/release/lloom-server"
 echo "    target/release/lloom-cli"
-echo "    target/release/lloom-tui"
 
 # 3. 打包 Python AI 微服务 + Ollama
 echo "[3/3] AI 微服务 + Ollama..."
@@ -166,11 +166,10 @@ echo ""
 echo "产物位置:"
 echo "  服务器:  target/release/lloom-server"
 echo "  CLI:     target/release/lloom-cli"
-echo "  TUI:     target/release/lloom-tui"
 echo "  AI 微服务: dist/ai-service/ai-service"
 echo ""
 echo "运行方式:"
 echo "  服务器:  target/release/lloom-server      (WebUI: http://localhost:7861)"
 echo "  CLI:     target/release/lloom-cli --help"
-echo "  TUI:     target/release/lloom-tui"
+echo "  TUI:     cd tui && bun install && bun run src/index.tsx"
 echo "  开发:    cargo run -p lloom-server"
