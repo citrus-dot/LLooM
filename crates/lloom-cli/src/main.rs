@@ -33,8 +33,10 @@ enum Command {
     Usage,
     /// Chat with the default model (use --interactive for multi-turn)
     Chat {
+        /// Question or message to send (e.g. `lloom-cli chat "What is 2+2?"`)
         query: String,
-        /// Resume a conversation by ID (loads its history as context)
+        /// Resume a conversation by ID — run `lloom-cli conversation list` to
+        /// find session IDs
         #[arg(long)]
         session: Option<String>,
         /// Interactive multi-turn session (prompt repeatedly until EOF)
@@ -42,7 +44,10 @@ enum Command {
         interactive: bool,
     },
     /// Orchestrate a complex task
-    Orchestrate { query: String },
+    Orchestrate {
+        /// Task description to decompose and run
+        query: String,
+    },
     /// Conversation management
     #[command(subcommand)]
     Conversation(ConversationCmd),
@@ -53,12 +58,18 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ConversationCmd {
-    /// List conversations
+    /// List conversations (run this to find session IDs)
     List,
     /// Show one conversation's messages
-    Show { id: String },
+    Show {
+        /// Conversation/session ID (see `lloom-cli conversation list`)
+        id: String,
+    },
     /// Delete a conversation
-    Delete { id: String },
+    Delete {
+        /// Conversation/session ID (see `lloom-cli conversation list`)
+        id: String,
+    },
     /// Start a fresh conversation
     New,
 }
@@ -68,15 +79,30 @@ enum ServiceCmd {
     /// Show service status
     Status,
     /// Start a service (ai / ollama)
-    Start { name: String },
+    Start {
+        /// Service name: ai or ollama
+        name: String,
+    },
     /// Stop a service (ai / ollama)
-    Stop { name: String },
+    Stop {
+        /// Service name: ai or ollama
+        name: String,
+    },
     /// Restart a service (ai / ollama)
-    Restart { name: String },
+    Restart {
+        /// Service name: ai or ollama
+        name: String,
+    },
     /// Show recent logs for a service (ai / ollama)
-    Logs { name: String },
+    Logs {
+        /// Service name: ai or ollama
+        name: String,
+    },
     /// Apply config changes: smart-restart services affected by changed keys
-    Apply { keys: Vec<String> },
+    Apply {
+        /// Env keys that changed (e.g. DASHSCOPE_API_KEY)
+        keys: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -85,34 +111,49 @@ enum ModelsCmd {
     List,
     /// Register a new model
     Add {
+        /// Model name (e.g. qwen2.5-local)
         name: String,
+        /// Provider: dashscope / openai / anthropic / ollama / custom
         #[arg(long)]
         provider: String,
+        /// LiteLLM model string (e.g. ollama/qwen2.5:latest)
         #[arg(long)]
         model: String,
+        /// API base URL (e.g. http://localhost:11434)
         #[arg(long)]
         api_base: Option<String>,
+        /// Input cost per token (e.g. 0.000001)
         #[arg(long)]
         input_cost: Option<f64>,
+        /// Output cost per token (e.g. 0.000002)
         #[arg(long)]
         output_cost: Option<f64>,
+        /// Task type: simple_qa / general / coding / math_logic / complex_reasoning
         #[arg(long)]
         task_type: Option<String>,
     },
     /// Update a model's fields
     Update {
+        /// Model name to update
         name: String,
+        /// New input cost per token
         #[arg(long)]
         input_cost: Option<f64>,
+        /// New output cost per token
         #[arg(long)]
         output_cost: Option<f64>,
+        /// New API base URL
         #[arg(long)]
         api_base: Option<String>,
+        /// New task type
         #[arg(long)]
         task_type: Option<String>,
     },
     /// Remove a model (soft delete)
-    Remove { name: String },
+    Remove {
+        /// Model name to remove
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -121,14 +162,23 @@ enum BudgetsCmd {
     List,
     /// Set a budget
     Set {
+        /// Budget scope: user / model
         scope: String,
+        /// Scope ID (user name or model name)
         scope_id: String,
+        /// Max budget in USD (e.g. 10)
         max_budget: f64,
+        /// Duration: 30d / 7d / 1d
         #[arg(long, default_value = "30d")]
         duration: String,
     },
     /// Check a budget
-    Check { scope: String, scope_id: String },
+    Check {
+        /// Budget scope: user / model
+        scope: String,
+        /// Scope ID (user name or model name)
+        scope_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -418,11 +468,37 @@ async fn cmd_usage(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
 
 // ── Chat / Orchestrate (SSE via server) ──
 
+/// Resolve a --session argument: if it's already a valid ID, use as-is;
+/// otherwise treat it as a conversation title (or prefix) and pick the first
+/// match. Errors if nothing matches.
+async fn resolve_session_id(client: &Client, input: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // Fast path: assume it's an ID and see if the conversation exists.
+    if let Ok(conv) = get(client, &format!("/api/conversations/{input}")).await {
+        if conv.get("id").is_some() || conv.get("messages").is_some() {
+            return Ok(input.to_string());
+        }
+    }
+    // Title match against the conversation list.
+    let data: Value = get(client, "/api/conversations").await?;
+    let convs = data["conversations"].as_array().cloned().unwrap_or_default();
+    let lower = input.to_lowercase();
+    for c in &convs {
+        let title = c["title"].as_str().unwrap_or("").to_lowercase();
+        if title.contains(&lower) {
+            return Ok(c["id"].as_str().unwrap_or("").to_string());
+        }
+    }
+    Err(format!("找不到会话: {input}（先用 lloom-cli conversation list 查看）").into())
+}
+
 async fn cmd_chat(client: &Client, query: &str, session: Option<&str>, interactive: bool) -> Result<(), Box<dyn std::error::Error>> {
     // history holds the conversation so far (role/content pairs).
     let mut history: Vec<Value> = Vec::new();
     if let Some(id) = session {
-        let conv: Value = get(client, &format!("/api/conversations/{id}")).await?;
+        // If the argument isn't a valid session ID, try matching it as a title
+        // (or title prefix) from the conversation list.
+        let resolved = resolve_session_id(client, id).await?;
+        let conv: Value = get(client, &format!("/api/conversations/{resolved}")).await?;
         for m in conv["messages"].as_array().cloned().unwrap_or_default() {
             let role = m["role"].as_str().unwrap_or("");
             if role == "user" || role == "assistant" {
@@ -516,7 +592,8 @@ async fn cmd_conversation(client: &Client, cmd: ConversationCmd) -> Result<(), B
             }
         }
         ConversationCmd::Show { id } => {
-            let conv: Value = get(client, &format!("/api/conversations/{id}")).await?;
+            let resolved = resolve_session_id(client, &id).await?;
+            let conv: Value = get(client, &format!("/api/conversations/{resolved}")).await?;
             for m in conv["messages"].as_array().cloned().unwrap_or_default() {
                 let role = m["role"].as_str().unwrap_or("");
                 let content = m["content"].as_str().unwrap_or("");
@@ -525,7 +602,8 @@ async fn cmd_conversation(client: &Client, cmd: ConversationCmd) -> Result<(), B
             }
         }
         ConversationCmd::Delete { id } => {
-            let r = del(client, &format!("/api/conversations/{id}")).await?;
+            let resolved = resolve_session_id(client, &id).await?;
+            let r = del(client, &format!("/api/conversations/{resolved}")).await?;
             println!("{}", if r["deleted"].as_bool().unwrap_or(false) { "已删除" } else { "删除失败" });
         }
         ConversationCmd::New => {

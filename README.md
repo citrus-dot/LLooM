@@ -227,6 +227,9 @@ lloom-cli conversation new
 lloom-cli chat "What is 2+2?"
 lloom-cli chat "continue" --session <id>
 lloom-cli chat "hi" --interactive
+
+# --session and conversation show/delete accept an ID OR a title (prefix)
+# match; run `lloom-cli conversation list` to see what's available.
 ```
 ```
 

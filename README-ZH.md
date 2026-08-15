@@ -228,6 +228,9 @@ lloom-cli conversation new
 lloom-cli chat "2+2 等于几？"
 lloom-cli chat "继续说" --session <id>
 lloom-cli chat "你好" --interactive
+
+# --session 与 conversation show/delete 既接受 ID 也接受标题（前缀）匹配；
+# 运行 `lloom-cli conversation list` 查看现有会话。
 ```
 
 ### TUI（`tui/`）
