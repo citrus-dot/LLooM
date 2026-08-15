@@ -6,10 +6,10 @@
 
 ## 架构
 
-LLooM 分层设计，**REST API 是 UI 与业务核心之间的唯一契约**。任何前端 —— 内置 WebUI、Tauri 桌面 GUI、未来的 TUI —— 都接入同一套 API。
+LLooM 分层设计，**REST API 是 UI 与业务核心之间的唯一契约**。四个前端 —— WebUI、CLI、TUI、以及 headless REST API 本身 —— 都接入同一个核心。
 
 ```
-UI 层（WebUI / Tauri GUI / 未来 TUI）   ← 任意前端，与业务无关
+UI 层（WebUI / CLI / TUI）               ← 任意前端，与业务无关
         │  HTTP REST（全部类型化 JSON 对象）
 Rust 核心 + axum REST 服务器（:7861）    ← 主服务器，承载全部业务逻辑
         │  直接函数调用
@@ -62,7 +62,8 @@ LLM 提供商（DashScope / Ollama / OpenAI / Anthropic）
 
 ### 界面
 - **WebUI** — 浏览器访问 `http://localhost:7861/`
-- **Tauri 桌面 GUI** — 窗口 + 系统托盘，走同一套 REST API
+- **CLI** — `lloom-cli`，脚本与快速操作
+- **TUI** — `lloom-tui`，终端仪表盘
 - **诚实的服务管理** — 启动/停止 Ollama 和 AI 服务，真实状态报告
 
 ## 快速开始
@@ -83,18 +84,12 @@ cd LLooM
 # 安装 Python 依赖（Python AI 微服务）
 pip install -e ".[dev]"
 
-# 安装 Tauri 前端依赖
-cd tauri-app && npm install && cd ..
-
 # 复制并编辑环境配置
 cp .env.example .env
 # 在 .env 中填入你的 API 密钥
 
-# 启动 Rust 服务器（无头模式，WebUI 在 :7861）
-cargo run -- --headless
-
-# 或启动 Tauri GUI（也会启动同一个 Rust 服务器）
-cd tauri-app && npx tauri dev
+# 启动 Rust 服务器（WebUI 在 :7861）
+cargo run -p lloom-server
 ```
 
 Rust 服务器（`:7861`）是唯一入口，会自动拉起 Python AI 微服务（`:7862`）和 Ollama（`:11434`）。
@@ -102,18 +97,21 @@ Rust 服务器（`:7861`）是唯一入口，会自动拉起 Python AI 微服务
 ### 方式 C：构建发布包
 
 ```bash
-# 完整构建（AI 微服务 PyInstaller + Ollama + Tauri 打包）
+# 完整构建（Rust release + AI 微服务 PyInstaller + Ollama）
 bash scripts/build.sh
 
 # 或分步：
 bash scripts/build.sh --skip-ai       # 跳过 AI 微服务打包
 bash scripts/build.sh --skip-ollama   # 跳过 Ollama 下载
-bash scripts/build.sh --skip-tauri    # 跳过 Tauri 打包（仅 Rust + AI）
 ```
 
 构建产物：
 - `dist/ai-service/ai-service` — 独立 AI 微服务可执行（约 26MB，封装 litellm）
-- `tauri-app/src-tauri/target/release/bundle/` — 桌面应用（Linux 为 deb/rpm，macOS 为 app/dmg）
+- `target/release/lloom-server` — 主服务器（REST + WebUI）
+- `target/release/lloom-cli` — 命令行界面
+- `target/release/lloom-tui` — 终端界面
+- `dist/ai-service/ai-service` — 独立 AI 微服务可执行
+- `dist/ollama/ollama` — 内置 Ollama 二进制
 
 Rust 二进制是主体；AI 微服务以独立可执行打进应用 resources，目标机器无需安装 Python。
 
@@ -180,7 +178,8 @@ bash scripts/smoke_test.sh
 | 向量缓存 | ChromaDB（PersistentClient） | 问答语义缓存 |
 | HTTP 客户端 | reqwest 0.13 | 异步调用 AI 服务 / 健康探测 |
 | 正则 | fancy-regex 0.19 | PII/越狱/领域模式（支持 lookaround） |
-| 桌面端 | Tauri v2（Rust） | 窗口 + 系统托盘，前端走 REST |
+| CLI | clap | 命令行界面（lloom-cli） |
+| TUI | ratatui + crossterm | 终端仪表盘（lloom-tui） |
 | 本地 LLM | Ollama | 零成本兜底模型运行时 |
 
 ## CLI 与 TUI
@@ -234,11 +233,10 @@ LLooM/
 │   └── src/                      # server.rs, db.rs, router.rs, security.rs,
 │                                 # ai_client.rs, processes.rs, conversations.rs,
 │                                 # models.rs, config.rs, error.rs
+├── crates/lloom-server/          # 主服务器（REST + WebUI）
 ├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）
 ├── crates/lloom-tui/             # TUI（ratatui，链接 lloom-core）
-├── webui/index.html              # WebUI 前端（SPA，独立于 Tauri）
-├── tauri-app/src-tauri/          # 桌面壳（依赖 lloom-core）
-│   └── src/main.rs               # 窗口 + 系统托盘 + 启动核心
+├── webui/index.html              # WebUI 前端（SPA，独立）
 ├── api/ai_service.py             # Python AI 微服务（litellm 封装）
 ├── scripts/
 │   ├── build.sh                  # 跨平台构建（含系统依赖检测）

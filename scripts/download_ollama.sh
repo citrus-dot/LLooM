@@ -11,7 +11,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-RESOURCES_DIR="$PROJECT_DIR/tauri-app/src-tauri/resources"
+RESOURCES_DIR="$PROJECT_DIR/dist/ollama"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 

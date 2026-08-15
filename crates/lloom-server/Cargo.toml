@@ -1,17 +1,14 @@
 [package]
-name = "lloom"
+name = "lloom-server"
 version = "2.1.0"
 edition = "2021"
+description = "LLooM headless server — REST + WebUI on :7861"
 
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
+[[bin]]
+name = "lloom-server"
+path = "src/main.rs"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-shell = "2"
 lloom-core = { path = "../../crates/lloom-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 axum = { version = "0.8", features = ["http1", "json", "tokio", "query", "macros"] }
-
-[features]
-custom-protocol = ["tauri/custom-protocol"]

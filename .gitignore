@@ -3,9 +3,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
-dist/
-build/
-.eggs/
 
 # Virtual environments
 .venv/
@@ -16,23 +13,19 @@ env/
 .vscode/
 .idea/
 
-# Runtime data
-data/
-*.db
-*.sqlite3
+# Rust build artifacts
+target/
 
-# PyInstaller build artifacts (keep lloom.spec)
+# PyInstaller build artifacts
 build/
 dist/
 tiktoken_cache/
 
-# Tauri / Rust build artifacts
-target/
-tauri-app/node_modules/
-tauri-app/src-tauri/target/
-tauri-app/src-tauri/resources/ai-service/
-tauri-app/src-tauri/resources/ollama
-tauri-app/src-tauri/gen/
+# Runtime data
+data/
+*.db
+*.sqlite3
+conversations/
 
 # OS
 .DS_Store
@@ -45,6 +38,3 @@ Thumbs.db
 
 # Logs
 *.log
-
-# Conversation history
-conversations/

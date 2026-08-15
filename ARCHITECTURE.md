@@ -1,6 +1,6 @@
 # LLooM 架构文档
 
-本文档描述 LLooM 当前的分层架构。核心原则：**REST API 是唯一对外契约，UI 层与业务核心彻底解耦**。任何前端（WebUI、TUI、桌面 GUI）都通过同一套契约接入。
+本文档描述 LLooM 当前的分层架构。核心原则：**REST API 是唯一对外契约，UI 层与业务核心彻底解耦**。任何前端（WebUI、CLI、TUI）都通过同一套契约接入。
 
 ## 分层总览
 
@@ -8,14 +8,15 @@
 ┌─────────────────────────────────────────────────────────┐
 │  UI 适配层（任意前端，与业务无关）                       │
 │                                                         │
-│  ┌───────────┐  ┌───────────┐  ┌───────────────────┐   │
-│  │  WebUI    │  │  TUI      │  │  Tauri 桌面 GUI   │   │
-│  │ index.html│  │ (未来)    │  │  (窗口+托盘)      │   │
-│  └─────┬─────┘  └─────┬─────┘  └────────┬──────────┘   │
-│        │  HTTP/REST   │  HTTP/REST      │ Tauri IPC     │
-└────────┼──────────────┼────────────────┼───────────────┘
-         │              │                │
-┌────────▼──────────────▼────────────────▼───────────────┐
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐           │
+│  │  WebUI    │  │  CLI      │  │  TUI      │           │
+│  │ index.html│  │ lloom-cli │  │ lloom-tui │           │
+│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘           │
+│        │              │              │                 │
+│        │ HTTP/REST    │ 直接函数调用  │ 直接函数调用     │
+└────────┼──────────────┼──────────────┼─────────────────┘
+         │              │              │
+┌────────▼──────────────▼──────────────▼─────────────────┐
 │  契约层：axum REST API（唯一对外契约，返回类型化 JSON） │
 │  /api/models /api/services /api/chat/stream ...        │
 └──────────────────────┬─────────────────────────────────┘
@@ -51,13 +52,13 @@
 | UI | 接入方式 | 说明 |
 |---|---|---|
 | WebUI | HTTP → `http://localhost:7861/api/*` | 浏览器访问，前端 `restCall()` 映射 REST |
-| Tauri GUI | HTTP → `http://localhost:7861/api/*` | GUI 启动时后台起同一 axum 服务器，WebView 前端与 WebUI 完全一致 |
-| TUI（未来） | HTTP → `/api/*` 或直连 core | 复用同一契约，零额外工作 |
+| CLI（lloom-cli） | 直接函数调用 `lloom_core::db/ai_client` | 本地操作离线可用，chat 调 AI 服务 |
+| TUI（lloom-tui） | 直接函数调用 `lloom_core::db/ai_client` | 终端仪表盘，同上 |
 
 **关键约定**：
-- **REST 是唯一契约**，所有 UI（含桌面 GUI）统一走 `/api/*`。Tauri 壳只提供窗口和系统托盘，没有任何业务命令。
+- **REST 是唯一对外契约**。WebUI 走 HTTP；CLI/TUI 是 Rust 二进制，直接链接 `lloom-core` lib（无需服务器运行）。
 - 所有 UI 拿到的是类型化 JSON **对象**，不是字符串。前端不做任何 `JSON.parse` 包装。
-- GUI 模式下 WebView 的页面源是 `tauri://localhost`，因此前端 `restCall` 使用绝对地址 `http://localhost:7861`。
+- CLI/TUI 的本地操作（模型/预算/用量）完全离线；只有 `chat` 需要 AI 服务运行。
 
 ### 契约层（server.rs）
 
@@ -190,7 +191,7 @@ bash scripts/smoke_test.sh
 | 主服务器 | Python FastAPI（7860） | **Rust axum（7861）** |
 | Rust 角色 | 壳 + curl 代理 | 完整服务器 + 业务核心 |
 | Python 角色 | 全部业务 | 仅 litellm 调用（瘦身 ~75%） |
-| GUI 前端接入 | Tauri IPC 命令 | **REST（与 WebUI 完全一致）** |
+| 前端 | Tauri GUI + WebUI | **WebUI + CLI + TUI**（多个前端共享核心） |
 | 前端数据 | JSON 字符串 + 手动 parse | 类型化对象 |
 | 健康探测 | curl 子进程（同步） | async reqwest |
 | 服务状态 | 仅端口探测（假 healthy） | **子进程 + 端口 + AI 自检（诚实）** |
@@ -226,14 +227,11 @@ LLooM/
 │       ├── models.rs             # 类型定义
 │       ├── config.rs             # 路径/端口配置
 │       └── error.rs              # 统一错误
+├── crates/lloom-server/          # 主服务器（REST + WebUI）
 ├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）
 ├── crates/lloom-tui/             # TUI（ratatui，链接 lloom-core）
 ├── webui/
-│   └── index.html                # WebUI 前端（SPA，独立于 Tauri）
-├── tauri-app/src-tauri/          # 桌面壳（依赖 lloom-core）
-│   ├── src/main.rs               # 窗口 + 系统托盘 + 启动核心
-│   ├── resources/                # 构建产物（AI 服务、Ollama）—— 不提交
-│   └── tauri.conf.json           # Tauri 打包配置
+│   └── index.html                # WebUI 前端（SPA，独立）
 ├── api/
 │   └── ai_service.py             # Python AI 微服务（litellm 封装，唯一 Python）
 ├── scripts/

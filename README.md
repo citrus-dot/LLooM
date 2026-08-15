@@ -6,16 +6,16 @@ A self-contained LLM routing platform. A Rust core server manages models, routes
 
 ## Architecture
 
-LLooM is layered with the **REST API as the single contract** between the UI and the business core. Any frontend — the built-in WebUI, the Tauri desktop GUI, or a future TUI — plugs into the same API.
+LLooM is layered with the **REST API as the single contract** between the UI and the business core. Four frontends — WebUI, CLI, TUI, and the headless REST API itself — all plug into the same core.
 
 ```
-UI layer (WebUI / Tauri GUI / future TUI)   ← any frontend, UI-agnostic
-        │  HTTP REST (all typed JSON objects)
-Rust core + axum REST server (:7861)        ← primary server, all business logic
+UI layer (WebUI / CLI / TUI)            ← any frontend, UI-agnostic
+        │  HTTP REST  or  direct function calls
+Rust core + axum REST server (:7861)    ← primary server, all business logic
         │  function calls
 Rust core modules (db / router / security / processes / conversations)
         │  async HTTP to the AI service
-Python AI micro-service (:7862)             ← stateless litellm wrapper
+Python AI micro-service (:7862)         ← stateless litellm wrapper
         │
 LLM providers (DashScope / Ollama / OpenAI / Anthropic)
 ```
@@ -62,7 +62,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API re
 
 ### UIs
 - **WebUI** — browser UI at `http://localhost:7861/`
-- **Tauri desktop GUI** — window + system tray, uses the same REST API
+- **CLI** — `lloom-cli` for scripts and quick ops
+- **TUI** — `lloom-tui` terminal dashboard
 - **Honest service management** — start/stop Ollama and the AI service with real status reporting
 
 ## Quick Start
@@ -83,40 +84,33 @@ cd LLooM
 # Install Python dependencies (Python AI micro-service)
 pip install -e ".[dev]"
 
-# Install Tauri frontend deps
-cd tauri-app && npm install && cd ..
-
 # Copy and edit environment
 cp .env.example .env
 # Edit .env with your API keys
 
-# Run the Rust server (headless, Web UI on :7861)
-cargo run -- --headless
-
-# Or start the Tauri GUI (also starts the same Rust server)
-cd tauri-app && npx tauri dev
+# Run the Rust server (Web UI on :7861)
+cargo run -p lloom-server
 ```
 
-The Rust server (`:7861`) is the single entry point. It spawns the Python AI micro-service (`:7862`) and Ollama (`:11434`) automatically.
+The server (`:7861`) is the single entry point. It spawns the Python AI micro-service (`:7862`) and Ollama (`:11434`) automatically.
 
 ### Option C: Build the Release Bundle
 
 ```bash
-# Full build (AI service PyInstaller + Ollama + Tauri bundle)
+# Full build (Rust release + AI service PyInstaller + Ollama)
 bash scripts/build.sh
 
 # Or step by step:
 bash scripts/build.sh --skip-ai       # skip AI micro-service packaging
 bash scripts/build.sh --skip-ollama   # skip Ollama download
-bash scripts/build.sh --skip-tauri    # skip Tauri bundling (Rust + AI only)
 ```
 
 Build outputs:
+- `target/release/lloom-server` — main server (REST + WebUI)
+- `target/release/lloom-cli` — command-line interface
+- `target/release/lloom-tui` — terminal interface
 - `dist/ai-service/ai-service` — standalone AI micro-service (~26MB, wraps litellm)
-- `tauri-app/src-tauri/target/release/bundle/` — desktop app (deb/rpm on Linux, app/dmg on macOS)
-
-The Rust binary is the primary artifact; the AI micro-service is bundled into
-the app's resources as a standalone executable (no system Python needed).
+- `dist/ollama/ollama` — bundled Ollama binary
 
 ### Smoke Test
 
@@ -167,7 +161,6 @@ All configuration is via environment variables in `.env`:
 | POST | `/api/services/smart-restart` | Restart AI service after config change |
 | POST | `/api/system/open-folder` | Open a folder |
 | POST | `/api/system/open-web` | Open a URL |
-| POST | `/api/system/cli` | Run the CLI |
 
 ## Tech Stack
 
@@ -181,7 +174,8 @@ All configuration is via environment variables in `.env`:
 | Vector Cache | ChromaDB (PersistentClient) | Semantic cache for Q&A |
 | HTTP client | reqwest 0.13 | Async calls to AI service / probes |
 | Regex | fancy-regex 0.19 | PII/jailbreak/domain patterns (lookaround support) |
-| Desktop | Tauri v2 (Rust) | Window + system tray, frontend over REST |
+| CLI | clap | Command-line interface (lloom-cli) |
+| TUI | ratatui + crossterm | Terminal dashboard (lloom-tui) |
 | Local LLM | Ollama | Zero-cost fallback model runtime |
 
 ## CLI & TUI
@@ -213,7 +207,7 @@ lloom-cli budgets check user default
 lloom-cli usage
 lloom-cli status
 
-# Chat (requires AI service running: cargo run -- --headless)
+# Chat (requires AI service running: cargo run -p lloom-server)
 lloom-cli chat "What is 2+2?"
 ```
 
@@ -237,11 +231,10 @@ LLooM/
 │   └── src/                      # server.rs, db.rs, router.rs, security.rs,
 │                                 # ai_client.rs, processes.rs, conversations.rs,
 │                                 # models.rs, config.rs, error.rs
+├── crates/lloom-server/          # Main server (REST + WebUI)
 ├── crates/lloom-cli/             # CLI (clap, links lloom-core)
 ├── crates/lloom-tui/             # TUI (ratatui, links lloom-core)
 ├── webui/index.html              # WebUI frontend (SPA, standalone)
-├── tauri-app/src-tauri/          # Desktop shell (depends on lloom-core)
-│   └── src/main.rs               # Window + tray + core bootstrap
 ├── api/ai_service.py             # Python AI micro-service (litellm wrapper)
 ├── scripts/
 │   ├── build.sh                  # Cross-platform build (with dep checks)
