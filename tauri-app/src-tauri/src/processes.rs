@@ -91,8 +91,11 @@ fn python_interp() -> String {
 }
 
 /// The Python AI micro-service is the only required Python process.
-/// In production this is `resources/ai_service.py`; in dev it's
-/// `api/ai_service.py` run via uvicorn.
+///
+/// Resolution order:
+///   1. PyInstaller bundle: `resources/ai-service/ai-service` (production)
+///   2. Source file: `resources/ai_service.py` (installed source)
+///   3. Dev: `api/ai_service.py` via `python3 -m uvicorn`
 ///
 /// Returns `Ok(None)` if a healthy instance already answers on the port
 /// (prevents duplicate spawns and "address already in use" errors).
@@ -101,14 +104,42 @@ pub async fn start_ai() -> Result<Option<Child>> {
     if check_ai_health().await.status == "ok" {
         return Ok(None);
     }
-    let interp = python_interp();
     let install_dir = config::install_dir();
+    let port = config::ai_port().to_string();
+
+    // 1. PyInstaller bundle
+    let bundled = install_dir.join("resources/ai-service/ai-service");
+    if bundled.exists() && bundled.is_file() {
+        let child = spawn(
+            bundled.to_string_lossy().as_ref(),
+            &["--port", &port],
+            "ai.log",
+            Some(install_dir.to_string_lossy().as_ref()),
+        )?;
+        return Ok(Some(child));
+    }
+
+    // 2. Installed source file
     let script = install_dir.join("resources/ai_service.py");
-    let child = if script.exists() {
-        spawn(&interp, &[script.to_string_lossy().as_ref()], "ai.log", Some(install_dir.to_string_lossy().as_ref()))?
-    } else {
-        spawn(&interp, &["-m", "uvicorn", "api.ai_service:app", "--port", &config::ai_port().to_string()], "ai.log", Some(install_dir.to_string_lossy().as_ref()))?
-    };
+    if script.exists() {
+        let interp = python_interp();
+        let child = spawn(
+            &interp,
+            &[script.to_string_lossy().as_ref(), "--port", &port],
+            "ai.log",
+            Some(install_dir.to_string_lossy().as_ref()),
+        )?;
+        return Ok(Some(child));
+    }
+
+    // 3. Dev mode
+    let interp = python_interp();
+    let child = spawn(
+        &interp,
+        &["-m", "uvicorn", "api.ai_service:app", "--port", &port],
+        "ai.log",
+        Some(install_dir.to_string_lossy().as_ref()),
+    )?;
     Ok(Some(child))
 }
 

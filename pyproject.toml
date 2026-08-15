@@ -4,28 +4,29 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lloom"
-version = "2.0.0"
-description = "LLooM - Intelligent LLM Routing Platform (v2: Core + GUI)"
+version = "2.1.0"
+description = "LLooM - Intelligent LLM Routing Platform (Rust core + Python AI micro-service)"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
     "litellm>=1.82.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
-    "chromadb>=0.5.0",
-    "click>=8.1.0",
-    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pyinstaller>=6.0",
     "pytest>=8.0",
+    # Optional semantic cache for orchestration (degrades gracefully)
+    "chromadb>=0.5.0",
 ]
 
 [project.scripts]
-lloom = "cli.lloom:cli"
+# The AI micro-service entry point (used by PyInstaller spec).
+ai-service = "api.ai_service:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core*", "api*", "cli*"]
+include = ["api*"]

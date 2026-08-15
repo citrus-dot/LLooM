@@ -628,7 +628,18 @@ def _ollama_reachable() -> bool:
         return False
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """CLI entry point for the AI micro-service."""
+    import argparse
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=7862)
+    parser = argparse.ArgumentParser(description="LLooM AI micro-service")
+    parser.add_argument("--port", type=int, default=int(os.getenv("LLOOM_AI_PORT", "7862")))
+    parser.add_argument("--host", default="0.0.0.0")
+    args = parser.parse_args()
+
+    uvicorn.run(app, host=args.host, port=args.port)
+
+
+if __name__ == "__main__":
+    main()

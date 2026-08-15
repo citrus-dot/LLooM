@@ -29,7 +29,7 @@ tiktoken_cache/
 # Tauri build artifacts
 tauri-app/node_modules/
 tauri-app/src-tauri/target/
-tauri-app/src-tauri/resources/lloom-server/
+tauri-app/src-tauri/resources/ai-service/
 tauri-app/src-tauri/resources/ollama
 tauri-app/src-tauri/gen/
 

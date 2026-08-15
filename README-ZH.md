@@ -99,6 +99,24 @@ cd tauri-app && npx tauri dev
 
 Rust 服务器（`:7861`）是唯一入口，会自动拉起 Python AI 微服务（`:7862`）和 Ollama（`:11434`）。
 
+### 方式 C：构建发布包
+
+```bash
+# 完整构建（AI 微服务 PyInstaller + Ollama + Tauri 打包）
+bash scripts/build.sh
+
+# 或分步：
+bash scripts/build.sh --skip-ai       # 跳过 AI 微服务打包
+bash scripts/build.sh --skip-ollama   # 跳过 Ollama 下载
+bash scripts/build.sh --skip-tauri    # 跳过 Tauri 打包（仅 Rust + AI）
+```
+
+构建产物：
+- `dist/ai-service/ai-service` — 独立 AI 微服务可执行（约 26MB，封装 litellm）
+- `tauri-app/src-tauri/target/release/bundle/` — 桌面应用（Linux 为 deb/rpm，macOS 为 app/dmg）
+
+Rust 二进制是主体；AI 微服务以独立可执行打进应用 resources，目标机器无需安装 Python。
+
 ### 冒烟测试
 
 ```bash

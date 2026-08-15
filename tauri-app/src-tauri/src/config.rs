@@ -83,17 +83,6 @@ pub fn ui_dir() -> Option<PathBuf> {
     None
 }
 
-/// Locate the PyInstaller lloom-server binary (production bundle).
-pub fn api_binary_path() -> Option<PathBuf> {
-    for sub in &["resources/lloom-server", "lloom-server"] {
-        let bin = install_dir().join(sub).join("lloom-server");
-        if bin.exists() && bin.is_file() {
-            return Some(bin);
-        }
-    }
-    None
-}
-
 /// Locate the bundled Ollama binary, falling back to PATH.
 pub fn ollama_binary_path() -> String {
     for sub in &["resources", ""] {
@@ -140,13 +129,13 @@ pub fn resolve_install_dir() -> PathBuf {
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            if dir.join("resources/lloom-server/lloom-server").exists() {
+            if dir.join("resources/ai-service/ai-service").exists() {
                 return canonical(dir.to_path_buf());
             }
         }
     }
     let deb = PathBuf::from("/usr/lib/LLooM");
-    if deb.join("resources/lloom-server/lloom-server").exists() {
+    if deb.join("resources/ai-service/ai-service").exists() {
         return deb;
     }
     canonical(PathBuf::from("."))

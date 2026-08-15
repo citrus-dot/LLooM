@@ -39,9 +39,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "resources/lloom-server",
+      "resources/ai-service",
       "resources/ollama",
-      "resources/first_run_setup.py",
       "resources/.env.example",
       "ui"
     ]

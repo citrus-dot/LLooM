@@ -352,30 +352,26 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
 
 // ── Services (process management) ──
 
-/// A service's real status: reports whether *our* spawned child is alive AND
-/// the port responds. If the port responds but our child is dead, the port is
-/// likely held by a stale process — reported as "conflict" instead of healthy.
+/// A service's status: the port probe is authoritative. The child handle is
+/// used to detect *our* spawned process dying while the port stays answered
+/// (a stale process holding the port) — reported as "conflict".
 async fn services_status(State(state): State<AppState>) -> Json<Value> {
-    // Child handles we manage.
-    let ai_alive = child_alive(&state, "ai");
-    let ollama_alive = child_alive(&state, "ollama");
-
     // Port probes (async HTTP).
     let ai_health = crate::processes::check_ai_health().await;
     let ai_responding = ai_health.status == "ok";
     let ai_ready = ai_health.ready;
     let ollama_responding = crate::processes::check_ollama_health().await;
 
-    let service = |name: &str, child_alive: bool, responding: bool| -> Value {
-        match (child_alive, responding) {
-            (true, true) => json!({
+    // Child handles we manage. `None` means we reused an existing instance
+    // (start_* returned Ok(None)); that's healthy, not a conflict.
+    let ai_owns = owns_child(&state, "ai");
+    let ollama_owns = owns_child(&state, "ollama");
+
+    let service = |name: &str, owns: bool, responding: bool| -> Value {
+        match (owns, responding) {
+            // We hold a live child OR we reused an existing instance.
+            (true, true) | (false, true) => json!({
                 "name": name, "status": "Up (healthy)", "healthy": true, "detail": ""
-            }),
-            (false, true) => json!({
-                "name": name,
-                "status": "端口被残留进程占用",
-                "healthy": false,
-                "detail": "子进程未运行，但端口有响应（可能是旧进程占用）"
             }),
             (true, false) => json!({
                 "name": name,
@@ -389,7 +385,7 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
         }
     };
 
-    let ai_status = if ai_alive && ai_responding {
+    let ai_status = if ai_responding {
         if ai_ready {
             json!({"name": "AI Service", "status": "Up (healthy)", "healthy": true, "detail": ""})
         } else {
@@ -401,7 +397,7 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
             })
         }
     } else {
-        service("AI Service", ai_alive, ai_responding)
+        service("AI Service", ai_owns, ai_responding)
     };
 
     let services = json!([
@@ -411,7 +407,7 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
             "healthy": true,
             "detail": "",
         },
-        service("Ollama", ollama_alive, ollama_responding),
+        service("Ollama", ollama_owns, ollama_responding),
         ai_status,
     ]);
     let healthy = services.as_array().unwrap().iter().filter(|s| s["healthy"].as_bool().unwrap_or(false)).count();
@@ -425,7 +421,7 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
 }
 
 /// True if we hold a live child handle for the named service.
-fn child_alive(state: &AppState, name: &str) -> bool {
+fn owns_child(state: &AppState, name: &str) -> bool {
     let mut guard = state.children.lock().unwrap();
     let child = match name {
         "ai" => guard.ai.as_mut(),

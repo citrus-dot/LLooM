@@ -99,6 +99,25 @@ cd tauri-app && npx tauri dev
 
 The Rust server (`:7861`) is the single entry point. It spawns the Python AI micro-service (`:7862`) and Ollama (`:11434`) automatically.
 
+### Option C: Build the Release Bundle
+
+```bash
+# Full build (AI service PyInstaller + Ollama + Tauri bundle)
+bash scripts/build.sh
+
+# Or step by step:
+bash scripts/build.sh --skip-ai       # skip AI micro-service packaging
+bash scripts/build.sh --skip-ollama   # skip Ollama download
+bash scripts/build.sh --skip-tauri    # skip Tauri bundling (Rust + AI only)
+```
+
+Build outputs:
+- `dist/ai-service/ai-service` — standalone AI micro-service (~26MB, wraps litellm)
+- `tauri-app/src-tauri/target/release/bundle/` — desktop app (deb/rpm on Linux, app/dmg on macOS)
+
+The Rust binary is the primary artifact; the AI micro-service is bundled into
+the app's resources as a standalone executable (no system Python needed).
+
 ### Smoke Test
 
 ```bash
