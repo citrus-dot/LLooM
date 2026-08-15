@@ -6,7 +6,7 @@ import { getStats, getUsage, getBudgets, setBudget, checkBudget, getModels, type
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
 import { useDialog } from "../ui/dialog"
-import { Button, StatCard, Table } from "../ui"
+import { Button, Card, StatCard, Table } from "../ui"
 
 export function Usage(props: { setStatus: (s: string) => void }) {
   const [rows, setRows] = createSignal<UsageRow[]>([])
@@ -127,27 +127,28 @@ export function Usage(props: { setStatus: (s: string) => void }) {
         <StatCard value={String(budgets().length)} label="预算数" tone="secondary" />
       </box>
 
-      {/* Usage table */}
-      <Table
-        columns={[
-          { title: "模型", width: "30%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{r.model_name}</text> },
-          { title: "输入", width: "15%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_input_tokens}</text> },
-          { title: "输出", width: "15%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_output_tokens}</text> },
-          { title: "请求", width: "10%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.request_count}</text> },
-          { title: "缓存", width: "12%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.cache_hits ?? 0}</text> },
-          { title: "花费", render: (r, { selected }) => <text fg={selected ? theme.background : theme.warning}>${r.total_cost.toFixed(4)}</text> },
-        ]}
-        rows={rows()}
-        selectedIndex={selIdx()}
-        hoverIndex={hoverIdx()}
-        onHover={setHoverIdx}
-        onSelect={setSelIdx}
-        emptyText="暂无用量数据"
-      />
+      {/* Usage */}
+      <Card title="用量明细">
+        <Table
+          columns={[
+            { title: "模型", width: "30%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{r.model_name}</text> },
+            { title: "输入", width: "14%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_input_tokens}</text> },
+            { title: "输出", width: "14%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_output_tokens}</text> },
+            { title: "请求", width: "12%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.request_count}</text> },
+            { title: "缓存", width: "12%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.cache_hits ?? 0}</text> },
+            { title: "花费", render: (r, { selected }) => <text fg={selected ? theme.background : theme.warning}>${r.total_cost.toFixed(4)}</text> },
+          ]}
+          rows={rows()}
+          selectedIndex={selIdx()}
+          hoverIndex={hoverIdx()}
+          onHover={setHoverIdx}
+          onSelect={setSelIdx}
+          emptyText="暂无用量数据"
+        />
+      </Card>
 
       {/* Model pricing */}
-      <box flexDirection="column" paddingTop={1}>
-        <text fg={theme.textMuted} attributes={1}>模型定价 ($/1K tokens)</text>
+      <Card title="模型定价 ($/1K tokens)" flexGrow>
         <Table
           columns={[
             { title: "模型", width: "30%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.name}</text> },
@@ -158,29 +159,49 @@ export function Usage(props: { setStatus: (s: string) => void }) {
           rows={models()}
           emptyText="暂无模型定价"
         />
-      </box>
+      </Card>
 
       {/* Budgets */}
-      <box flexDirection="column" paddingTop={1}>
-        <box flexDirection="row" gap={1}>
-          <text fg={theme.textMuted} attributes={1}>预算</text>
-          <Button variant="primary" onClick={() => addBudget()}>设置</Button>
-          <Button variant="ghost" onClick={() => loadBudgets()}>刷新</Button>
-        </box>
-        {budgets().length === 0 && <text fg={theme.textDim}>  未设置预算（点 [设置] 或 lloom-cli budgets set）</text>}
-        {budgets().map((b) => {
-          const c = checked()[`${b.scope}/${b.scope_id}`]
-          const within = c?.within ?? true
-          return (
-            <box flexDirection="column" paddingLeft={1}>
-              <text fg={within ? theme.text : theme.error}>
-                {within ? "✓" : "✗"} {b.scope}/{b.scope_id} · 上限 ${b.max_budget.toFixed(2)}
-                {c ? ` · 已用 $${c.spent.toFixed(4)}${c.spent > 0 ? ` (${((c.spent / c.max) * 100).toFixed(0)}%)` : ""}` : ""}
-              </text>
-            </box>
-          )
-        })}
-      </box>
+      <Card
+        title="预算"
+        actions={
+          <box flexDirection="row" gap={1}>
+            <Button variant="primary" onClick={() => addBudget()}>设置</Button>
+            <Button variant="ghost" onClick={() => loadBudgets()}>刷新</Button>
+          </box>
+        }
+      >
+        {budgets().length === 0 ? (
+          <text fg={theme.textDim} paddingLeft={2}>未设置预算（点「设置」或 lloom-cli budgets set）</text>
+        ) : (
+          <box flexDirection="column">
+            {budgets().map((b) => {
+              const c = checked()[`${b.scope}/${b.scope_id}`]
+              const within = c?.within ?? true
+              const spent = c?.spent ?? 0
+              const max = c?.max ?? b.max_budget
+              const pct = max > 0 ? Math.min((spent / max) * 100, 100) : 0
+              const barWidth = 40
+              const filled = Math.round((pct / 100) * barWidth)
+              const bar = within ? theme.success : theme.error
+              return (
+                <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
+                  <box flexDirection="row" gap={2}>
+                    <text fg={theme.text} attributes={1}>{b.scope}/{b.scope_id}</text>
+                    <box flexGrow={1} />
+                    <text fg={within ? theme.text : theme.error}>${spent.toFixed(4)} / ${max.toFixed(2)}</text>
+                    <text fg={within ? theme.success : theme.error}>{pct.toFixed(0)}%</text>
+                  </box>
+                  <box flexDirection="row">
+                    <text fg={bar}>{"█".repeat(filled)}</text>
+                    <text fg={theme.border}>{"░".repeat(barWidth - filled)}</text>
+                  </box>
+                </box>
+              )
+            })}
+          </box>
+        )}
+      </Card>
     </box>
   )
 }
