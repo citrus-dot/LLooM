@@ -16,6 +16,9 @@ env/
 # Rust build artifacts
 target/
 
+# TUI (SolidJS + OpenTUI)
+tui/node_modules/
+
 # WebUI (React)
 webui/node_modules/
 webui/dist/
