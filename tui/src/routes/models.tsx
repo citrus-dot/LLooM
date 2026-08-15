@@ -170,14 +170,8 @@ export function Models(props: { setStatus: (s: string) => void }) {
       <Table
         columns={[
           { title: "名称", width: "30%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{m.name}</text> },
-          { title: "提供商", width: "15%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{m.provider}</text> },
-          { title: "LiteLLM 模型", width: "40%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.litellm_model}</text> },
-          {
-            title: "操作",
-            render: (m, { selected }) => (
-              <Button fg={selected ? theme.errorDim : theme.error} onClick={() => del(m.name)}>删除</Button>
-            ),
-          },
+          { title: "提供商", width: "20%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{m.provider}</text> },
+          { title: "LiteLLM 模型", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.litellm_model}</text> },
         ]}
         rows={models()}
         selectedIndex={selIdx()}

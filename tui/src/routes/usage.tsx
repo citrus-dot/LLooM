@@ -2,6 +2,7 @@
 
 import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
+import type { ScrollBoxRenderable } from "@opentui/core"
 import { getStats, getUsage, getBudgets, setBudget, checkBudget, getModels, type UsageRow, type Model } from "../api"
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
@@ -18,6 +19,7 @@ export function Usage(props: { setStatus: (s: string) => void }) {
   const [selIdx, setSelIdx] = createSignal(0)
   const [hoverIdx, setHoverIdx] = createSignal<number | null>(null)
   const dialog = useDialog()
+  let scrollRef: ScrollBoxRenderable | undefined
 
   const loadBudgets = async () => {
     try {
@@ -119,7 +121,15 @@ export function Usage(props: { setStatus: (s: string) => void }) {
   }))
 
   return (
-    <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
+    <box flexDirection="column" flexGrow={1} minHeight={0}>
+      <scrollbox
+        flexGrow={1}
+        minHeight={0}
+        paddingLeft={2}
+        paddingRight={2}
+        paddingTop={1}
+        paddingBottom={1}
+      >
       {/* Stat cards */}
       <box flexDirection="row" gap={2} paddingBottom={1}>
         <StatCard value={`$${spend().toFixed(4)}`} label="累计花费" tone="primary" />
@@ -148,7 +158,7 @@ export function Usage(props: { setStatus: (s: string) => void }) {
       </Card>
 
       {/* Model pricing */}
-      <Card title="模型定价 ($/1K tokens)" flexGrow>
+      <Card title="模型定价 ($/1K tokens)">
         <Table
           columns={[
             { title: "模型", width: "30%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.name}</text> },
@@ -202,6 +212,7 @@ export function Usage(props: { setStatus: (s: string) => void }) {
           </box>
         )}
       </Card>
+      </scrollbox>
     </box>
   )
 }
