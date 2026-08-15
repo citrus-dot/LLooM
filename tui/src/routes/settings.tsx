@@ -2,7 +2,7 @@
 
 import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
-import { readEnv, writeEnv, getServicesStatus, getServiceLogs, restartService, stopService, startService } from "../api"
+import { readEnv, writeEnv, smartRestart, getServicesStatus, getServiceLogs, restartService, stopService, startService } from "../api"
 import { dialogOpen } from "../app"
 import { useDialog } from "../ui/dialog"
 import { useBindings } from "@opentui/keymap/solid"
@@ -31,8 +31,31 @@ export function Settings(props: { setStatus: (s: string) => void }) {
       await writeEnv({ [key]: val })
       setEnv({ ...env(), [key]: val })
       props.setStatus(`✓ 已保存 ${key}`)
+      // After a config change, offer to apply it by smart-restarting affected
+      // services (same as WebUI's "应用配置").
+      dialog.menu(`配置已保存，立即应用?`, {
+        items: [
+          { title: "重启服务生效", desc: "智能重启 AI / Ollama", onSelect: () => void applyChanges([key]) },
+          { title: "稍后再说", onSelect: () => {} },
+        ],
+      })
     } catch (e) {
       props.setStatus(`保存失败: ${e}`)
+    }
+  }
+
+  const applyChanges = async (changedKeys: string[]) => {
+    try {
+      props.setStatus("⏳ 重启服务使配置生效...")
+      const res = await smartRestart(changedKeys)
+      if (res.ok) {
+        props.setStatus(`✓ 配置已生效，已重启 ${res.restarted.join(", ") || "(无)"}`)
+      } else {
+        props.setStatus(`重启失败: ${res.errors.join("; ")}`)
+      }
+      await refreshServices()
+    } catch (e) {
+      props.setStatus(`智能重启失败: ${e}`)
     }
   }
 

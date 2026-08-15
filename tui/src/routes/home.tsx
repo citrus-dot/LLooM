@@ -1,8 +1,8 @@
 // Home route — centered logo, service status, and a prompt (OpenCode-style).
 
-import { createSignal, createEffect, onMount, Show } from "solid-js"
+import { createSignal, createEffect, onMount, onCleanup, Show } from "solid-js"
 import { theme } from "../theme"
-import { getServicesStatus, type ServicesStatus } from "../api"
+import { getServicesStatus, getStats, type ServicesStatus } from "../api"
 import { setRoute, setActiveSessionId, setInitialQuery } from "../app"
 import type { TextareaRenderable } from "@opentui/core"
 
@@ -16,6 +16,7 @@ const LOGO = [
 
 export function Home(props: { setStatus: (s: string) => void }) {
   const [services, setServices] = createSignal<ServicesStatus | null>(null)
+  const [stats, setStats] = createSignal<{ total_spend: number; model_count: number; cache_enabled: boolean } | null>(null)
   const [prompt, setPrompt] = createSignal("")
   let inputRef: TextareaRenderable | undefined
 
@@ -26,13 +27,21 @@ export function Home(props: { setStatus: (s: string) => void }) {
     if (inputRef && !inputRef.focused) inputRef.focus()
   })
 
-  onMount(async () => {
+  const refresh = async () => {
     try {
-      setServices(await getServicesStatus())
-      if (inputRef && !inputRef.focused) inputRef.focus()
+      const [svc, st] = await Promise.all([getServicesStatus(), getStats()])
+      setServices(svc)
+      setStats(st)
     } catch (e) {
       props.setStatus(`无法连接服务器: ${e} — 请先启动 lloom-server`)
     }
+  }
+
+  onMount(async () => {
+    await refresh()
+    if (inputRef && !inputRef.focused) inputRef.focus()
+    const t = setInterval(refresh, 30000)
+    onCleanup(() => clearInterval(t))
   })
 
   const healthy = () => services()?.healthy ?? 0
@@ -88,7 +97,7 @@ export function Home(props: { setStatus: (s: string) => void }) {
 
       <box height={1} />
 
-      {/* Service status */}
+      {/* Service status + stats */}
       <box flexDirection="row" gap={2} flexWrap="wrap" justifyContent="center">
         <text fg={theme.textMuted}>服务健康</text>
         <text fg={healthy() === total() ? theme.success : theme.error} attributes={1}>
@@ -103,6 +112,18 @@ export function Home(props: { setStatus: (s: string) => void }) {
             </>
           ))}
         </Show>
+      </box>
+      <box flexDirection="row" gap={2} flexWrap="wrap" justifyContent="center" paddingTop={1}>
+        <text fg={theme.textMuted}>累计花费</text>
+        <text fg={theme.warning} attributes={1}>${(stats()?.total_spend ?? 0).toFixed(6)}</text>
+        <text fg={theme.textMuted}>·</text>
+        <text fg={theme.textMuted}>模型</text>
+        <text fg={theme.text} attributes={1}>{stats()?.model_count ?? 0}</text>
+        <text fg={theme.textMuted}>·</text>
+        <text fg={theme.textMuted}>语义缓存</text>
+        <text fg={stats()?.cache_enabled ? theme.success : theme.textMuted}>
+          {stats()?.cache_enabled ? "启用" : "未启用"}
+        </text>
       </box>
 
       <box height={1} />

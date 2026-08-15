@@ -2,14 +2,26 @@
 
 import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
-import { getModels, deleteModel, type Model } from "../api"
+import { getModels, addModel, deleteModel, type Model } from "../api"
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
+import { useDialog } from "../ui/dialog"
+
+const PROVIDERS: { value: string; label: string; prefix: string }[] = [
+  { value: "dashscope", label: "DashScope", prefix: "openai/" },
+  { value: "openai", label: "OpenAI", prefix: "" },
+  { value: "anthropic", label: "Anthropic", prefix: "anthropic/" },
+  { value: "ollama", label: "Ollama", prefix: "ollama/" },
+  { value: "custom", label: "自定义", prefix: "" },
+]
+
+const TASK_TYPES = ["", "simple_qa", "general", "coding", "math_logic", "complex_reasoning"]
 
 export function Models(props: { setStatus: (s: string) => void }) {
   const [models, setModels] = createSignal<Model[]>([])
   const [selIdx, setSelIdx] = createSignal(0)
   const [hoverIdx, setHoverIdx] = createSignal<number | null>(null)
+  const dialog = useDialog()
 
   const refresh = async () => {
     try {
@@ -55,6 +67,15 @@ export function Models(props: { setStatus: (s: string) => void }) {
   }))
 
   const del = async (name: string) => {
+    dialog.menu(`删除模型 ${name}?`, {
+      items: [
+        { title: "确认删除", danger: true, onSelect: () => void doDel(name) },
+        { title: "取消", onSelect: () => {} },
+      ],
+    })
+  }
+
+  const doDel = async (name: string) => {
     try {
       await deleteModel(name)
       await refresh()
@@ -64,6 +85,40 @@ export function Models(props: { setStatus: (s: string) => void }) {
     }
   }
 
+  const add = () => {
+    dialog.form("添加模型", {
+      fields: [
+        { key: "name", label: "名称", placeholder: "如 qwen2.5-local", required: true },
+        { key: "provider", label: "提供商", placeholder: "dashscope/openai/anthropic/ollama/custom" },
+        { key: "litellm_model", label: "LiteLLM 模型", placeholder: "留空自动拼前缀，如 ollama/qwen2.5" },
+        { key: "api_base", label: "API Base", placeholder: "如 http://localhost:11434" },
+        { key: "task_type", label: "任务路由", placeholder: "simple_qa/general/coding/math_logic/complex_reasoning" },
+      ],
+      onConfirm: async (vals) => {
+        const provider = vals.provider.trim() || "custom"
+        const prefix = PROVIDERS.find((p) => p.value === provider)?.prefix ?? ""
+        try {
+          await addModel({
+            name: vals.name.trim(),
+            provider,
+            litellm_model: vals.litellm_model.trim() || `${prefix}${vals.name.trim()}`,
+            api_base: vals.api_base.trim(),
+            api_key_env: "",
+            task_type: vals.task_type.trim(),
+            input_cost_per_token: 0,
+            output_cost_per_token: 0,
+            rpm: 60,
+            is_active: 1,
+          })
+          props.setStatus(`✓ 已添加 ${vals.name.trim()}`)
+          await refresh()
+        } catch (e) {
+          props.setStatus(`添加失败: ${e}`)
+        }
+      },
+    })
+  }
+
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
       <box flexDirection="row" gap={1} paddingBottom={1}>
@@ -71,6 +126,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
         <text fg={theme.textMuted}>·</text>
         <text fg={theme.textMuted}>{models().length} 个</text>
         <text fg={theme.textMuted} onMouseUp={() => refresh()}>[刷新]</text>
+        <text fg={theme.primary} onMouseUp={() => add()}>[添加]</text>
       </box>
 
       <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left", "right"]} borderColor={theme.border} paddingTop={1} paddingBottom={1}>

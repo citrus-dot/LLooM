@@ -2,7 +2,7 @@
 
 import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
-import { getStats, getUsage, getBudgets, type UsageRow } from "../api"
+import { getStats, getUsage, getBudgets, getModels, type UsageRow, type Model } from "../api"
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
 
@@ -10,16 +10,18 @@ export function Usage(props: { setStatus: (s: string) => void }) {
   const [rows, setRows] = createSignal<UsageRow[]>([])
   const [spend, setSpend] = createSignal(0)
   const [modelCount, setModelCount] = createSignal(0)
+  const [models, setModels] = createSignal<Model[]>([])
   const [budgets, setBudgets] = createSignal<{ scope: string; scope_id: string; max_budget: number }[]>([])
   const [selIdx, setSelIdx] = createSignal(0)
   const [hoverIdx, setHoverIdx] = createSignal<number | null>(null)
 
   onMount(async () => {
     try {
-      const [s, u, b] = await Promise.all([getStats(), getUsage(), getBudgets()])
+      const [s, u, b, m] = await Promise.all([getStats(), getUsage(), getBudgets(), getModels()])
       setRows(u.usage)
       setSpend(u.total_spend ?? s.total_spend ?? 0)
       setModelCount(s.model_count ?? 0)
+      setModels(m.models)
       setBudgets(b.budgets)
     } catch (e) {
       props.setStatus(`无法连接: ${e}`)
@@ -101,12 +103,36 @@ export function Usage(props: { setStatus: (s: string) => void }) {
         })}
       </box>
 
+      {/* Model pricing */}
+      <box flexDirection="column" paddingTop={1}>
+        <text fg={theme.textMuted} attributes={1}>模型定价 ($/1K tokens)</text>
+        <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left", "right"]} borderColor={theme.border} paddingTop={1} paddingBottom={1}>
+          <box flexDirection="row" paddingLeft={3} paddingRight={3} paddingBottom={1}>
+            <text fg={theme.textMuted} attributes={1} width="30%">模型</text>
+            <text fg={theme.textMuted} attributes={1} width="15%">提供商</text>
+            <text fg={theme.textMuted} attributes={1} width="25%">输入</text>
+            <text fg={theme.textMuted} attributes={1}>输出</text>
+          </box>
+          {models().length === 0 && <text fg={theme.textDim} paddingLeft={3}>  暂无模型定价</text>}
+          {models().map((m) => (
+            <box flexDirection="row" paddingLeft={3} paddingRight={3}>
+              <text fg={theme.text} width="30%">{m.name}</text>
+              <text fg={theme.textMuted} width="15%">{m.provider}</text>
+              <text fg={theme.textMuted} width="25%">${(m.input_cost_per_token * 1000).toFixed(6)}</text>
+              <text fg={theme.textMuted}>${(m.output_cost_per_token * 1000).toFixed(6)}</text>
+            </box>
+          ))}
+        </box>
+      </box>
+
       {/* Budgets */}
       <box flexDirection="column" paddingTop={1}>
         <text fg={theme.textMuted} attributes={1}>预算</text>
         {budgets().length === 0 && <text fg={theme.textDim}>  未设置预算（用 lloom-cli budgets set）</text>}
         {budgets().map((b) => (
-          <text fg={theme.text}>  {b.scope}/{b.scope_id} · ${b.max_budget.toFixed(2)}</text>
+          <box flexDirection="column" paddingLeft={1}>
+            <text fg={theme.text}>  {b.scope}/{b.scope_id} · 上限 ${b.max_budget.toFixed(2)}</text>
+          </box>
         ))}
       </box>
     </box>

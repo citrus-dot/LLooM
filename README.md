@@ -233,14 +233,21 @@ bun install
 bun run src/index.tsx
 ```
 
-Five tabs: **Home** (logo + prompt), **Chat** (conversation list + streaming
-chat), **Models** (registered models), **Usage** (costs), **Settings** (API
-keys + service management). Switch with `Tab`, quit with `Ctrl+C`.
+Five tabs: **Home** (logo + prompt + spend stats), **Chat** (conversation list
++ streaming chat), **Models** (registered models + add form), **Usage** (costs,
+model pricing), **Settings** (API keys + service management). Switch with `Tab`,
+quit with `Ctrl+C`.
 
 - `Enter` submits, `Shift+Enter` inserts a newline
-- Right-click a conversation to open a menu (open / delete)
-- Right-click a service in Settings to open a menu (logs / restart / stop / start)
-- Right-click an API key row to edit it in a dialog
+- Chat sidebar starts with a `[+] 新建对话` item (selected by default)
+- Conversations carry full multi-turn history into orchestration; cached
+  replies are flagged "来自缓存"
+- `Models` lets you add a model via an in-TUI form (name / provider / LiteLLM
+  model / API base / task type)
+- Right-click a conversation to open a menu (open / delete), a service in
+  Settings for logs / restart / stop / start, and an API key row to edit it
+- Deleting models/conversations asks for confirmation
+- Home/Usage auto-refresh every 30s
 
 ## Project Structure
 

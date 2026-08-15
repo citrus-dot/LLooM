@@ -11,6 +11,7 @@ import { useBindings } from "@opentui/keymap/solid"
 import { DialogPrompt } from "./dialog-prompt"
 import { DialogLogs } from "./dialog-logs"
 import { DialogMenu } from "./dialog-menu"
+import { DialogForm } from "./dialog-form"
 
 export type DialogPromptOptions = {
   value?: string
@@ -29,16 +30,23 @@ export type DialogMenuOptions = {
   onClose?: () => void
 }
 
+export type DialogFormOptions = {
+  fields: import("./dialog-form").FormField[]
+  onConfirm?: (values: Record<string, string>) => void
+}
+
 type DialogSpec =
   | { kind: "prompt"; title: string; options: DialogPromptOptions }
   | { kind: "logs"; title: string; options: DialogLogsOptions }
   | { kind: "menu"; title: string; options: DialogMenuOptions }
+  | { kind: "form"; title: string; options: DialogFormOptions }
 
 type DialogContextValue = {
   isOpen: () => boolean
   prompt: (title: string, options?: DialogPromptOptions) => void
   logs: (title: string, options?: DialogLogsOptions) => void
   menu: (title: string, options?: DialogMenuOptions) => void
+  form: (title: string, options?: DialogFormOptions) => void
   close: () => void
 }
 
@@ -83,6 +91,11 @@ export function DialogProvider(props: ParentProps) {
       setDialogOpen(true)
       const o: DialogMenuOptions = options ?? { items: [] }
       setSpec({ kind: "menu", title, options: o })
+    },
+    form: (title, options) => {
+      setDialogOpen(true)
+      const o: DialogFormOptions = options ?? { fields: [] }
+      setSpec({ kind: "form", title, options: o })
     },
     close,
   }
@@ -129,7 +142,10 @@ function DialogContent(props: { spec: DialogSpec; onClose: () => void }) {
   if (s.kind === "logs") {
     return <DialogLogs title={s.title} logs={s.options.logs ?? ""} onRefresh={s.options.onRefresh} />
   }
-  return <DialogMenu title={s.title} items={s.options.items} onClose={props.onClose} />
+  if (s.kind === "menu") {
+    return <DialogMenu title={s.title} items={s.options.items} onClose={props.onClose} />
+  }
+  return <DialogForm title={s.title} fields={s.options.fields} onConfirm={s.options.onConfirm} />
 }
 
 // ── Overlay + panel (OpenCode dialog.tsx style) ──

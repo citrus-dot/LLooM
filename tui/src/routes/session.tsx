@@ -56,7 +56,7 @@ export function Session(props: { setStatus: (s: string) => void }) {
       setMsgs(c.messages.map((m) => ({ ...m })))
       setActiveSessionId(id)
       setRoute("session")
-      setSelIdx(Math.max(0, convs().findIndex((x) => x.id === id)))
+      setSelIdx(Math.max(1, convs().findIndex((x) => x.id === id) + 1))
     } catch (e) {
       props.setStatus(`加载失败: ${e}`)
     }
@@ -80,9 +80,9 @@ export function Session(props: { setStatus: (s: string) => void }) {
       {
         key: "up",
         cmd: () => {
-          const n = convs().length
-          if (n === 0) return
-          setSelIdx((selIdx() - 1 + n) % n)
+          const total = convs().length + 1
+          if (total <= 1) return
+          setSelIdx((selIdx() - 1 + total) % total)
           setFocus("conv")
         },
         desc: "Previous conversation",
@@ -90,9 +90,9 @@ export function Session(props: { setStatus: (s: string) => void }) {
       {
         key: "down",
         cmd: () => {
-          const n = convs().length
-          if (n === 0) return
-          setSelIdx((selIdx() + 1) % n)
+          const total = convs().length + 1
+          if (total <= 1) return
+          setSelIdx((selIdx() + 1) % total)
           setFocus("conv")
         },
         desc: "Next conversation",
@@ -136,8 +136,10 @@ export function Session(props: { setStatus: (s: string) => void }) {
     try {
       let response = ""
       let detail = ""
+      let blocked = ""
       try {
-        const events = await orchestrateStream(q)
+        const history = next.filter((m) => m.role === "user" || m.role === "assistant").slice(0, -1)
+        const events = await orchestrateStream(q, history)
         let models: string[] = []
         let cached = false
         for (const ev of events) {
@@ -145,6 +147,8 @@ export function Session(props: { setStatus: (s: string) => void }) {
           else if (ev.event === "result" && ev.data?.response) {
             response = ev.data.response
             cached = !!ev.data?.cache_hit
+          } else if (ev.data?.error && ev.data?.detail) {
+            blocked = String(ev.data.detail)
           }
         }
         if (models.length) detail = `调用模型: ${[...new Set(models)].join(" | ")}`
@@ -152,7 +156,8 @@ export function Session(props: { setStatus: (s: string) => void }) {
       } catch {
         response = await chatStream([...next.filter((m) => m.role === "user" || m.role === "assistant")])
       }
-      const final = [...next, { role: "assistant", content: response || "(无响应)", detail }]
+      const content = blocked ? `请求被拦截: ${blocked}` : response || "(无响应)"
+      const final = [...next, { role: "assistant", content, detail }]
       setMsgs(final)
       await persist(final)
       props.setStatus("")
@@ -228,19 +233,34 @@ export function Session(props: { setStatus: (s: string) => void }) {
         <text fg={theme.textMuted} attributes={1} onMouseUp={(evt: { button?: number }) => { if (evt?.button === 2) headerMenu() }}> 会话</text>
         <box height={1} />
         <box flexDirection="column" flexGrow={1} gap={0}>
-          {convs().length === 0 && <text fg={theme.textDim}>  暂无对话</text>}
+          {/* "New conversation" is always the first (index 0) item. */}
+          <box
+            backgroundColor={selIdx() === 0 ? theme.primary : convHover() === 0 ? theme.backgroundElement : theme.backgroundPanel}
+            paddingLeft={2}
+            paddingRight={2}
+            onMouseOver={() => setConvHover(0)}
+            onMouseOut={() => setConvHover(null)}
+            onMouseDown={() => { setFocus("conv"); setSelIdx(0) }}
+            onMouseUp={() => newConv()}
+          >
+            <text fg={selIdx() === 0 ? theme.background : theme.primary}>
+              {selIdx() === 0 ? "▸ " : "  "}[+] 新建对话
+            </text>
+          </box>
+          {convs().length === 0 && <text fg={theme.textDim} paddingLeft={2}>  暂无对话</text>}
           {convs().map((c, i) => {
-            const isSel = i === selIdx()
-            const isHover = i === convHover()
+            const listIdx = i + 1
+            const isSel = listIdx === selIdx()
+            const isHover = listIdx === convHover()
             const isActive = c.id === activeSessionId()
             return (
               <box
                 backgroundColor={isSel ? theme.primary : isHover ? theme.backgroundElement : theme.backgroundPanel}
                 paddingLeft={2}
                 paddingRight={2}
-                onMouseOver={() => setConvHover(i)}
+                onMouseOver={() => setConvHover(listIdx)}
                 onMouseOut={() => setConvHover(null)}
-                onMouseDown={() => { setFocus("conv"); setSelIdx(i) }}
+                onMouseDown={() => { setFocus("conv"); setSelIdx(listIdx) }}
                 onMouseUp={(evt: { button?: number }) => {
                   if (evt?.button === 2) convMenu(c)
                   else openConv(c.id)

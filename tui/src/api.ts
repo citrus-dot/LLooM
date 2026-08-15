@@ -15,12 +15,17 @@ export interface ServicesStatus {
 }
 
 export interface Model {
+  id?: number
   name: string
   provider: string
   litellm_model: string
+  api_base?: string
+  api_key_env?: string
   input_cost_per_token: number
   output_cost_per_token: number
   task_type: string
+  rpm?: number
+  is_active?: number
 }
 
 export interface UsageRow {
@@ -88,11 +93,15 @@ export async function getModels(): Promise<{ models: Model[] }> {
   return get("/api/models")
 }
 
+export async function addModel(m: Partial<Model>): Promise<{ id: number }> {
+  return post("/api/models", m)
+}
+
 export async function deleteModel(name: string): Promise<{ deleted: boolean }> {
   return del(`/api/models/${encodeURIComponent(name)}`)
 }
 
-export async function getStats(): Promise<{ total_spend: number; model_count: number }> {
+export async function getStats(): Promise<{ total_spend: number; model_count: number; cache_enabled: boolean }> {
   return get("/api/stats")
 }
 
@@ -128,6 +137,10 @@ export async function writeEnv(updates: Record<string, string>): Promise<{ updat
   return post("/api/config", { updates })
 }
 
+export async function smartRestart(changedKeys: string[]): Promise<{ ok: boolean; restarted: string[]; errors: string[] }> {
+  return post("/api/services/smart-restart", { changed_keys: changedKeys })
+}
+
 // SSE chat stream → full response text
 export async function chatStream(messages: ChatMessage[]): Promise<string> {
   const res = await fetch(`${BASE}/api/chat/stream`, {
@@ -154,11 +167,11 @@ export interface SseEvent {
   data: any
 }
 
-export async function orchestrateStream(query: string): Promise<SseEvent[]> {
+export async function orchestrateStream(query: string, history: ChatMessage[] = []): Promise<SseEvent[]> {
   const res = await fetch(`${BASE}/api/orchestrate/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, history: [] }),
+    body: JSON.stringify({ query, history }),
   })
   const text = await res.text()
   const events: SseEvent[] = []
