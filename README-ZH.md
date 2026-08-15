@@ -194,13 +194,11 @@ LLooM 附带命令行界面和终端界面，两者都直接链接 `lloom-core`�
 cargo build -p lloom-cli
 # 或直接用 target/debug/lloom-cli
 
-# 初始化数据库
-lloom-cli init
-
 # 模型
 lloom-cli models list
 lloom-cli models add qwen2.5-local --provider ollama --model ollama/qwen2.5:latest \
   --api-base http://localhost:11434 --input-cost 0.000001 --output-cost 0.000002
+lloom-cli models update <名称> --input-cost 0.000001 --output-cost 0.000002
 lloom-cli models remove <名称>
 
 # 预算
@@ -218,9 +216,18 @@ lloom-cli service start ollama
 lloom-cli service stop ollama
 lloom-cli service restart ai
 lloom-cli service logs ollama
+lloom-cli service apply DASHSCOPE_API_KEY     # 智能重启受影响服务
 
-# 聊天（需 AI 服务运行：cargo run -- --headless）
+# 会话管理
+lloom-cli conversation list
+lloom-cli conversation show <id>
+lloom-cli conversation delete <id>
+lloom-cli conversation new
+
+# 聊天 —— 单次 / 续接会话 / 交互式多轮
 lloom-cli chat "2+2 等于几？"
+lloom-cli chat "继续说" --session <id>
+lloom-cli chat "你好" --interactive
 ```
 
 ### TUI（`tui/`）

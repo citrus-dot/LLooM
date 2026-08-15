@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Select, message, Popconfirm } from 'antd';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { getModels, addModel, removeModel, Model } from '../api';
+import { PlusOutlined, ReloadOutlined, EditOutlined } from '@ant-design/icons';
+import { getModels, addModel, updateModel, removeModel, Model } from '../api';
 
 const PROVIDERS = [
   { value: 'dashscope', label: '阿里云百炼 (DashScope)', prefix: 'openai/' },
@@ -24,6 +24,7 @@ export default function ModelsPage() {
   const [models, setModels] = useState<Model[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<Model | null>(null);
   const [form] = Form.useForm();
 
   const refresh = async () => {
@@ -45,24 +46,56 @@ export default function ModelsPage() {
   const handleAdd = async () => {
     const v = await form.validateFields();
     try {
-      await addModel({
-        name: v.name,
-        provider: v.provider,
-        litellm_model: v.litellm_model || `${PROVIDERS.find((p) => p.value === v.provider)?.prefix ?? ''}${v.name}`,
-        api_base: v.api_base ?? '',
-        api_key_env: v.api_key_env ?? '',
-        task_type: v.task_type ?? '',
-        input_cost_per_token: v.input_cost ?? 0,
-        output_cost_per_token: v.output_cost ?? 0,
-        rpm: v.rpm ?? 60,
-      });
-      message.success('模型添加成功');
+      if (editing) {
+        await updateModel(editing.name, {
+          litellm_model: v.litellm_model || editing.litellm_model,
+          api_base: v.api_base ?? '',
+          task_type: v.task_type ?? '',
+          input_cost_per_token: v.input_cost ?? 0,
+          output_cost_per_token: v.output_cost ?? 0,
+        });
+        message.success('模型已更新');
+      } else {
+        await addModel({
+          name: v.name,
+          provider: v.provider,
+          litellm_model: v.litellm_model || `${PROVIDERS.find((p) => p.value === v.provider)?.prefix ?? ''}${v.name}`,
+          api_base: v.api_base ?? '',
+          api_key_env: v.api_key_env ?? '',
+          task_type: v.task_type ?? '',
+          input_cost_per_token: v.input_cost ?? 0,
+          output_cost_per_token: v.output_cost ?? 0,
+          rpm: v.rpm ?? 60,
+        });
+        message.success('模型添加成功');
+      }
       setModalOpen(false);
+      setEditing(null);
       form.resetFields();
       refresh();
     } catch (e) {
-      message.error(`添加失败: ${e}`);
+      message.error(`保存失败: ${e}`);
     }
+  };
+
+  const openAdd = () => {
+    setEditing(null);
+    form.resetFields();
+    setModalOpen(true);
+  };
+
+  const openEdit = (m: Model) => {
+    setEditing(m);
+    form.setFieldsValue({
+      name: m.name,
+      provider: m.provider,
+      litellm_model: m.litellm_model,
+      api_base: m.api_base ?? '',
+      input_cost: m.input_cost_per_token,
+      output_cost: m.output_cost_per_token,
+      task_type: m.task_type,
+    });
+    setModalOpen(true);
   };
 
   const handleRemove = async (name: string) => {
@@ -99,11 +132,16 @@ export default function ModelsPage() {
       title: '操作',
       key: 'action',
       render: (_: unknown, m: Model) => (
-        <Popconfirm title={`确认删除 ${m.name}？`} onConfirm={() => handleRemove(m.name)}>
-          <Button size="small" danger>
-            删除
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(m)}>
+            编辑
           </Button>
-        </Popconfirm>
+          <Popconfirm title={`确认删除 ${m.name}？`} onConfirm={() => handleRemove(m.name)}>
+            <Button size="small" danger>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -116,7 +154,7 @@ export default function ModelsPage() {
           <Button icon={<ReloadOutlined />} onClick={refresh}>
             刷新
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
             添加模型
           </Button>
         </Space>
@@ -124,7 +162,16 @@ export default function ModelsPage() {
 
       <Table rowKey="name" loading={loading} columns={columns} dataSource={models} pagination={false} />
 
-      <Modal title="添加模型" open={modalOpen} onOk={handleAdd} onCancel={() => setModalOpen(false)} destroyOnClose>
+      <Modal
+        title={editing ? `编辑模型 ${editing.name}` : '添加模型'}
+        open={modalOpen}
+        onOk={handleAdd}
+        onCancel={() => {
+          setModalOpen(false);
+          setEditing(null);
+        }}
+        destroyOnClose
+      >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="模型名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="如 my-gpt-4o" />

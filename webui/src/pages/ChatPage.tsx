@@ -104,11 +104,18 @@ export default function ChatPage() {
       const modelsUsed: string[] = [];
       let errorMsg: string | null = null;
       let cached = false;
+      let subTasks = 0;
+      let doneCount = 0;
+      let totalDur = 0;
 
       for (const ev of events) {
         const d = ev.data || ev;
         if (ev.event === 'task_start' && d.model) modelsUsed.push(d.model);
-        else if (ev.event === 'result' && d.response !== undefined) {
+        else if (ev.event === 'decompose' && d.sub_tasks) subTasks = d.sub_tasks.length;
+        else if (ev.event === 'task_done') {
+          doneCount++;
+          totalDur += d.duration ?? 0;
+        } else if (ev.event === 'result' && d.response !== undefined) {
           response = d.response;
           cached = !!d.cache_hit;
         } else if (d.error) errorMsg = d.block_reason || d.detail || '未知错误';
@@ -121,8 +128,11 @@ export default function ChatPage() {
         await persist(finalMsgs);
       } else {
         const uniq = [...new Set(modelsUsed)];
-        let detail = uniq.length ? `调用模型: ${uniq.join(' | ')}` : undefined;
-        if (cached) detail = detail ? `${detail} · 来自缓存` : '来自语义缓存';
+        const parts: string[] = [];
+        if (uniq.length) parts.push(`调用模型: ${uniq.join(' | ')}`);
+        if (subTasks > 1) parts.push(`${doneCount}/${subTasks} 子任务 · ${totalDur.toFixed(1)}s`);
+        if (cached) parts.push('来自缓存');
+        const detail = parts.join(' · ') || undefined;
         const aiMsg: DisplayMsg = {
           role: 'assistant',
           content: response || '(无返回)',

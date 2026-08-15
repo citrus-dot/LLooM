@@ -142,17 +142,27 @@ export function Session(props: { setStatus: (s: string) => void }) {
         const events = await orchestrateStream(q, history)
         let models: string[] = []
         let cached = false
+        let subTasks = 0
+        let doneCount = 0
+        let totalDur = 0
         for (const ev of events) {
           if (ev.event === "task_start" && ev.data?.model) models.push(ev.data.model)
-          else if (ev.event === "result" && ev.data?.response) {
+          else if (ev.event === "decompose" && ev.data?.sub_tasks) subTasks = ev.data.sub_tasks.length
+          else if (ev.event === "task_done") {
+            doneCount++
+            totalDur += ev.data?.duration ?? 0
+          } else if (ev.event === "result" && ev.data?.response) {
             response = ev.data.response
             cached = !!ev.data?.cache_hit
           } else if (ev.data?.error && ev.data?.detail) {
             blocked = String(ev.data.detail)
           }
         }
-        if (models.length) detail = `调用模型: ${[...new Set(models)].join(" | ")}`
-        if (cached) detail = detail ? `${detail} · 来自缓存` : "来自语义缓存"
+        const parts: string[] = []
+        if (models.length) parts.push(`调用模型: ${[...new Set(models)].join(" | ")}`)
+        if (subTasks > 1) parts.push(`${doneCount}/${subTasks} 子任务 · ${totalDur.toFixed(1)}s`)
+        if (cached) parts.push("来自缓存")
+        detail = parts.join(" · ")
       } catch {
         response = await chatStream([...next.filter((m) => m.role === "user" || m.role === "assistant")])
       }

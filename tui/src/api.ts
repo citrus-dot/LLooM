@@ -34,6 +34,7 @@ export interface UsageRow {
   total_output_tokens: number
   total_cost: number
   request_count: number
+  cache_hits: number
 }
 
 export interface Conversation {
@@ -101,6 +102,17 @@ export async function deleteModel(name: string): Promise<{ deleted: boolean }> {
   return del(`/api/models/${encodeURIComponent(name)}`)
 }
 
+export async function updateModel(name: string, updates: Partial<Model>): Promise<{ updated: boolean }> {
+  return fetch(`${BASE}/api/models/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  }).then((res) => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  })
+}
+
 export async function getStats(): Promise<{ total_spend: number; model_count: number; cache_enabled: boolean }> {
   return get("/api/stats")
 }
@@ -109,8 +121,16 @@ export async function getUsage(): Promise<{ usage: UsageRow[]; total_spend: numb
   return get("/api/usage")
 }
 
-export async function getBudgets(): Promise<{ budgets: { scope: string; scope_id: string; max_budget: number }[] }> {
+export async function getBudgets(): Promise<{ budgets: { scope: string; scope_id: string; max_budget: number; duration?: string }[] }> {
   return get("/api/budgets")
+}
+
+export async function setBudget(scope: string, scopeId: string, maxBudget: number, duration: string): Promise<{ set: boolean }> {
+  return post("/api/budgets", { scope, scope_id: scopeId, max_budget: maxBudget, duration })
+}
+
+export async function checkBudget(scope: string, scopeId: string): Promise<{ within_budget: boolean; spent: number; budget: { max_budget: number } | null }> {
+  return get(`/api/budgets/check?scope=${encodeURIComponent(scope)}&scope_id=${encodeURIComponent(scopeId)}`)
 }
 
 export async function listConversations(): Promise<{ conversations: Conversation[] }> {

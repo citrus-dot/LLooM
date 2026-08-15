@@ -63,10 +63,28 @@ export default function SettingsPage() {
           values[item.key] = e[item.key] ?? '';
         }),
       );
+      // Include any extra keys the server exposes (nothing hidden).
+      const schemaKeys = new Set(ENV_SECTIONS.flatMap((sec) => sec.items.map((i) => i.key)));
+      Object.keys(e)
+        .filter((k) => !schemaKeys.has(k))
+        .sort()
+        .forEach((k) => {
+          values[k] = e[k] ?? '';
+        });
       form.setFieldsValue(values);
     } catch (e) {
       message.error(`读取配置失败: ${e}`);
     }
+  };
+
+  // Sections for rendering: schema groups + an "其他配置" group with extra keys.
+  const allSections = () => {
+    const schemaKeys = new Set(ENV_SECTIONS.flatMap((sec) => sec.items.map((i) => i.key)));
+    const extra = Object.keys(env)
+      .filter((k) => !schemaKeys.has(k))
+      .sort()
+      .map((k) => ({ key: k, label: k, type: 'text' as const, desc: '' }));
+    return extra.length ? [...ENV_SECTIONS, { title: '其他配置', items: extra }] : ENV_SECTIONS;
   };
 
   useEffect(() => {
@@ -172,7 +190,7 @@ export default function SettingsPage() {
             }
           >
             <Form form={form} layout="vertical">
-              {ENV_SECTIONS.map((sec) => (
+              {allSections().map((sec) => (
                 <div key={sec.title}>
                   <div style={{ fontWeight: 600, color: '#333', margin: '12px 0 8px' }}>{sec.title}</div>
                   {sec.items.map((item) => (

@@ -24,7 +24,18 @@ export function Settings(props: { setStatus: (s: string) => void }) {
   const [hoverIdx, setHoverIdx] = createSignal<number | null>(null)
   const dialog = useDialog()
 
-  const flatKeys = () => ENV_SCHEMA.flatMap((s) => s.items.map((i) => i.key))
+  // All editable keys: schema-declared keys first, then any remaining keys the
+  // server exposes via /api/config (so nothing is hidden).
+  const flatKeys = () => {
+    const schemaKeys = ENV_SCHEMA.flatMap((s) => s.items.map((i) => i.key))
+    const extra = Object.keys(env()).filter((k) => !schemaKeys.includes(k)).sort()
+    return [...schemaKeys, ...extra]
+  }
+
+  const sectionOf = (key: string) => {
+    const s = ENV_SCHEMA.find((s) => s.items.some((it) => it.key === key))
+    return s ? s.title : "其他配置"
+  }
 
   const save = async (key: string, val: string) => {
     try {
@@ -214,7 +225,7 @@ export function Settings(props: { setStatus: (s: string) => void }) {
 
         <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left", "right"]} borderColor={theme.border} paddingTop={1} paddingBottom={1}>
           {flatKeys().map((key, i) => {
-            const section = ENV_SCHEMA.find((s) => s.items.some((it) => it.key === key))?.title ?? ""
+            const section = sectionOf(key)
             const label = ENV_SCHEMA.find((s) => s.items.some((it) => it.key === key))?.items.find((it) => it.key === key)?.label ?? key
             const val = env()[key] ?? ""
             const isSet = val.trim().length > 0

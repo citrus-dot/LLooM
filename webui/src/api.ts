@@ -106,6 +106,16 @@ async function jdelete<T>(path: string): Promise<T> {
   return res.json();
 }
 
+async function jput<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? '{}' : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
 // ── Service endpoints ──
 
 export function getServicesStatus(): Promise<ServicesStatus> {
@@ -144,6 +154,10 @@ export function addModel(m: Partial<Model>): Promise<{ id: number }> {
 
 export function removeModel(name: string): Promise<{ deleted: boolean }> {
   return jdelete(`/api/models/${encodeURIComponent(name)}`);
+}
+
+export function updateModel(name: string, updates: Partial<Model>): Promise<{ updated: boolean }> {
+  return jput(`/api/models/${encodeURIComponent(name)}`, updates);
 }
 
 // ── Stats / usage ──

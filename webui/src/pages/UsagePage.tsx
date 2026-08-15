@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Row, Col, Card, Statistic, Table, Progress, Tag, Space, message } from 'antd';
-import { getStats, getUsage, getBudgets, getModels, UsageRow, Budget, Model } from '../api';
+import { Row, Col, Card, Statistic, Table, Progress, Tag, Space, message, Button, Modal, Form, Input, InputNumber } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
+import { getStats, getUsage, getBudgets, setBudget, checkBudget, getModels, UsageRow, Budget, Model } from '../api';
 
 export default function UsagePage() {
   const [stats, setStats] = useState<any>(null);
   const [usage, setUsage] = useState<UsageRow[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [budgetSpent, setBudgetSpent] = useState<Record<string, number>>({});
   const [models, setModels] = useState<Model[]>([]);
   const [loading, setLoading] = useState(false);
+  const [budgetModal, setBudgetModal] = useState(false);
+  const [form] = Form.useForm();
 
   const refresh = async () => {
     setLoading(true);
@@ -17,10 +21,32 @@ export default function UsagePage() {
       setUsage(u.usage);
       setBudgets(b.budgets);
       setModels(m.models);
+      // Real spend per budget via check API.
+      const spent: Record<string, number> = {};
+      for (const budget of b.budgets) {
+        try {
+          const r = await checkBudget(budget.scope, budget.scope_id);
+          spent[`${budget.scope}/${budget.scope_id}`] = r.spent;
+        } catch {}
+      }
+      setBudgetSpent(spent);
     } catch (e) {
       message.error(`加载失败: ${e}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleAddBudget = async () => {
+    try {
+      const v = await form.validateFields();
+      await setBudget(v.scope, v.scopeId, v.maxBudget, v.duration || '30d');
+      message.success('预算已设置');
+      setBudgetModal(false);
+      form.resetFields();
+      refresh();
+    } catch (e) {
+      message.error(`设置失败: ${e}`);
     }
   };
 
@@ -40,6 +66,7 @@ export default function UsagePage() {
     { title: '输入 tokens', dataIndex: 'total_input_tokens', key: 'in' },
     { title: '输出 tokens', dataIndex: 'total_output_tokens', key: 'out' },
     { title: '请求数', dataIndex: 'request_count', key: 'req' },
+    { title: '缓存命中', dataIndex: 'cache_hits', key: 'cache', render: (v: number) => (v ? <Tag color="green">{v}</Tag> : '-') },
     { title: '花费', dataIndex: 'total_cost', key: 'cost', render: (v: number) => `$${v.toFixed(6)}` },
   ];
 
@@ -98,10 +125,19 @@ export default function UsagePage() {
         <Table rowKey="model_name" size="small" columns={columns} dataSource={usage} pagination={false} />
       </Card>
 
-      <Card title="配额管理" loading={loading}>
-        {budgets.length === 0 && <span style={{ color: '#999' }}>未设置预算（可用 CLI: lloom-cli budgets set）</span>}
+      <Card
+        title="配额管理"
+        loading={loading}
+        extra={
+          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setBudgetModal(true)}>
+            设置预算
+          </Button>
+        }
+      >
+        {budgets.length === 0 && <span style={{ color: '#999' }}>未设置预算（点右上角「设置预算」或 CLI: lloom-cli budgets set）</span>}
         {budgets.map((b) => {
-          const pct = b.max_budget > 0 ? Math.min((getBudgetSpent(b) / b.max_budget) * 100, 100) : 0;
+          const spent = budgetSpent[`${b.scope}/${b.scope_id}`] ?? 0;
+          const pct = b.max_budget > 0 ? Math.min((spent / b.max_budget) * 100, 100) : 0;
           return (
             <div key={b.id} style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
@@ -109,7 +145,7 @@ export default function UsagePage() {
                   {b.scope}/{b.scope_id}
                 </span>
                 <span>
-                  ${getBudgetSpent(b).toFixed(2)} / ${b.max_budget.toFixed(2)}
+                  ${spent.toFixed(4)} / ${b.max_budget.toFixed(2)}
                 </span>
               </div>
               <Progress percent={Math.round(pct)} status={pct >= 100 ? 'exception' : 'active'} />
@@ -121,12 +157,29 @@ export default function UsagePage() {
       <Card title="模型定价表" loading={loading}>
         <Table rowKey="name" size="small" columns={pricingColumns} dataSource={models} pagination={false} />
       </Card>
+
+      <Modal
+        title="设置预算"
+        open={budgetModal}
+        onCancel={() => setBudgetModal(false)}
+        onOk={handleAddBudget}
+        okText="保存"
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item name="scope" label="范围" rules={[{ required: true }]}>
+            <Input placeholder="user / model" />
+          </Form.Item>
+          <Form.Item name="scopeId" label="范围 ID" rules={[{ required: true }]}>
+            <Input placeholder="如 default 或模型名" />
+          </Form.Item>
+          <Form.Item name="maxBudget" label="上限 ($)" rules={[{ required: true }]}>
+            <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="duration" label="周期" initialValue="30d">
+            <Input placeholder="30d / 7d / 1d" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Space>
   );
-}
-
-// Budget spend is computed from usage totals in the real backend; for display
-// we derive it from the stats response.
-function getBudgetSpent(_b: Budget): number {
-  return 0;
 }

@@ -2,7 +2,7 @@
 
 import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
-import { getModels, addModel, deleteModel, type Model } from "../api"
+import { getModels, addModel, updateModel, deleteModel, type Model } from "../api"
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
 import { useDialog } from "../ui/dialog"
@@ -92,6 +92,8 @@ export function Models(props: { setStatus: (s: string) => void }) {
         { key: "provider", label: "提供商", placeholder: "dashscope/openai/anthropic/ollama/custom" },
         { key: "litellm_model", label: "LiteLLM 模型", placeholder: "留空自动拼前缀，如 ollama/qwen2.5" },
         { key: "api_base", label: "API Base", placeholder: "如 http://localhost:11434" },
+        { key: "input_cost", label: "输入成本 ($/tok)", placeholder: "如 0.000001" },
+        { key: "output_cost", label: "输出成本 ($/tok)", placeholder: "如 0.000002" },
         { key: "task_type", label: "任务路由", placeholder: "simple_qa/general/coding/math_logic/complex_reasoning" },
       ],
       onConfirm: async (vals) => {
@@ -105,8 +107,8 @@ export function Models(props: { setStatus: (s: string) => void }) {
             api_base: vals.api_base.trim(),
             api_key_env: "",
             task_type: vals.task_type.trim(),
-            input_cost_per_token: 0,
-            output_cost_per_token: 0,
+            input_cost_per_token: parseFloat(vals.input_cost) || 0,
+            output_cost_per_token: parseFloat(vals.output_cost) || 0,
             rpm: 60,
             is_active: 1,
           })
@@ -116,6 +118,42 @@ export function Models(props: { setStatus: (s: string) => void }) {
           props.setStatus(`添加失败: ${e}`)
         }
       },
+    })
+  }
+
+  const edit = (m: Model) => {
+    dialog.form(`编辑模型 ${m.name}`, {
+      fields: [
+        { key: "litellm_model", label: "LiteLLM 模型", placeholder: m.litellm_model, default: m.litellm_model },
+        { key: "api_base", label: "API Base", placeholder: m.api_base ?? "", default: m.api_base ?? "" },
+        { key: "input_cost", label: "输入成本 ($/tok)", default: String(m.input_cost_per_token ?? 0) },
+        { key: "output_cost", label: "输出成本 ($/tok)", default: String(m.output_cost_per_token ?? 0) },
+        { key: "task_type", label: "任务路由", default: m.task_type },
+      ],
+      onConfirm: async (vals) => {
+        try {
+          await updateModel(m.name, {
+            litellm_model: vals.litellm_model.trim() || m.litellm_model,
+            api_base: vals.api_base.trim(),
+            input_cost_per_token: parseFloat(vals.input_cost) || 0,
+            output_cost_per_token: parseFloat(vals.output_cost) || 0,
+            task_type: vals.task_type.trim(),
+          })
+          props.setStatus(`✓ 已更新 ${m.name}`)
+          await refresh()
+        } catch (e) {
+          props.setStatus(`更新失败: ${e}`)
+        }
+      },
+    })
+  }
+
+  const modelMenu = (m: Model) => {
+    dialog.menu(m.name, {
+      items: [
+        { title: "编辑", desc: "修改配置/成本", onSelect: () => edit(m) },
+        { title: "删除", desc: "移除该模型", danger: true, onSelect: () => del(m.name) },
+      ],
     })
   }
 
@@ -149,18 +187,21 @@ export function Models(props: { setStatus: (s: string) => void }) {
               onMouseOver={() => setHoverIdx(i)}
               onMouseOut={() => setHoverIdx(null)}
               onMouseDown={() => setSelIdx(i)}
+              onMouseUp={(evt: { button?: number }) => {
+                if (evt?.button === 2) modelMenu(m)
+              }}
             >
               <text fg={isSel ? theme.background : theme.text} width="30%" attributes={isSel ? 1 : 0}>{m.name}</text>
               <text fg={isSel ? theme.background : theme.textMuted} width="15%">{m.provider}</text>
               <text fg={isSel ? theme.background : theme.text} width="40%">{m.litellm_model}</text>
-              <text fg={isSel ? theme.background : theme.error} onMouseUp={() => del(m.name)}>[删除]</text>
+              <text fg={isSel ? theme.background : theme.error} onMouseUp={(e: { button?: number }) => { if (e?.button !== 2) del(m.name) }}>[删除]</text>
             </box>
           )
         })}
       </box>
 
       <box paddingTop={1}>
-        <text fg={theme.textDim}>  鼠标点击选中 · 点击 [删除] 移除模型 · 用 CLI 添加: lloom-cli models add</text>
+        <text fg={theme.textDim}>  点击选中 · 右键行弹出编辑/删除菜单 · [添加] 注册模型</text>
       </box>
     </box>
   )

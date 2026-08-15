@@ -31,13 +31,36 @@ enum Command {
     Budgets(BudgetsCmd),
     /// Usage statistics
     Usage,
-    /// Chat with the default model
-    Chat { query: String },
+    /// Chat with the default model (use --interactive for multi-turn)
+    Chat {
+        query: String,
+        /// Resume a conversation by ID (loads its history as context)
+        #[arg(long)]
+        session: Option<String>,
+        /// Interactive multi-turn session (prompt repeatedly until EOF)
+        #[arg(long)]
+        interactive: bool,
+    },
     /// Orchestrate a complex task
     Orchestrate { query: String },
+    /// Conversation management
+    #[command(subcommand)]
+    Conversation(ConversationCmd),
     /// Read/write .env configuration
     #[command(subcommand)]
     Config(ConfigCmd),
+}
+
+#[derive(Subcommand)]
+enum ConversationCmd {
+    /// List conversations
+    List,
+    /// Show one conversation's messages
+    Show { id: String },
+    /// Delete a conversation
+    Delete { id: String },
+    /// Start a fresh conversation
+    New,
 }
 
 #[derive(Subcommand)]
@@ -52,6 +75,8 @@ enum ServiceCmd {
     Restart { name: String },
     /// Show recent logs for a service (ai / ollama)
     Logs { name: String },
+    /// Apply config changes: smart-restart services affected by changed keys
+    Apply { keys: Vec<String> },
 }
 
 #[derive(Subcommand)]
@@ -134,8 +159,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Models(c) => cmd_models(&client, c).await?,
         Command::Budgets(c) => cmd_budgets(&client, c).await?,
         Command::Usage => cmd_usage(&client).await?,
-        Command::Chat { query } => cmd_chat(&client, &query).await?,
+        Command::Chat { query, session, interactive } => cmd_chat(&client, &query, session.as_deref(), interactive).await?,
         Command::Orchestrate { query } => cmd_orchestrate(&client, &query).await?,
+        Command::Conversation(c) => cmd_conversation(&client, c).await?,
         Command::Config(c) => cmd_config(&client, c).await?,
     }
     Ok(())
@@ -221,6 +247,16 @@ async fn cmd_service(client: &Client, cmd: ServiceCmd) -> Result<(), Box<dyn std
                 println!("(暂无日志)");
             } else {
                 print!("{logs}");
+            }
+        }
+        ServiceCmd::Apply { keys } => {
+            let r = post(client, "/api/services/smart-restart", serde_json::json!({ "changed_keys": keys })).await?;
+            if r["ok"].as_bool().unwrap_or(false) {
+                let restarted = r["restarted"].as_array().cloned().unwrap_or_default();
+                println!("✓ 配置已生效，已重启: {}", restarted.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "));
+            } else {
+                let errors = r["errors"].as_array().cloned().unwrap_or_default();
+                eprintln!("✗ 重启失败: {}", errors.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("; "));
             }
         }
     }
@@ -382,25 +418,119 @@ async fn cmd_usage(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
 
 // ── Chat / Orchestrate (SSE via server) ──
 
-async fn cmd_chat(client: &Client, query: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let res = client
-        .post(format!("{BASE}/api/chat/stream"))
-        .json(&serde_json::json!({ "messages": [{"role": "user", "content": query}] }))
-        .send()
-        .await?;
-    let text = res.text().await?;
-    // chat/stream emits data-only SSE frames
-    for line in text.lines() {
-        if let Some(data) = line.strip_prefix("data: ") {
-            if let Ok(v) = serde_json::from_str::<Value>(data) {
-                if let Some(content) = v["content"].as_str() {
-                    println!("{content}");
-                } else if let Some(err) = v["error"].as_bool() {
-                    if err {
+async fn cmd_chat(client: &Client, query: &str, session: Option<&str>, interactive: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // history holds the conversation so far (role/content pairs).
+    let mut history: Vec<Value> = Vec::new();
+    if let Some(id) = session {
+        let conv: Value = get(client, &format!("/api/conversations/{id}")).await?;
+        for m in conv["messages"].as_array().cloned().unwrap_or_default() {
+            let role = m["role"].as_str().unwrap_or("");
+            if role == "user" || role == "assistant" {
+                history.push(serde_json::json!({ "role": role, "content": m["content"] }));
+            }
+        }
+    }
+
+    // Single-shot: send query once, print the reply, done.
+    if !interactive {
+        let mut messages = history.clone();
+        messages.push(serde_json::json!({ "role": "user", "content": query }));
+        let text = post_chat_stream(client, &messages).await?;
+        for line in text.lines() {
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(v) = serde_json::from_str::<Value>(data) {
+                    if let Some(content) = v["content"].as_str() {
+                        println!("{content}");
+                    } else if v["error"].as_bool().unwrap_or(false) {
                         eprintln!("✗ 请求失败: {}", v["detail"].as_str().unwrap_or(""));
+                        return Ok(());
                     }
                 }
             }
+        }
+        return Ok(());
+    }
+
+    // Interactive: keep history across turns, prompt for each new input.
+    use std::io::{self, Write};
+    history.push(serde_json::json!({ "role": "user", "content": query }));
+    loop {
+        let text = post_chat_stream(client, &history).await?;
+        let mut reply = String::new();
+        for line in text.lines() {
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(v) = serde_json::from_str::<Value>(data) {
+                    if let Some(content) = v["content"].as_str() {
+                        println!("{content}");
+                        reply.push_str(content);
+                    } else if v["error"].as_bool().unwrap_or(false) {
+                        eprintln!("✗ 请求失败: {}", v["detail"].as_str().unwrap_or(""));
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        if !reply.is_empty() {
+            history.push(serde_json::json!({ "role": "assistant", "content": reply }));
+        }
+        print!("你> ");
+        io::stdout().flush()?;
+        let mut line = String::new();
+        if io::stdin().read_line(&mut line)? == 0 {
+            return Ok(());
+        }
+        let input = line.trim().to_string();
+        if input.is_empty() || input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
+            return Ok(());
+        }
+        history.push(serde_json::json!({ "role": "user", "content": input }));
+    }
+}
+
+/// POST /api/chat/stream, returning the raw SSE text.
+async fn post_chat_stream(client: &Client, messages: &[Value]) -> Result<String, Box<dyn std::error::Error>> {
+    let res = client
+        .post(format!("{BASE}/api/chat/stream"))
+        .json(&serde_json::json!({ "messages": messages }))
+        .send()
+        .await?;
+    if !res.status().is_success() {
+        return Err(format!("HTTP {}", res.status()).into());
+    }
+    Ok(res.text().await?)
+}
+
+async fn cmd_conversation(client: &Client, cmd: ConversationCmd) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        ConversationCmd::List => {
+            let data: Value = get(client, "/api/conversations").await?;
+            let convs = data["conversations"].as_array().cloned().unwrap_or_default();
+            if convs.is_empty() {
+                println!("(无会话)");
+            }
+            for c in convs {
+                let id = c["id"].as_str().unwrap_or("");
+                let title = c["title"].as_str().unwrap_or("");
+                let n = c["message_count"].as_i64().unwrap_or(0);
+                println!("  {id}  {title}  ({n} 条)");
+            }
+        }
+        ConversationCmd::Show { id } => {
+            let conv: Value = get(client, &format!("/api/conversations/{id}")).await?;
+            for m in conv["messages"].as_array().cloned().unwrap_or_default() {
+                let role = m["role"].as_str().unwrap_or("");
+                let content = m["content"].as_str().unwrap_or("");
+                let mark = if role == "user" { "你" } else { "AI" };
+                println!("[{mark}] {content}");
+            }
+        }
+        ConversationCmd::Delete { id } => {
+            let r = del(client, &format!("/api/conversations/{id}")).await?;
+            println!("{}", if r["deleted"].as_bool().unwrap_or(false) { "已删除" } else { "删除失败" });
+        }
+        ConversationCmd::New => {
+            let r = post(client, "/api/conversations", serde_json::json!({ "messages": [] })).await?;
+            println!("新建会话: {}", r["id"].as_str().unwrap_or(""));
         }
     }
     Ok(())

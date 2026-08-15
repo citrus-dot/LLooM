@@ -193,13 +193,11 @@ LLooM ships a command-line interface and a terminal UI, both linking `lloom-core
 cargo build -p lloom-cli
 # or use the binary at target/debug/lloom-cli
 
-# Init database
-lloom-cli init
-
 # Models
 lloom-cli models list
 lloom-cli models add qwen2.5-local --provider ollama --model ollama/qwen2.5:latest \
   --api-base http://localhost:11434 --input-cost 0.000001 --output-cost 0.000002
+lloom-cli models update <name> --input-cost 0.000001 --output-cost 0.000002
 lloom-cli models remove <name>
 
 # Budgets
@@ -217,9 +215,19 @@ lloom-cli service start ollama
 lloom-cli service stop ollama
 lloom-cli service restart ai
 lloom-cli service logs ollama
+lloom-cli service apply DASHSCOPE_API_KEY     # smart-restart affected services
 
-# Chat (requires AI service running: cargo run -p lloom-server)
+# Conversations
+lloom-cli conversation list
+lloom-cli conversation show <id>
+lloom-cli conversation delete <id>
+lloom-cli conversation new
+
+# Chat — single-shot, resume a session, or interactive multi-turn
 lloom-cli chat "What is 2+2?"
+lloom-cli chat "continue" --session <id>
+lloom-cli chat "hi" --interactive
+```
 ```
 
 ### TUI (`tui/`)
