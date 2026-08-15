@@ -6,6 +6,7 @@ export function StatCard(props: {
   value: string
   label: string
   tone?: "primary" | "success" | "warning" | "secondary" | "text"
+  flexGrow?: boolean
 }) {
   const valueColor = () => {
     switch (props.tone ?? "text") {
@@ -19,6 +20,7 @@ export function StatCard(props: {
   return (
     <box
       flexDirection="column"
+      flexGrow={props.flexGrow ? 1 : 0}
       backgroundColor={theme.backgroundPanel}
       border={["left"]}
       borderStyle="rounded"

@@ -170,9 +170,9 @@ export function Usage(props: { setStatus: (s: string) => void }) {
       >
       {/* Stat cards */}
       <box flexDirection="row" gap={2} paddingBottom={1}>
-        <StatCard value={`$${spend().toFixed(4)}`} label="累计花费" tone="primary" />
-        <StatCard value={String(modelCount())} label="可用模型" tone="success" />
-        <StatCard value={String(budgets().length)} label="预算数" tone="secondary" />
+        <StatCard flexGrow value={`$${spend().toFixed(4)}`} label="累计花费" tone="primary" />
+        <StatCard flexGrow value={String(modelCount())} label="可用模型" tone="success" />
+        <StatCard flexGrow value={String(budgets().length)} label="预算数" tone="secondary" />
       </box>
 
       {/* Usage */}
@@ -193,6 +193,7 @@ export function Usage(props: { setStatus: (s: string) => void }) {
         onSelect={setSelIdx}
         emptyText="暂无用量数据"
       />
+      <box height={1} />
 
       {/* Model pricing */}
       <text fg={theme.textMuted} attributes={1}>模型定价 ($/1K tokens)</text>
@@ -206,6 +207,7 @@ export function Usage(props: { setStatus: (s: string) => void }) {
         rows={models()}
         emptyText="暂无模型定价"
       />
+      <box height={1} />
 
       {/* Budgets */}
       <box flexDirection="row" gap={1} paddingBottom={1}>
@@ -253,6 +255,7 @@ export function Usage(props: { setStatus: (s: string) => void }) {
         onRowUp={(b, evt) => { if (evt?.button === 2) budgetMenu(b) }}
         emptyText="未设置预算（点「设置」或 lloom-cli budgets set）"
       />
+      <box height={1} />
       </scrollbox>
     </box>
   )
