@@ -1,25 +1,24 @@
 //! LLooM TUI — terminal user interface.
 //!
-//! Five tabs mirroring the WebUI layout:
-//!   - 总览 Overview:  service status cards + service list + routing stats
-//!   - 用量 Usage:     spend/request stats + budgets + pricing
-//!   - 对话 Chat:      conversation list + orchestrated chat
-//!   - 模型 Models:    model table + add/remove
-//!   - 设置 Settings:  env check + API key editing
+//! Fully async: a single tokio runtime drives both keyboard input and all REST
+//! requests to lloom-server (:7861). No blocking calls, no block_on.
 //!
-//! Keys: Tab/←/→ switch tab · Enter/typing in Chat · Ctrl+C quit
+//! Five tabs mirror the WebUI: 总览 / 用量 / 对话 / 模型 / 设置.
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+mod rest;
+
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use lloom_core::db;
-use lloom_core::models::Model;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Table, TableState};
 use ratatui::{Frame, Terminal};
+use serde_json::Value;
 use std::io;
+use std::time::Duration;
+use tokio::sync::mpsc;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -31,8 +30,6 @@ enum Tab {
 }
 
 const TABS: [&str; 5] = ["总览", "用量", "对话", "模型", "设置"];
-
-const WEB_PORT: u16 = 7861;
 
 const ENV_SCHEMA: [(&str, &[(&str, &str)]); 4] = [
     ("DashScope", &[
@@ -51,55 +48,80 @@ const ENV_SCHEMA: [(&str, &[(&str, &str)]); 4] = [
     ]),
 ];
 
+#[derive(Clone)]
 struct ChatMsg {
-    role: String, // user | assistant | decomp | summary
+    role: String,
     content: String,
     detail: String,
 }
 
-struct App {
-    tab: Tab,
-    status_line: String,
-
-    // Overview
-    services: Vec<(String, String, bool)>, // name, status, healthy
-    routing_stats: Vec<(String, u64)>,
-
-    // Usage
-    usage_stats: Vec<UsageRow>,
-    total_spend: f64,
-    budgets: Vec<(String, String, f64, f64)>, // scope, id, spent, max
-    models_cache: Vec<Model>,
-
-    // Chat
-    conversations: Vec<(String, String, usize)>, // id, title, msg_count
-    chat_msgs: Vec<ChatMsg>,
-    conv_input: String,
-    conv_active: Option<String>,
-    conv_loading: bool,
-
-    // Models
-    model_list: Vec<Model>,
-
-    // Settings
-    env_values: std::collections::HashMap<String, String>,
-    env_input: String,
-    env_cursor_key: Option<String>,
-    env_msg: String,
-
-    // UI state
-    scroll: usize,
-    table_state: TableState,
-    selected_conv: usize,
+struct ServiceInfo {
+    name: String,
+    status: String,
+    healthy: bool,
 }
 
-#[derive(Default)]
 struct UsageRow {
     model: String,
     input: i64,
     output: i64,
     cost: f64,
     requests: i64,
+}
+
+// ── Events flowing into the main loop ──
+
+enum UiEvent {
+    // Keyboard
+    Key(KeyCode),
+    // Async fetch results
+    Overview(Result<(Vec<ServiceInfo>, Vec<(String, u64)>, f64), String>),
+    Usage(Result<(Vec<UsageRow>, f64, Vec<(String, String, f64, f64)>, usize), String>),
+    Conversations(Result<Vec<(String, String, usize)>, String>),
+    Models(Result<Vec<Value>, String>),
+    Env(Result<Vec<(String, String, String)>, String>),
+    ChatReply(Result<(String, String), String>),
+    ConvLoaded(Result<Vec<ChatMsg>, String>),
+    ConvSaved(Result<String, String>),
+    ServiceOp(Result<Value, String>),
+}
+
+// ── App state ──
+
+struct App {
+    tab: Tab,
+    status_line: String,
+
+    // Overview
+    services: Vec<ServiceInfo>,
+    routing_stats: Vec<(String, u64)>,
+    total_spend: f64,
+
+    // Usage
+    usage_stats: Vec<UsageRow>,
+    budgets: Vec<(String, String, f64, f64)>,
+    model_count: usize,
+
+    // Chat
+    conversations: Vec<(String, String, usize)>,
+    chat_msgs: Vec<ChatMsg>,
+    conv_input: String,
+    conv_active: Option<String>,
+    conv_loading: bool,
+    selected_conv: usize,
+
+    // Models
+    model_list: Vec<Value>,
+
+    // Settings
+    env_values: Vec<(String, String, String)>,
+    env_input: String,
+    env_cursor: usize,
+    env_msg: String,
+
+    // UI
+    scroll: usize,
+    table_state: TableState,
 }
 
 impl App {
@@ -109,228 +131,279 @@ impl App {
             status_line: "Tab/←/→ 切换 · 对话页输入消息 Enter 发送 · Ctrl+C 退出".into(),
             services: vec![],
             routing_stats: vec![],
-            usage_stats: vec![],
             total_spend: 0.0,
+            usage_stats: vec![],
             budgets: vec![],
-            models_cache: vec![],
+            model_count: 0,
             conversations: vec![],
             chat_msgs: vec![],
             conv_input: String::new(),
             conv_active: None,
             conv_loading: false,
+            selected_conv: 0,
             model_list: vec![],
-            env_values: Default::default(),
+            env_values: vec![],
             env_input: String::new(),
-            env_cursor_key: None,
+            env_cursor: 0,
             env_msg: String::new(),
             scroll: 0,
             table_state: TableState::default(),
-            selected_conv: 0,
         }
     }
 
-    fn refresh_all(&mut self) {
-        self.refresh_overview();
-        self.refresh_usage();
-        self.refresh_conversations();
-        self.refresh_models();
-        self.refresh_env();
-    }
-
-    fn refresh_overview(&mut self) {
-        // Services
-        self.services.clear();
-        let rt = tokio::runtime::Runtime::new().expect("tokio");
-        let ai = rt.block_on(lloom_core::processes::check_ai_health());
-        self.services.push(("核心服务".into(), "Up (本进程)".into(), true));
-        let ollama = rt.block_on(lloom_core::processes::check_ollama_health());
-        self.services.push(("Ollama".into(), if ollama { "Up".into() } else { "Down".into() }, ollama));
-        let ai_ok = ai.status == "ok";
-        let ai_ready = ai.ready;
-        self.services.push((
-            "AI 服务".into(),
-            if ai_ok {
-                if ai_ready { "Up (ready)".into() } else { "Up (未配置模型)".into() }
-            } else {
-                "Down".into()
-            },
-            ai_ok && ai_ready,
-        ));
-
-        // Routing stats
-        self.routing_stats.clear();
-        if let Ok(s) = db::get_usage_stats(None, None, None) {
-            for r in &s {
-                self.routing_stats.push((r.model_name.clone(), r.request_count as u64));
+    fn apply(&mut self, ev: UiEvent) {
+        match ev {
+            UiEvent::Overview(Ok((services, routing, spend))) => {
+                self.services = services;
+                self.routing_stats = routing;
+                self.total_spend = spend;
             }
-        }
-    }
-
-    fn refresh_usage(&mut self) {
-        self.usage_stats.clear();
-        if let Ok(s) = db::get_usage_stats(None, None, None) {
-            for r in &s {
-                self.usage_stats.push(UsageRow {
-                    model: r.model_name.clone(),
-                    input: r.total_input_tokens,
-                    output: r.total_output_tokens,
-                    cost: r.total_cost,
-                    requests: r.request_count,
-                });
+            UiEvent::Overview(Err(e)) => self.status_line = format!("✗ 总览加载失败: {e}"),
+            UiEvent::Usage(Ok((usage, spend, budgets, count))) => {
+                self.usage_stats = usage;
+                self.total_spend = spend;
+                self.budgets = budgets;
+                self.model_count = count;
             }
-        }
-        if let Ok(t) = db::get_total_spend(None, None, None) {
-            self.total_spend = t;
-        }
-        self.budgets.clear();
-        if let Ok(b) = db::list_budgets() {
-            for x in &b {
-                let spent = db::get_total_spend(
-                    if x.scope == "user" { Some(&x.scope_id) } else { None },
-                    if x.scope == "model" { Some(&x.scope_id) } else { None },
-                    None,
-                )
-                .unwrap_or(0.0);
-                self.budgets.push((x.scope.clone(), x.scope_id.clone(), spent, x.max_budget));
+            UiEvent::Usage(Err(e)) => self.status_line = format!("✗ 用量加载失败: {e}"),
+            UiEvent::Conversations(Ok(c)) => {
+                self.conversations = c;
+                if self.selected_conv >= self.conversations.len() {
+                    self.selected_conv = 0;
+                }
             }
-        }
-        self.models_cache = db::list_models(true).unwrap_or_default();
-    }
-
-    fn refresh_conversations(&mut self) {
-        self.conversations = lloom_core::conversations::list()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|c| (c.id, c.title, c.message_count))
-            .collect();
-        if self.conversations.is_empty() {
-            self.selected_conv = 0;
-        } else if self.selected_conv >= self.conversations.len() {
-            self.selected_conv = 0;
-        }
-    }
-
-    fn refresh_models(&mut self) {
-        self.model_list = db::list_models(true).unwrap_or_default();
-    }
-
-    fn refresh_env(&mut self) {
-        self.env_values = lloom_core::config::read_env();
-    }
-
-    fn send_chat(&mut self) {
-        let q = std::mem::take(&mut self.conv_input);
-        if q.trim().is_empty() {
-            return;
-        }
-        self.chat_msgs.push(ChatMsg { role: "user".into(), content: q.clone(), detail: String::new() });
-        self.status_line = "思考中...".into();
-        self.conv_loading = true;
-        let reply = self.do_orchestrate(&q);
-        self.conv_loading = false;
-        match reply {
-            Ok((text, detail)) => {
+            UiEvent::Conversations(Err(_)) => {}
+            UiEvent::Models(Ok(m)) => self.model_list = m,
+            UiEvent::Models(Err(_)) => {}
+            UiEvent::Env(Ok(e)) => self.env_values = e,
+            UiEvent::Env(Err(_)) => {}
+            UiEvent::ChatReply(Ok((text, detail))) => {
+                self.conv_loading = false;
                 self.chat_msgs.push(ChatMsg { role: "assistant".into(), content: text, detail });
                 self.status_line = "✓ 已回复".into();
             }
-            Err(e) => {
+            UiEvent::ChatReply(Err(e)) => {
+                self.conv_loading = false;
                 self.chat_msgs.push(ChatMsg { role: "assistant".into(), content: format!("请求失败: {e}"), detail: String::new() });
                 self.status_line = format!("✗ 失败: {e}");
             }
-        }
-    }
-
-    fn do_orchestrate(&self, query: &str) -> Result<(String, String), String> {
-        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-        rt.block_on(async {
-            let models = db::list_models(true).map_err(|e| e.to_string())?;
-            let specs: Vec<lloom_core::ai_client::ModelSpec> = models.iter().map(|m| m.into()).collect();
-            let events = lloom_core::ai_client::orchestrate_stream(query, &[], "", &specs, "")
-                .await
-                .map_err(|e| e.to_string())?;
-            let mut response = String::new();
-            let mut models_used: Vec<String> = Vec::new();
-            for ev in &events {
-                if ev.event == "task_start" {
-                    if let Some(m) = ev.data.get("model").and_then(|x| x.as_str()) {
-                        models_used.push(m.to_string());
-                    }
-                } else if ev.event == "result" {
-                    if let Some(r) = ev.data.get("response").and_then(|x| x.as_str()) {
-                        response = r.to_string();
-                    }
-                }
+            UiEvent::ConvLoaded(Ok(msgs)) => {
+                self.chat_msgs = msgs;
             }
-            if response.is_empty() {
-                response = "(无返回结果)".into();
+            UiEvent::ConvLoaded(Err(_)) => {}
+            UiEvent::ConvSaved(Ok(id)) => {
+                self.conv_active = Some(id);
+                self.status_line = "✓ 对话已保存".into();
             }
-            let mut uniq: Vec<String> = Vec::new();
-            for m in models_used {
-                if !uniq.contains(&m) {
-                    uniq.push(m);
-                }
+            UiEvent::ConvSaved(Err(e)) => self.status_line = format!("✗ 保存失败: {e}"),
+            UiEvent::ServiceOp(Ok(_)) => {
+                self.status_line = "✓ 服务操作成功".into();
             }
-            let detail = if uniq.is_empty() { String::new() } else { format!("调用模型: {}", uniq.join(" | ")) };
-            Ok((response, detail))
-        })
-    }
-
-    fn new_conversation(&mut self) {
-        self.conv_active = None;
-        self.chat_msgs.clear();
-        self.status_line = "新对话".into();
-    }
-
-    fn select_conversation(&mut self, idx: usize) {
-        if idx >= self.conversations.len() {
-            return;
-        }
-        let (id, _, _) = &self.conversations[idx];
-        let id = id.clone();
-        self.conv_active = Some(id.clone());
-        self.chat_msgs.clear();
-        if let Ok(v) = lloom_core::conversations::load(&id) {
-            if let Some(arr) = v.get("messages").and_then(|x| x.as_array()) {
-                for m in arr {
-                    let role = m.get("role").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    let content = m.get("content").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    self.chat_msgs.push(ChatMsg { role, content, detail: String::new() });
-                }
-            }
-        }
-        self.selected_conv = idx;
-    }
-
-    fn save_current_conv(&mut self) {
-        if self.chat_msgs.is_empty() {
-            return;
-        }
-        let messages: Vec<serde_json::Value> = self
-            .chat_msgs
-            .iter()
-            .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
-            .collect();
-        let title = self
-            .chat_msgs
-            .first()
-            .filter(|m| m.role == "user")
-            .map(|m| m.content.chars().take(20).collect::<String>())
-            .unwrap_or_else(|| "新对话".to_string());
-        let id = self.conv_active.clone().unwrap_or_default();
-        match lloom_core::conversations::save_or_create(&id, &title, &messages) {
-            Ok(new_id) => {
-                self.conv_active = Some(new_id);
-                self.refresh_conversations();
-            }
-            Err(_) => {}
+            UiEvent::ServiceOp(Err(e)) => self.status_line = format!("✗ 服务操作失败: {e}"),
+            UiEvent::Key(_) => {}
         }
     }
 }
 
-fn main() -> io::Result<()> {
-    let _ = lloom_core::config::resolve_install_dir();
-    let _ = db::init_db();
+// ── Async REST fetchers ──
 
+async fn fetch_overview() -> Result<(Vec<ServiceInfo>, Vec<(String, u64)>, f64), String> {
+    let status = rest::get("/api/services/status").await?;
+    let stats = rest::get("/api/stats").await;
+    let services = status["services"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|s| ServiceInfo {
+                    name: s["name"].as_str().unwrap_or("").into(),
+                    status: s["status"].as_str().unwrap_or("").into(),
+                    healthy: s["healthy"].as_bool().unwrap_or(false),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut routing = Vec::new();
+    if let Ok(s) = &stats {
+        if let Some(rs) = s["routing_stats"].as_object() {
+            for (k, v) in rs {
+                routing.push((k.clone(), v.as_u64().unwrap_or(0)));
+            }
+        }
+    }
+    let spend = stats.as_ref().map(|s| s["total_spend"].as_f64().unwrap_or(0.0)).unwrap_or(0.0);
+    Ok((services, routing, spend))
+}
+
+async fn fetch_usage() -> Result<(Vec<UsageRow>, f64, Vec<(String, String, f64, f64)>, usize), String> {
+    let usage = rest::get("/api/usage").await?;
+    let stats = rest::get("/api/stats").await;
+    let budgets = rest::get("/api/budgets").await;
+    let models = rest::get("/api/models").await;
+
+    let rows = usage["usage"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|u| UsageRow {
+                    model: u["model_name"].as_str().unwrap_or("").into(),
+                    input: u["total_input_tokens"].as_i64().unwrap_or(0),
+                    output: u["total_output_tokens"].as_i64().unwrap_or(0),
+                    cost: u["total_cost"].as_f64().unwrap_or(0.0),
+                    requests: u["request_count"].as_i64().unwrap_or(0),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let spend = stats.as_ref().map(|s| s["total_spend"].as_f64().unwrap_or(0.0)).unwrap_or(0.0);
+    let mut budget_list = Vec::new();
+    if let Ok(b) = &budgets {
+        if let Some(arr) = b["budgets"].as_array() {
+            for x in arr {
+                budget_list.push((
+                    x["scope"].as_str().unwrap_or("").into(),
+                    x["scope_id"].as_str().unwrap_or("").into(),
+                    0.0,
+                    x["max_budget"].as_f64().unwrap_or(0.0),
+                ));
+            }
+        }
+    }
+    let count = models.as_ref().map(|m| m["models"].as_array().map(|a| a.len()).unwrap_or(0)).unwrap_or(0);
+    Ok((rows, spend, budget_list, count))
+}
+
+async fn fetch_conversations() -> Result<Vec<(String, String, usize)>, String> {
+    let v = rest::get("/api/conversations").await?;
+    Ok(v["conversations"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|c| {
+                    (
+                        c["id"].as_str().unwrap_or("").into(),
+                        c["title"].as_str().unwrap_or("").into(),
+                        c["message_count"].as_u64().unwrap_or(0) as usize,
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+async fn fetch_models() -> Result<Vec<Value>, String> {
+    let v = rest::get("/api/models").await?;
+    Ok(v["models"].as_array().cloned().unwrap_or_default())
+}
+
+async fn fetch_env() -> Result<Vec<(String, String, String)>, String> {
+    let v = rest::get("/api/config").await?;
+    let mut out = Vec::new();
+    for (section, items) in ENV_SCHEMA {
+        for (key, _desc) in items {
+            let val = v.get(*key).and_then(|x| x.as_str()).unwrap_or("").to_string();
+            out.push(((*key).to_string(), val, (*section).to_string()));
+        }
+    }
+    Ok(out)
+}
+
+async fn fetch_conv(id: &str) -> Result<Vec<ChatMsg>, String> {
+    let v = rest::get(&format!("/api/conversations/{}", rest::urlencode(id))).await?;
+    Ok(v["messages"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|m| ChatMsg {
+                    role: m["role"].as_str().unwrap_or("").into(),
+                    content: m["content"].as_str().unwrap_or("").into(),
+                    detail: String::new(),
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+async fn do_chat(query: &str) -> Result<(String, String), String> {
+    let body = serde_json::json!({ "messages": [{"role": "user", "content": query}] });
+    let text = rest::sse_text("/api/chat/stream", body).await?;
+    let mut response = String::new();
+    for line in text.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                if let Some(c) = v["content"].as_str() {
+                    response.push_str(c);
+                }
+            }
+        }
+    }
+    Ok((response, String::new()))
+}
+
+async fn save_conv(id: Option<&str>, msgs: &[ChatMsg]) -> Result<String, String> {
+    let messages: Vec<Value> = msgs
+        .iter()
+        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+        .collect();
+    let title = msgs
+        .iter()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.chars().take(20).collect::<String>())
+        .unwrap_or_else(|| "新对话".into());
+    let body = serde_json::json!({ "id": id.unwrap_or(""), "title": title, "messages": messages });
+    let r = rest::post("/api/conversations", body).await?;
+    Ok(r["id"].as_str().unwrap_or("").to_string())
+}
+
+async fn service_op(action: &str, name: &str) -> Result<Value, String> {
+    let id = if name.to_lowercase().contains("ollama") { "ollama" } else { "ai" };
+    rest::post(&format!("/api/services/{id}/{action}"), Value::Null).await
+}
+
+async fn delete_model(name: &str) -> Result<Value, String> {
+    rest::delete(&format!("/api/models/{}", rest::urlencode(name))).await
+}
+
+async fn update_model(name: &str, task_type: &str) -> Result<Value, String> {
+    rest::put(
+        &format!("/api/models/{}", rest::urlencode(name)),
+        serde_json::json!({ "task_type": task_type }),
+    )
+    .await
+}
+
+async fn write_env(key: &str, value: &str) -> Result<Value, String> {
+    rest::post("/api/config", serde_json::json!({ "updates": { key: value } })).await
+}
+
+// ── Spawn all background fetches ──
+
+fn spawn_refresh(tx: mpsc::Sender<UiEvent>) {
+    let t = tx.clone();
+    tokio::spawn(async move {
+        let _ = t.send(UiEvent::Overview(fetch_overview().await)).await;
+    });
+    let t = tx.clone();
+    tokio::spawn(async move {
+        let _ = t.send(UiEvent::Usage(fetch_usage().await)).await;
+    });
+    let t = tx.clone();
+    tokio::spawn(async move {
+        let _ = t.send(UiEvent::Conversations(fetch_conversations().await)).await;
+    });
+    let t = tx.clone();
+    tokio::spawn(async move {
+        let _ = t.send(UiEvent::Models(fetch_models().await)).await;
+    });
+    let t = tx.clone();
+    tokio::spawn(async move {
+        let _ = t.send(UiEvent::Env(fetch_env().await)).await;
+    });
+}
+
+// ── Main ──
+
+#[tokio::main]
+async fn main() -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen)?;
@@ -338,38 +411,64 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new();
-    app.refresh_all();
-    let res = run_app(&mut terminal, &mut app);
+    let (tx, mut rx) = mpsc::channel::<UiEvent>(128);
+    spawn_refresh(tx.clone());
 
+    // Keyboard task (crossterm read is blocking; run on a dedicated task)
+    let kbd_tx = tx.clone();
+    let kbd = tokio::spawn(async move {
+        loop {
+            if let Ok(Event::Key(k)) = event::read() {
+                if k.kind == KeyEventKind::Press {
+                    if kbd_tx.send(UiEvent::Key(k.code)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let mut last_refresh = std::time::Instant::now();
+    let result = event_loop(&mut terminal, &mut app, &mut rx, tx.clone(), &mut last_refresh).await;
+
+    let _ = kbd.abort();
     disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-    res
+    result
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> io::Result<()> {
+async fn event_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    rx: &mut mpsc::Receiver<UiEvent>,
+    tx: mpsc::Sender<UiEvent>,
+    last_refresh: &mut std::time::Instant,
+) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, app))?;
-        if let Event::Key(key) = event::read()? {
-            if key.kind != KeyEventKind::Press {
-                continue;
+
+        let deadline = tokio::time::sleep(Duration::from_millis(100));
+        tokio::pin!(deadline);
+
+        tokio::select! {
+            ev = rx.recv() => {
+                match ev {
+                    Some(UiEvent::Key(code)) => {
+                        if handle_key(app, code, tx.clone()) {
+                            return Ok(());
+                        }
+                    }
+                    Some(e) => app.apply(e),
+                    None => return Ok(()),
+                }
             }
-            match key.code {
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    app.save_current_conv();
-                    return Ok(());
+            _ = &mut deadline => {
+                // Periodic refresh
+                if last_refresh.elapsed().as_secs() >= 15 {
+                    spawn_refresh(tx.clone());
+                    *last_refresh = std::time::Instant::now();
                 }
-                KeyCode::Tab | KeyCode::Right => {
-                    app.tab = next_tab(app.tab, 1);
-                }
-                KeyCode::Left => {
-                    app.tab = next_tab(app.tab, -1);
-                }
-                KeyCode::Char('q') if app.tab != Tab::Chat => {
-                    app.save_current_conv();
-                    return Ok(());
-                }
-                _ => handle_key(app, key.code),
             }
         }
     }
@@ -386,34 +485,66 @@ fn next_tab(t: Tab, dir: i8) -> Tab {
     }
 }
 
-fn handle_key(app: &mut App, key: KeyCode) {
+/// Handle a key press. Returns true if the app should quit.
+fn handle_key(app: &mut App, code: KeyCode, tx: mpsc::Sender<UiEvent>) -> bool {
+    match code {
+        KeyCode::Char('c') => return true,
+        KeyCode::Tab | KeyCode::Right => app.tab = next_tab(app.tab, 1),
+        KeyCode::Left => app.tab = next_tab(app.tab, -1),
+        KeyCode::Char('q') if app.tab != Tab::Chat => return true,
+        _ => handle_tab_key(app, code, tx),
+    }
+    false
+}
+
+fn handle_tab_key(app: &mut App, code: KeyCode, tx: mpsc::Sender<UiEvent>) {
     match app.tab {
-        Tab::Chat => match key {
+        Tab::Chat => match code {
             KeyCode::Enter => {
                 if !app.conv_loading {
-                    app.send_chat();
-                    app.save_current_conv();
+                    let q = std::mem::take(&mut app.conv_input);
+                    if q.trim().is_empty() {
+                        return;
+                    }
+                    app.chat_msgs.push(ChatMsg { role: "user".into(), content: q.clone(), detail: String::new() });
+                    app.conv_loading = true;
+                    app.status_line = "思考中...".into();
+                    // Save current state async
+                    let msgs = app.chat_msgs.clone();
+                    let id = app.conv_active.clone();
+                    let t = tx.clone();
+                    tokio::spawn(async move {
+                        let _ = t.send(UiEvent::ConvSaved(save_conv(id.as_deref(), &msgs).await)).await;
+                    });
+                    // Send chat async
+                    let t = tx.clone();
+                    tokio::spawn(async move {
+                        let _ = t.send(UiEvent::ChatReply(do_chat(&q).await)).await;
+                    });
                 }
             }
             KeyCode::Backspace => {
                 app.conv_input.pop();
             }
-            // 'n' alone (empty input) starts a new conversation
-            KeyCode::Char('n') if app.conv_input.is_empty() => app.new_conversation(),
+            KeyCode::Char('n') if app.conv_input.is_empty() => {
+                app.conv_active = None;
+                app.chat_msgs.clear();
+                app.status_line = "新对话".into();
+            }
             KeyCode::Char(c) => app.conv_input.push(c),
             KeyCode::Down => {
                 if app.selected_conv + 1 < app.conversations.len() {
-                    app.select_conversation(app.selected_conv + 1);
+                    select_conv(app, app.selected_conv + 1, tx.clone());
                 }
             }
             KeyCode::Up => {
                 if app.selected_conv > 0 {
-                    app.select_conversation(app.selected_conv - 1);
+                    select_conv(app, app.selected_conv - 1, tx.clone());
                 }
             }
             _ => {}
         },
-        Tab::Models => match key {
+        Tab::Models => match code {
             KeyCode::Down => {
                 if !app.model_list.is_empty() {
                     let i = (app.table_state.selected().unwrap_or(0) + 1).min(app.model_list.len() - 1);
@@ -427,130 +558,118 @@ fn handle_key(app: &mut App, key: KeyCode) {
             KeyCode::Char('d') => {
                 if let Some(i) = app.table_state.selected() {
                     if i < app.model_list.len() {
-                        let name = app.model_list[i].name.clone();
-                        let _ = db::delete_model(&name);
-                        app.refresh_models();
-                        app.status_line = format!("✓ 模型已删除: {name}");
+                        let name = app.model_list[i]["name"].as_str().unwrap_or("").to_string();
+                        let t = tx.clone();
+                        let name2 = name.clone();
+                        tokio::spawn(async move {
+                            let _ = t.send(UiEvent::ServiceOp(delete_model(&name2).await)).await;
+                            let _ = t.send(UiEvent::Models(fetch_models().await)).await;
+                        });
+                        app.status_line = format!("删除模型 {name}...");
                     }
                 }
             }
             KeyCode::Char('e') => {
                 if let Some(i) = app.table_state.selected() {
                     if i < app.model_list.len() {
-                        let name = app.model_list[i].name.clone();
+                        let name = app.model_list[i]["name"].as_str().unwrap_or("").to_string();
                         let task_types = ["", "general", "coding", "math_logic", "simple_qa", "complex_reasoning"];
-                        let cur = app.model_list[i].task_type.as_str();
+                        let cur = app.model_list[i]["task_type"].as_str().unwrap_or("");
                         let next = task_types
                             .iter()
                             .position(|t| *t == cur)
                             .map(|p| task_types[(p + 1) % task_types.len()])
-                            .unwrap_or("");
-                        let mut updates = serde_json::Map::new();
-                        updates.insert("task_type".into(), serde_json::json!(next));
-                        let _ = db::update_model(&name, &updates);
-                        app.refresh_models();
-                        app.status_line = format!("✓ 模型 {name} 任务类型 → {}", if next.is_empty() { "不分配" } else { next });
+                            .unwrap_or("")
+                            .to_string();
+                        let t = tx.clone();
+                        let name2 = name.clone();
+                        let next2 = next.clone();
+                        tokio::spawn(async move {
+                            let _ = t.send(UiEvent::ServiceOp(update_model(&name2, &next2).await)).await;
+                            let _ = t.send(UiEvent::Models(fetch_models().await)).await;
+                        });
+                        app.status_line = format!("模型 {name} 任务类型 → {next}");
                     }
                 }
             }
             _ => {}
         },
-        Tab::Settings => match key {
-            KeyCode::Enter => {
-                if let Some(k) = app.env_cursor_key.clone() {
-                    let v = std::mem::take(&mut app.env_input);
-                    let mut updates = std::collections::HashMap::new();
-                    updates.insert(k.clone(), v);
-                    write_env(&updates);
-                    app.refresh_env();
-                    app.env_msg = format!("✓ 已保存 {k}");
-                    app.env_cursor_key = None;
-                }
-            }
+        Tab::Settings => match code {
             KeyCode::Down => {
-                // cycle through env keys
-                let keys: Vec<String> = ENV_SCHEMA.iter().flat_map(|(_, items)| items.iter().map(|(k, _)| k.to_string())).collect();
-                let idx = keys.iter().position(|k| Some(k) == app.env_cursor_key.as_ref()).unwrap_or(0);
-                let next = (idx + 1) % keys.len();
-                app.env_cursor_key = Some(keys[next].clone());
-                app.env_input = app.env_values.get(&keys[next]).cloned().unwrap_or_default();
-                app.env_msg = String::new();
+                app.env_cursor = (app.env_cursor + 1).min(app.env_values.len().saturating_sub(1));
+                app.env_input = app.env_values.get(app.env_cursor).map(|(_, v, _)| v.clone()).unwrap_or_default();
             }
             KeyCode::Up => {
-                let keys: Vec<String> = ENV_SCHEMA.iter().flat_map(|(_, items)| items.iter().map(|(k, _)| k.to_string())).collect();
-                let idx = keys.iter().position(|k| Some(k) == app.env_cursor_key.as_ref()).unwrap_or(0);
-                let next = (idx + keys.len() - 1) % keys.len();
-                app.env_cursor_key = Some(keys[next].clone());
-                app.env_input = app.env_values.get(&keys[next]).cloned().unwrap_or_default();
-                app.env_msg = String::new();
+                app.env_cursor = app.env_cursor.saturating_sub(1);
+                app.env_input = app.env_values.get(app.env_cursor).map(|(_, v, _)| v.clone()).unwrap_or_default();
+            }
+            KeyCode::Enter => {
+                if let Some((key, _, _)) = app.env_values.get(app.env_cursor).cloned() {
+                    let v = std::mem::take(&mut app.env_input);
+                    let t = tx.clone();
+                    let key2 = key.clone();
+                    tokio::spawn(async move {
+                        let _ = t.send(UiEvent::ServiceOp(write_env(&key, &v).await)).await;
+                        let _ = t.send(UiEvent::Env(fetch_env().await)).await;
+                    });
+                    app.status_line = format!("✓ 已保存 {key2}");
+                }
             }
             KeyCode::Backspace => {
-                if app.env_cursor_key.is_some() {
-                    app.env_input.pop();
-                }
+                app.env_input.pop();
             }
             KeyCode::Char(c) => {
-                if app.env_cursor_key.is_some() {
-                    app.env_input.push(c);
-                }
-            }
-            _ => {}
-        },
-        Tab::Overview => match key {
-            KeyCode::Down => app.scroll += 1,
-            KeyCode::Up => app.scroll = app.scroll.saturating_sub(1),
-            KeyCode::Char('s') => {
-                app.status_line = "启动 AI 服务 + Ollama...".into();
-                let rt = tokio::runtime::Runtime::new().expect("tokio");
-                rt.block_on(async {
-                    let _ = lloom_core::processes::start_ai().await;
-                    let _ = lloom_core::processes::start_ollama().await;
-                });
-                app.refresh_overview();
-                app.status_line = "✓ 服务已启动".into();
-            }
-            KeyCode::Char('x') => {
-                app.status_line = "停止 AI 服务 + Ollama...".into();
-                // Stop via REST (needs server running; child handles live there)
-                let rt = tokio::runtime::Runtime::new().expect("tokio");
-                rt.block_on(async {
-                    let c = reqwest::Client::new();
-                    let _ = c.post(format!("http://localhost:{WEB_PORT}/api/services/ai/stop")).send().await;
-                    let _ = c.post(format!("http://localhost:{WEB_PORT}/api/services/ollama/stop")).send().await;
-                });
-                app.refresh_overview();
-                app.status_line = "✓ 服务已停止".into();
+                app.env_input.push(c);
             }
             _ => {}
         },
         _ => {
-            // Usage: scroll
-            match key {
+            // Overview / Usage
+            match code {
                 KeyCode::Down => app.scroll += 1,
                 KeyCode::Up => app.scroll = app.scroll.saturating_sub(1),
+                KeyCode::Char('s') => {
+                    let t = tx.clone();
+                    tokio::spawn(async move {
+                        let _ = t.send(UiEvent::ServiceOp(service_op("start", "ai").await)).await;
+                        let _ = t.send(UiEvent::ServiceOp(service_op("start", "ollama").await)).await;
+                        let _ = t.send(UiEvent::Overview(fetch_overview().await)).await;
+                    });
+                    app.status_line = "启动 AI 服务 + Ollama...".into();
+                }
+                KeyCode::Char('x') => {
+                    let t = tx.clone();
+                    tokio::spawn(async move {
+                        let _ = t.send(UiEvent::ServiceOp(service_op("stop", "ai").await)).await;
+                        let _ = t.send(UiEvent::ServiceOp(service_op("stop", "ollama").await)).await;
+                        let _ = t.send(UiEvent::Overview(fetch_overview().await)).await;
+                    });
+                    app.status_line = "停止 AI 服务 + Ollama...".into();
+                }
                 _ => {}
             }
         }
     }
 }
 
-fn write_env(updates: &std::collections::HashMap<String, String>) {
-    let path = lloom_core::config::env_file_path();
-    let mut env = lloom_core::config::read_env();
-    for (k, v) in updates {
-        env.insert(k.clone(), v.clone());
+fn select_conv(app: &mut App, idx: usize, tx: mpsc::Sender<UiEvent>) {
+    if idx >= app.conversations.len() {
+        return;
     }
-    let mut keys: Vec<&String> = env.keys().collect();
-    keys.sort();
-    let mut out = String::new();
-    for k in keys {
-        out.push_str(&format!("{k}={}\n", env.get(k).unwrap()));
-    }
-    let _ = std::fs::write(path, out);
+    let (id, _, _) = &app.conversations[idx];
+    let id = id.clone();
+    app.selected_conv = idx;
+    app.conv_active = Some(id.clone());
+    app.chat_msgs.clear();
+    let t = tx.clone();
+    tokio::spawn(async move {
+        let _ = t.send(UiEvent::ConvLoaded(fetch_conv(&id).await)).await;
+    });
 }
 
+// ═══════════════ UI RENDERING ═══════════════
+
 fn ui(f: &mut Frame, app: &mut App) {
-    // Ant Design style: left sidebar nav + right content area + bottom status.
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -561,7 +680,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .constraints([Constraint::Length(22), Constraint::Min(0)])
         .split(outer[0]);
 
-    // ── Sidebar nav ──
+    // Sidebar nav
     let items: Vec<ListItem> = TABS
         .iter()
         .enumerate()
@@ -581,7 +700,6 @@ fn ui(f: &mut Frame, app: &mut App) {
         .highlight_style(Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD));
     f.render_widget(nav, main[0]);
 
-    // ── Content area ──
     let content = main[1];
     match app.tab {
         Tab::Overview => render_overview(f, content, app),
@@ -591,9 +709,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         Tab::Settings => render_settings(f, content, app),
     }
 
-    // ── Bottom status bar ──
-    let status = Paragraph::new(app.status_line.clone())
-        .style(Style::default().fg(Color::Cyan));
+    let status = Paragraph::new(app.status_line.clone()).style(Style::default().fg(Color::Cyan));
     f.render_widget(status, outer[1]);
 }
 
@@ -602,34 +718,26 @@ fn card_block(title: &str) -> Block<'static> {
 }
 
 fn render_overview(f: &mut Frame, area: Rect, app: &mut App) {
-    // Ant Design style: 4 stat cards on top, then service table + routing.
     let cols = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5),
-            Constraint::Min(0),
-            Constraint::Length(3),
-            Constraint::Length(3),
-        ])
+        .constraints([Constraint::Length(5), Constraint::Min(0), Constraint::Length(3), Constraint::Length(3)])
         .split(area);
 
-    // ── Stat cards row (4 columns) ──
-    let n_healthy = app.services.iter().filter(|(_, _, h)| *h).count();
+    let n_healthy = app.services.iter().filter(|s| s.healthy).count();
     let cards = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1, 4); 4])
         .split(cols[0]);
-
     let stats: Vec<(String, String, Color)> = vec![
         ("服务健康".into(), format!("{}/{}", n_healthy, app.services.len()), Color::Blue),
         (
             "核心服务".into(),
-            if app.services.iter().any(|(n, _, h)| n == "核心服务" && *h) { "运行中".into() } else { "异常".into() },
+            if app.services.iter().any(|s| s.name == "核心服务" && s.healthy) { "运行中".into() } else { "异常".into() },
             Color::Green,
         ),
         (
             "Ollama".into(),
-            if app.services.iter().any(|(n, _, h)| n == "Ollama" && *h) { "运行中".into() } else { "未运行".into() },
+            if app.services.iter().any(|s| s.name == "Ollama" && s.healthy) { "运行中".into() } else { "未运行".into() },
             Color::Green,
         ),
         ("累计花费".into(), format!("${:.6}", app.total_spend), Color::Yellow),
@@ -642,32 +750,28 @@ fn render_overview(f: &mut Frame, area: Rect, app: &mut App) {
         f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL)), cards[i]);
     }
 
-    // ── Service table ──
     let header = ["服务名", "状态", "健康"];
-    let widths = [Constraint::Length(16), Constraint::Length(24), Constraint::Length(6)];
+    let widths = [Constraint::Length(16), Constraint::Length(26), Constraint::Length(6)];
     let rows: Vec<Vec<String>> = app
         .services
         .iter()
-        .map(|(name, status, healthy)| vec![name.clone(), status.clone(), if *healthy { "✓ 健康".into() } else { "✗ 异常".into() }])
+        .map(|s| vec![s.name.clone(), s.status.clone(), if s.healthy { "✓ 健康".into() } else { "✗ 异常".into() }])
         .collect();
     let table = build_table(&header, &widths, &rows, 20);
     f.render_widget(table.block(card_block("服务列表")), cols[1]);
 
-    // ── Routing stats ──
     let mut rlines = Vec::new();
     if app.routing_stats.is_empty() {
         rlines.push(Line::from("  (暂无路由数据)"));
     } else {
         for (m, c) in &app.routing_stats {
-            rlines.push(Line::from(format!("  {:<16} {} 次", m, c)));
+            rlines.push(Line::from(format!("  {m:<16} {c} 次")));
         }
     }
     f.render_widget(Paragraph::new(rlines).block(card_block("智能路由统计")), cols[2]);
 
-    // ── Action hints ──
     f.render_widget(
-        Paragraph::new(" [s] 启动服务   [x] 停止服务   [Tab] 切换页面")
-            .style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(" [s] 启动服务   [x] 停止服务   [Tab] 切换页面").style(Style::default().fg(Color::DarkGray)),
         cols[3],
     );
 }
@@ -675,21 +779,16 @@ fn render_overview(f: &mut Frame, area: Rect, app: &mut App) {
 fn render_usage(f: &mut Frame, area: Rect, app: &mut App) {
     let cols = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5),
-            Constraint::Min(0),
-            Constraint::Length(4 + app.budgets.len() as u16),
-        ])
+        .constraints([Constraint::Length(5), Constraint::Min(0), Constraint::Length(4 + app.budgets.len() as u16)])
         .split(area);
 
-    // ── Stat cards row ──
     let cards = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1, 3); 3])
         .split(cols[0]);
     let stats: Vec<(String, String, Color)> = vec![
         ("核心服务".into(), "正常".into(), Color::Green),
-        ("可用模型".into(), app.models_cache.len().to_string(), Color::Blue),
+        ("可用模型".into(), app.model_count.to_string(), Color::Blue),
         ("累计花费".into(), format!("${:.6}", app.total_spend), Color::Yellow),
     ];
     for (i, (label, val, color)) in stats.iter().enumerate() {
@@ -700,24 +799,16 @@ fn render_usage(f: &mut Frame, area: Rect, app: &mut App) {
         f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL)), cards[i]);
     }
 
-    // ── Usage table ──
     let header = ["模型", "输入", "输出", "请求", "花费"];
     let widths = [Constraint::Length(18), Constraint::Length(12), Constraint::Length(12), Constraint::Length(8), Constraint::Length(12)];
     let rows: Vec<Vec<String>> = app
         .usage_stats
         .iter()
-        .map(|r| vec![
-            r.model.clone(),
-            r.input.to_string(),
-            r.output.to_string(),
-            r.requests.to_string(),
-            format!("${:.4}", r.cost),
-        ])
+        .map(|r| vec![r.model.clone(), r.input.to_string(), r.output.to_string(), r.requests.to_string(), format!("${:.4}", r.cost)])
         .collect();
     let table = build_table(&header, &widths, &rows, 20);
     f.render_widget(table.block(card_block("用量明细")), cols[1]);
 
-    // ── Budget progress bars ──
     let mut blines = Vec::new();
     if app.budgets.is_empty() {
         blines.push(Line::from("  (未设置预算 — 用 lloom-cli budgets set)"));
@@ -743,7 +834,6 @@ fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(area);
 
-    // Left: conversation list
     let mut items: Vec<ListItem> = app
         .conversations
         .iter()
@@ -754,7 +844,7 @@ fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
             } else {
                 Style::default()
             };
-            ListItem::new(format!("  {} ({})", title, n)).style(s)
+            ListItem::new(format!("  {title} ({n})")).style(s)
         })
         .collect();
     if items.is_empty() {
@@ -765,7 +855,6 @@ fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
     let list = List::new(items).block(card_block("会话"));
     f.render_widget(list, cols[0]);
 
-    // Right: messages + input
     let right = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(3)])
@@ -810,45 +899,48 @@ fn render_models(f: &mut Frame, area: Rect, app: &mut App) {
         .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(2)])
         .split(area);
 
-    let hint = "↓↑ 选择 · d 删除 · e 切换任务类型";
-    f.render_widget(Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)), cols[0]);
+    f.render_widget(
+        Paragraph::new("↓↑ 选择 · d 删除 · e 切换任务类型").style(Style::default().fg(Color::DarkGray)),
+        cols[0],
+    );
 
     let header = ["名称", "提供商", "LiteLLM 模型", "输入 $/1K", "输出 $/1K"];
     let widths = [Constraint::Length(20), Constraint::Length(12), Constraint::Length(30), Constraint::Length(12), Constraint::Length(12)];
     let rows: Vec<Vec<String>> = app
         .model_list
         .iter()
-        .map(|m| vec![
-            m.name.clone(),
-            m.provider.clone(),
-            m.litellm_model.clone(),
-            format!("{:.6}", m.input_cost_per_token * 1000.0),
-            format!("{:.6}", m.output_cost_per_token * 1000.0),
-        ])
+        .map(|m| {
+            vec![
+                m["name"].as_str().unwrap_or("").to_string(),
+                m["provider"].as_str().unwrap_or("").to_string(),
+                m["litellm_model"].as_str().unwrap_or("").to_string(),
+                format!("{:.6}", m["input_cost_per_token"].as_f64().unwrap_or(0.0) * 1000.0),
+                format!("{:.6}", m["output_cost_per_token"].as_f64().unwrap_or(0.0) * 1000.0),
+            ]
+        })
         .collect();
 
     let header_cells: Vec<ratatui::widgets::Cell> = header
         .iter()
-        .map(|h| ratatui::widgets::Cell::from(Span::styled(*h, Style::default().add_modifier(Modifier::BOLD))))
+        .map(|h| ratatui::widgets::Cell::from(Span::styled(h.to_string(), Style::default().add_modifier(Modifier::BOLD))))
         .collect();
     let header_row = ratatui::widgets::Row::new(header_cells);
-    let t = Table::new(
-        rows.into_iter().map(|r| ratatui::widgets::Row::new(r)),
-        widths,
-    )
-    .header(header_row)
-    .block(card_block("模型管理"))
-    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-    .highlight_symbol("> ");
+    let table = Table::new(rows.into_iter().map(ratatui::widgets::Row::new), widths)
+        .header(header_row)
+        .block(card_block("模型管理"))
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("> ");
     let mut state = app.table_state.clone();
     if !app.model_list.is_empty() && state.selected().is_none() {
         state.select(Some(0));
     }
-    f.render_stateful_widget(t, cols[1], &mut state);
+    f.render_stateful_widget(table, cols[1], &mut state);
     app.table_state = state;
 
-    let footer = format!("共 {} 个模型", app.model_list.len());
-    f.render_widget(Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)), cols[2]);
+    f.render_widget(
+        Paragraph::new(format!("共 {} 个模型", app.model_list.len())).style(Style::default().fg(Color::DarkGray)),
+        cols[2],
+    );
 }
 
 fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
@@ -859,32 +951,28 @@ fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
 
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled("环境检查", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
-    for (name, status, healthy) in &app.services {
-        let color = if *healthy { Color::Green } else { Color::Red };
+    for s in &app.services {
+        let color = if s.healthy { Color::Green } else { Color::Red };
         lines.push(Line::from(vec![
-            Span::styled(format!("  {:<12}", name), Style::default().fg(Color::White)),
-            Span::styled(status.clone(), Style::default().fg(color)),
+            Span::styled(format!("  {:<12}", s.name), Style::default().fg(Color::White)),
+            Span::styled(s.status.clone(), Style::default().fg(color)),
         ]));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("API 密钥 (↑↓ 选择 · Enter 保存)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
-    for (section, items) in ENV_SCHEMA {
-        lines.push(Line::from(Span::styled(format!("  {section}"), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
-        for (key, desc) in items {
-            let val = app.env_values.get(*key).cloned().unwrap_or_default();
-            let is_set = !val.trim().is_empty();
-            let marker = if app.env_cursor_key.as_deref() == Some(*key) { "▶" } else { " " };
-            let dot = if is_set { "✓" } else { "○" };
-            let dot_color = if is_set { Color::Green } else { Color::Gray };
-            let shown = if is_set { "***配置***".to_string() } else { String::new() };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{marker} "), Style::default().fg(Color::Yellow)),
-                Span::styled(format!("{dot} "), Style::default().fg(dot_color)),
-                Span::styled(format!("{key:<20}"), Style::default().fg(Color::White)),
-                Span::styled(format!("{:<16}", desc), Style::default().fg(Color::Gray)),
-                Span::styled(if app.env_cursor_key.as_deref() == Some(*key) { app.env_input.clone() } else { shown }, Style::default().fg(Color::Green)),
-            ]));
-        }
+    for (i, (key, val, section)) in app.env_values.iter().enumerate() {
+        let marker = if i == app.env_cursor { "▶" } else { " " };
+        let is_set = !val.trim().is_empty();
+        let dot = if is_set { "✓" } else { "○" };
+        let dot_color = if is_set { Color::Green } else { Color::Gray };
+        let shown = if i == app.env_cursor { app.env_input.clone() } else if is_set { "***配置***".to_string() } else { String::new() };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} "), Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{dot} "), Style::default().fg(dot_color)),
+            Span::styled(format!("{key:<20}"), Style::default().fg(Color::White)),
+            Span::styled(format!("[{section}]"), Style::default().fg(Color::Gray)),
+            Span::styled(format!("  {shown}"), Style::default().fg(Color::Green)),
+        ]));
     }
     if !app.env_msg.is_empty() {
         lines.push(Line::from(Span::styled(format!("  {}", app.env_msg), Style::default().fg(Color::Green))));
@@ -903,10 +991,7 @@ fn build_table<'a>(header: &'a [&'a str], widths: &[Constraint], rows: &[Vec<Str
         .map(|h| ratatui::widgets::Cell::from(Span::styled(h.to_string(), Style::default().add_modifier(Modifier::BOLD))))
         .collect();
     let header_row = ratatui::widgets::Row::new(header_cells);
-    Table::new(
-        rows.iter().map(|r| ratatui::widgets::Row::new(r.clone())),
-        widths.to_vec(),
-    )
-    .header(header_row)
-    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+    Table::new(rows.iter().map(|r| ratatui::widgets::Row::new(r.clone())), widths.to_vec())
+        .header(header_row)
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
 }

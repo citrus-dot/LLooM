@@ -1313,7 +1313,6 @@ name = "lloom-cli"
 version = "2.1.0"
 dependencies = [
  "clap",
- "lloom-core",
  "reqwest",
  "serde_json",
  "tokio",
@@ -1350,7 +1349,6 @@ name = "lloom-tui"
 version = "2.1.0"
 dependencies = [
  "crossterm",
- "lloom-core",
  "ratatui",
  "reqwest",
  "serde_json",

@@ -9,7 +9,6 @@ name = "lloom-tui"
 path = "src/main.rs"
 
 [dependencies]
-lloom-core = { path = "../../crates/lloom-core" }
 ratatui = "0.30"
 crossterm = "0.29"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
