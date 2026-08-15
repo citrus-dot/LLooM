@@ -6,6 +6,7 @@ import { getModels, addModel, updateModel, deleteModel, type Model } from "../ap
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
 import { useDialog } from "../ui/dialog"
+import { Button, Table, PageHeader } from "../ui"
 
 const PROVIDERS: { value: string; label: string; prefix: string }[] = [
   { value: "dashscope", label: "DashScope", prefix: "openai/" },
@@ -159,46 +160,33 @@ export function Models(props: { setStatus: (s: string) => void }) {
 
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
-      <box flexDirection="row" gap={1} paddingBottom={1}>
-        <text fg={theme.textMuted} attributes={1}>模型管理</text>
+      <PageHeader title="模型管理">
         <text fg={theme.textMuted}>·</text>
         <text fg={theme.textMuted}>{models().length} 个</text>
-        <text fg={theme.textMuted} onMouseUp={() => refresh()}>[刷新]</text>
-        <text fg={theme.primary} onMouseUp={() => add()}>[添加]</text>
-      </box>
+        <Button variant="ghost" onClick={() => refresh()}>刷新</Button>
+        <Button variant="primary" onClick={() => add()}>添加模型</Button>
+      </PageHeader>
 
-      <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left", "right"]} borderColor={theme.border} paddingTop={1} paddingBottom={1}>
-        <box flexDirection="row" paddingLeft={3} paddingRight={3} paddingBottom={1}>
-          <text fg={theme.textMuted} attributes={1} width="30%">名称</text>
-          <text fg={theme.textMuted} attributes={1} width="15%">提供商</text>
-          <text fg={theme.textMuted} attributes={1} width="40%">LiteLLM 模型</text>
-          <text fg={theme.textMuted} attributes={1}>操作</text>
-        </box>
-        {models().length === 0 && <text fg={theme.textDim} paddingLeft={3}>  暂无模型</text>}
-        {models().map((m, i) => {
-          const isSel = i === selIdx()
-          const isHover = i === hoverIdx()
-          return (
-            <box
-              flexDirection="row"
-              backgroundColor={isSel ? theme.primary : isHover ? theme.backgroundElement : theme.backgroundPanel}
-              paddingLeft={3}
-              paddingRight={3}
-              onMouseOver={() => setHoverIdx(i)}
-              onMouseOut={() => setHoverIdx(null)}
-              onMouseDown={() => setSelIdx(i)}
-              onMouseUp={(evt: { button?: number }) => {
-                if (evt?.button === 2) modelMenu(m)
-              }}
-            >
-              <text fg={isSel ? theme.background : theme.text} width="30%" attributes={isSel ? 1 : 0}>{m.name}</text>
-              <text fg={isSel ? theme.background : theme.textMuted} width="15%">{m.provider}</text>
-              <text fg={isSel ? theme.background : theme.text} width="40%">{m.litellm_model}</text>
-              <text fg={isSel ? theme.background : theme.error} onMouseUp={(e: { button?: number }) => { if (e?.button !== 2) del(m.name) }}>[删除]</text>
-            </box>
-          )
-        })}
-      </box>
+      <Table
+        columns={[
+          { title: "名称", width: "30%", render: (m) => <text fg={theme.text}>{m.name}</text> },
+          { title: "提供商", width: "15%", render: (m) => <text fg={theme.textMuted}>{m.provider}</text> },
+          { title: "LiteLLM 模型", width: "40%", render: (m) => <text fg={theme.text}>{m.litellm_model}</text> },
+          {
+            title: "操作",
+            render: (m) => (
+              <Button variant="danger" onClick={() => del(m.name)}>删除</Button>
+            ),
+          },
+        ]}
+        rows={models()}
+        selectedIndex={selIdx()}
+        hoverIndex={hoverIdx()}
+        onHover={setHoverIdx}
+        onSelect={setSelIdx}
+        onRowUp={(m, evt) => { if (evt?.button === 2) modelMenu(m) }}
+        emptyText="暂无模型"
+      />
 
       <box paddingTop={1}>
         <text fg={theme.textDim}>  点击选中 · 右键行弹出编辑/删除菜单 · [添加] 注册模型</text>

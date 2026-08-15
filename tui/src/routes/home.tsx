@@ -5,6 +5,7 @@ import { theme } from "../theme"
 import { getServicesStatus, getStats, type ServicesStatus } from "../api"
 import { setRoute, setActiveSessionId, setInitialQuery } from "../app"
 import type { TextareaRenderable } from "@opentui/core"
+import { StatCard } from "../ui"
 
 const LOGO = [
   " ██╗     ██╗      ██████╗  ██████╗ ███╗   ███╗",
@@ -114,16 +115,9 @@ export function Home(props: { setStatus: (s: string) => void }) {
         </Show>
       </box>
       <box flexDirection="row" gap={2} flexWrap="wrap" justifyContent="center" paddingTop={1}>
-        <text fg={theme.textMuted}>累计花费</text>
-        <text fg={theme.warning} attributes={1}>${(stats()?.total_spend ?? 0).toFixed(6)}</text>
-        <text fg={theme.textMuted}>·</text>
-        <text fg={theme.textMuted}>模型</text>
-        <text fg={theme.text} attributes={1}>{stats()?.model_count ?? 0}</text>
-        <text fg={theme.textMuted}>·</text>
-        <text fg={theme.textMuted}>语义缓存</text>
-        <text fg={stats()?.cache_enabled ? theme.success : theme.textMuted}>
-          {stats()?.cache_enabled ? "启用" : "未启用"}
-        </text>
+        <StatCard value={`$${(stats()?.total_spend ?? 0).toFixed(6)}`} label="累计花费" tone="warning" />
+        <StatCard value={String(stats()?.model_count ?? 0)} label="模型" />
+        <StatCard value={stats()?.cache_enabled ? "启用" : "未启用"} label="语义缓存" tone={stats()?.cache_enabled ? "success" : "text"} />
       </box>
 
       <box height={1} />

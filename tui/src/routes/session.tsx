@@ -1,7 +1,7 @@
 // Session route — OpenCode-style chat: scrollbox + user/assistant message blocks.
 
 import { createSignal, createMemo, createEffect, onMount, For, Show } from "solid-js"
-import { theme, syntax } from "../theme"
+import { theme } from "../theme"
 import type { TextareaRenderable } from "@opentui/core"
 import { useBindings } from "@opentui/keymap/solid"
 import {
@@ -16,6 +16,7 @@ import {
 } from "../api"
 import { activeSessionId, setActiveSessionId, setRoute, initialQuery, setInitialQuery, dialogOpen } from "../app"
 import { useDialog } from "../ui/dialog"
+import { UserBubble, AssistantBubble } from "../ui"
 
 interface DisplayMsg extends ChatMessage {
   detail?: string
@@ -304,15 +305,13 @@ export function Session(props: { setStatus: (s: string) => void }) {
             {(m, i) => (
               <Show when={m.role === "user" || m.role === "assistant"}>
                 <box
-                  border={["left"]}
-                  borderColor={m.role === "user" ? theme.primary : theme.secondary}
                   marginTop={i() === 0 ? 0 : 1}
                   flexShrink={0}
                 >
                   {m.role === "user" ? (
-                    <UserMessage msg={m} />
+                    <UserBubble content={m.content} />
                   ) : (
-                    <AssistantMessage msg={m} />
+                    <AssistantBubble content={m.content} detail={m.detail} />
                   )}
                 </box>
               </Show>
@@ -365,47 +364,3 @@ export function Session(props: { setStatus: (s: string) => void }) {
   )
 }
 
-// ── OpenCode-style message blocks ──
-
-function UserMessage(props: { msg: DisplayMsg }) {
-  const [hover, setHover] = createSignal(false)
-  return (
-    <box
-      paddingTop={1}
-      paddingBottom={1}
-      paddingLeft={2}
-      backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
-      flexShrink={0}
-      onMouseOver={() => setHover(true)}
-      onMouseOut={() => setHover(false)}
-    >
-      <text fg={theme.textMuted} attributes={1}>你</text>
-      <text></text>
-      <text fg={theme.text}>{props.msg.content}</text>
-    </box>
-  )
-}
-
-function AssistantMessage(props: { msg: DisplayMsg }) {
-  return (
-    <>
-      <box paddingLeft={3} paddingTop={1} paddingBottom={1} flexShrink={0}>
-        <markdown
-          content={props.msg.content.trim()}
-          streaming={true}
-          syntaxStyle={syntax}
-          fg={theme.text}
-        />
-      </box>
-      <box paddingLeft={3}>
-        <text>
-          <span style={{ fg: theme.secondary }}>▣ </span>
-          <span style={{ fg: theme.text }}>LLooM</span>
-          <Show when={props.msg.detail}>
-            <span style={{ fg: theme.textMuted }}> · {props.msg.detail}</span>
-          </Show>
-        </text>
-      </box>
-    </>
-  )
-}

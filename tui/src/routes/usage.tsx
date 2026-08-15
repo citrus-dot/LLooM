@@ -6,6 +6,7 @@ import { getStats, getUsage, getBudgets, setBudget, checkBudget, getModels, type
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
 import { useDialog } from "../ui/dialog"
+import { Button, StatCard, Table } from "../ui"
 
 export function Usage(props: { setStatus: (s: string) => void }) {
   const [rows, setRows] = createSignal<UsageRow[]>([])
@@ -121,83 +122,50 @@ export function Usage(props: { setStatus: (s: string) => void }) {
     <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
       {/* Stat cards */}
       <box flexDirection="row" gap={2} paddingBottom={1}>
-        <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left"]} borderColor={theme.primary} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-          <text fg={theme.primary} attributes={1}>${spend().toFixed(4)}</text>
-          <text fg={theme.textMuted}>累计花费</text>
-        </box>
-        <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left"]} borderColor={theme.success} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-          <text fg={theme.success} attributes={1}>{modelCount()}</text>
-          <text fg={theme.textMuted}>可用模型</text>
-        </box>
-        <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left"]} borderColor={theme.secondary} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-          <text fg={theme.secondary} attributes={1}>{budgets().length}</text>
-          <text fg={theme.textMuted}>预算数</text>
-        </box>
+        <StatCard value={`$${spend().toFixed(4)}`} label="累计花费" tone="primary" />
+        <StatCard value={String(modelCount())} label="可用模型" tone="success" />
+        <StatCard value={String(budgets().length)} label="预算数" tone="secondary" />
       </box>
 
       {/* Usage table */}
-      <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left", "right"]} borderColor={theme.border} paddingTop={1} paddingBottom={1}>
-        <box flexDirection="row" paddingLeft={3} paddingRight={3} paddingBottom={1}>
-          <text fg={theme.textMuted} attributes={1} width="30%">模型</text>
-          <text fg={theme.textMuted} attributes={1} width="15%">输入</text>
-          <text fg={theme.textMuted} attributes={1} width="15%">输出</text>
-          <text fg={theme.textMuted} attributes={1} width="10%">请求</text>
-          <text fg={theme.textMuted} attributes={1} width="12%">缓存</text>
-          <text fg={theme.textMuted} attributes={1}>花费</text>
-        </box>
-        {rows().length === 0 && <text fg={theme.textDim} paddingLeft={3}>  暂无用量数据</text>}
-        {rows().map((r, i) => {
-          const isSel = i === selIdx()
-          const isHover = i === hoverIdx()
-          return (
-            <box
-              flexDirection="row"
-              backgroundColor={isSel ? theme.primary : isHover ? theme.backgroundElement : theme.backgroundPanel}
-              paddingLeft={3}
-              paddingRight={3}
-              onMouseOver={() => setHoverIdx(i)}
-              onMouseOut={() => setHoverIdx(null)}
-              onMouseDown={() => setSelIdx(i)}
-            >
-              <text fg={isSel ? theme.background : theme.text} width="30%" attributes={isSel ? 1 : 0}>{r.model_name}</text>
-              <text fg={isSel ? theme.background : theme.textMuted} width="15%">{r.total_input_tokens}</text>
-              <text fg={isSel ? theme.background : theme.textMuted} width="15%">{r.total_output_tokens}</text>
-              <text fg={isSel ? theme.background : theme.textMuted} width="10%">{r.request_count}</text>
-              <text fg={isSel ? theme.background : theme.textMuted} width="12%">{r.cache_hits ?? 0}</text>
-              <text fg={isSel ? theme.background : theme.warning}>${r.total_cost.toFixed(4)}</text>
-            </box>
-          )
-        })}
-      </box>
+      <Table
+        columns={[
+          { title: "模型", width: "30%", render: (r) => <text fg={theme.text}>{r.model_name}</text> },
+          { title: "输入", width: "15%", render: (r) => <text fg={theme.textMuted}>{r.total_input_tokens}</text> },
+          { title: "输出", width: "15%", render: (r) => <text fg={theme.textMuted}>{r.total_output_tokens}</text> },
+          { title: "请求", width: "10%", render: (r) => <text fg={theme.textMuted}>{r.request_count}</text> },
+          { title: "缓存", width: "12%", render: (r) => <text fg={theme.textMuted}>{r.cache_hits ?? 0}</text> },
+          { title: "花费", render: (r) => <text fg={theme.warning}>${r.total_cost.toFixed(4)}</text> },
+        ]}
+        rows={rows()}
+        selectedIndex={selIdx()}
+        hoverIndex={hoverIdx()}
+        onHover={setHoverIdx}
+        onSelect={setSelIdx}
+        emptyText="暂无用量数据"
+      />
 
       {/* Model pricing */}
       <box flexDirection="column" paddingTop={1}>
         <text fg={theme.textMuted} attributes={1}>模型定价 ($/1K tokens)</text>
-        <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left", "right"]} borderColor={theme.border} paddingTop={1} paddingBottom={1}>
-          <box flexDirection="row" paddingLeft={3} paddingRight={3} paddingBottom={1}>
-            <text fg={theme.textMuted} attributes={1} width="30%">模型</text>
-            <text fg={theme.textMuted} attributes={1} width="15%">提供商</text>
-            <text fg={theme.textMuted} attributes={1} width="25%">输入</text>
-            <text fg={theme.textMuted} attributes={1}>输出</text>
-          </box>
-          {models().length === 0 && <text fg={theme.textDim} paddingLeft={3}>  暂无模型定价</text>}
-          {models().map((m) => (
-            <box flexDirection="row" paddingLeft={3} paddingRight={3}>
-              <text fg={theme.text} width="30%">{m.name}</text>
-              <text fg={theme.textMuted} width="15%">{m.provider}</text>
-              <text fg={theme.textMuted} width="25%">${(m.input_cost_per_token * 1000).toFixed(6)}</text>
-              <text fg={theme.textMuted}>${(m.output_cost_per_token * 1000).toFixed(6)}</text>
-            </box>
-          ))}
-        </box>
+        <Table
+          columns={[
+            { title: "模型", width: "30%", render: (m) => <text fg={theme.text}>{m.name}</text> },
+            { title: "提供商", width: "15%", render: (m) => <text fg={theme.textMuted}>{m.provider}</text> },
+            { title: "输入", width: "25%", render: (m) => <text fg={theme.textMuted}>${(m.input_cost_per_token * 1000).toFixed(6)}</text> },
+            { title: "输出", render: (m) => <text fg={theme.textMuted}>${(m.output_cost_per_token * 1000).toFixed(6)}</text> },
+          ]}
+          rows={models()}
+          emptyText="暂无模型定价"
+        />
       </box>
 
       {/* Budgets */}
       <box flexDirection="column" paddingTop={1}>
         <box flexDirection="row" gap={1}>
           <text fg={theme.textMuted} attributes={1}>预算</text>
-          <text fg={theme.primary} onMouseUp={() => addBudget()}>[设置]</text>
-          <text fg={theme.textMuted} onMouseUp={() => loadBudgets()}>[刷新]</text>
+          <Button variant="primary" onClick={() => addBudget()}>设置</Button>
+          <Button variant="ghost" onClick={() => loadBudgets()}>刷新</Button>
         </box>
         {budgets().length === 0 && <text fg={theme.textDim}>  未设置预算（点 [设置] 或 lloom-cli budgets set）</text>}
         {budgets().map((b) => {

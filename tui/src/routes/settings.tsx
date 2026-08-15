@@ -2,10 +2,12 @@
 
 import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
-import { readEnv, writeEnv, smartRestart, getServicesStatus, getServiceLogs, restartService, stopService, startService } from "../api"
+import { readEnv, writeEnv, smartRestart, getServiceLogs, restartService, stopService, startService } from "../api"
 import { dialogOpen } from "../app"
 import { useDialog } from "../ui/dialog"
 import { useBindings } from "@opentui/keymap/solid"
+import { healthServices, pollHealth } from "../health"
+import { Table } from "../ui"
 
 const ENV_SCHEMA: { title: string; items: { key: string; label: string }[] }[] = [
   { title: "DashScope", items: [{ key: "DASHSCOPE_API_KEY", label: "API Key" }, { key: "DASHSCOPE_API_BASE", label: "API Base" }] },
@@ -19,7 +21,7 @@ const SERVICE_KEYS: Record<string, string> = { "Ollama": "ollama", "AI Service":
 
 export function Settings(props: { setStatus: (s: string) => void }) {
   const [env, setEnv] = createSignal<Record<string, string>>({})
-  const [services, setServices] = createSignal<{ name: string; status: string; healthy: boolean }[]>([])
+  const services = healthServices
   const [selIdx, setSelIdx] = createSignal(0)
   const [hoverIdx, setHoverIdx] = createSignal<number | null>(null)
   const dialog = useDialog()
@@ -64,7 +66,7 @@ export function Settings(props: { setStatus: (s: string) => void }) {
       } else {
         props.setStatus(`重启失败: ${res.errors.join("; ")}`)
       }
-      await refreshServices()
+      await pollHealth()
     } catch (e) {
       props.setStatus(`智能重启失败: ${e}`)
     }
@@ -103,7 +105,7 @@ export function Settings(props: { setStatus: (s: string) => void }) {
     } catch (e) {
       props.setStatus(`重启失败: ${e}`)
     }
-    await refreshServices()
+    await pollHealth()
   }
 
   const doStop = async (displayName: string) => {
@@ -115,7 +117,7 @@ export function Settings(props: { setStatus: (s: string) => void }) {
     } catch (e) {
       props.setStatus(`停止失败: ${e}`)
     }
-    await refreshServices()
+    await pollHealth()
   }
 
   const doStart = async (displayName: string) => {
@@ -127,17 +129,11 @@ export function Settings(props: { setStatus: (s: string) => void }) {
     } catch (e) {
       props.setStatus(`启动失败: ${e}`)
     }
-    await refreshServices()
-  }
-
-  const refreshServices = async () => {
-    try {
-      setServices((await getServicesStatus()).services)
-    } catch {}
+    await pollHealth()
   }
 
   const serviceMenu = (displayName: string) => {
-    const svc = services().find((s) => s.name === displayName)
+    const svc = services()?.find((s) => s.name === displayName)
     const healthy = svc?.healthy ?? false
     dialog.menu(displayName, {
       items: [
@@ -159,9 +155,6 @@ export function Settings(props: { setStatus: (s: string) => void }) {
     } catch (e) {
       props.setStatus(`无法连接: ${e}`)
     }
-    try {
-      setServices((await getServicesStatus()).services)
-    } catch {}
   })
 
   useBindings(() => ({
@@ -201,7 +194,7 @@ export function Settings(props: { setStatus: (s: string) => void }) {
         border={["right"]} borderColor={theme.border} paddingLeft={2} paddingRight={2} paddingTop={1}>
         <text fg={theme.textMuted} attributes={1}>服务状态</text>
         <box height={1} />
-        {services().map((s) => (
+        {(services() ?? []).map((s) => (
           <box flexDirection="column">
             <box
               flexDirection="row"
@@ -223,36 +216,43 @@ export function Settings(props: { setStatus: (s: string) => void }) {
         <text fg={theme.textMuted} attributes={1}>API 密钥配置</text>
         <box height={1} />
 
-        <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left", "right"]} borderColor={theme.border} paddingTop={1} paddingBottom={1}>
-          {flatKeys().map((key, i) => {
-            const section = sectionOf(key)
-            const label = ENV_SCHEMA.find((s) => s.items.some((it) => it.key === key))?.items.find((it) => it.key === key)?.label ?? key
-            const val = env()[key] ?? ""
-            const isSet = val.trim().length > 0
-            const isSel = i === selIdx()
-            const isHover = i === hoverIdx()
-            return (
-              <box
-                flexDirection="row"
-                backgroundColor={isSel ? theme.primary : isHover ? theme.backgroundElement : theme.backgroundPanel}
-                paddingLeft={3}
-                paddingRight={3}
-                onMouseOver={() => setHoverIdx(i)}
-                onMouseOut={() => setHoverIdx(null)}
-                onMouseDown={() => setSelIdx(i)}
-                onMouseUp={() => editKey(key)}
-              >
-                <text fg={isSel ? theme.background : isSet ? theme.success : theme.textMuted} width={2}>{isSet ? "✓" : "○"}</text>
-                <text fg={isSel ? theme.background : theme.text} width="25%" attributes={isSel ? 1 : 0}>{label}</text>
-                <text fg={isSel ? theme.background : theme.textMuted} width="20%">{key}</text>
-                <text fg={theme.textDim} width="15%">[{section}]</text>
-                <text fg={isSel ? theme.background : theme.textDim}>
-                  {isSet ? "•••••• [编辑]" : "[设置]"}
-                </text>
-              </box>
-            )
-          })}
-        </box>
+        <Table
+          columns={[
+            {
+              title: "状态",
+              width: "6%",
+              render: (key) => {
+                const isSet = (env()[key] ?? "").trim().length > 0
+                return <text fg={isSet ? theme.success : theme.textMuted}>{isSet ? "✓" : "○"}</text>
+              },
+            },
+            {
+              title: "配置项",
+              width: "25%",
+              render: (key) => {
+                const label = ENV_SCHEMA.find((s) => s.items.some((it) => it.key === key))?.items.find((it) => it.key === key)?.label ?? key
+                return <text fg={theme.text}>{label}</text>
+              },
+            },
+            { title: "Key", width: "20%", render: (key) => <text fg={theme.textMuted}>{key}</text> },
+            { title: "分组", width: "15%", render: (key) => <text fg={theme.textDim}>{sectionOf(key)}</text> },
+            {
+              title: "值",
+              render: (key) => {
+                const isSet = (env()[key] ?? "").trim().length > 0
+                return <text fg={theme.textDim}>{isSet ? "••••••" : "(空)"}</text>
+              },
+            },
+          ]}
+          rows={flatKeys()}
+          rowKey={(k) => k}
+          selectedIndex={selIdx()}
+          hoverIndex={hoverIdx()}
+          onHover={setHoverIdx}
+          onSelect={setSelIdx}
+          onRowUp={(key) => editKey(key)}
+          emptyText="暂无配置"
+        />
 
         <box paddingTop={1}>
           <text fg={theme.textDim}>  点击密钥行或按 Enter 弹出编辑框，⏎ 保存 · esc 取消 · ↑↓ 选择</text>

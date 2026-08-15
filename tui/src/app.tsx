@@ -1,7 +1,7 @@
 // LLooM TUI app — OpenCode-style layout.
 // Top tab bar, main content area, bottom status.
 
-import { createSignal, Show } from "solid-js"
+import { createSignal, onMount, onCleanup, Show } from "solid-js"
 import { theme } from "./theme"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
@@ -10,6 +10,7 @@ import { Usage } from "./routes/usage"
 import { Settings } from "./routes/settings"
 import { DialogProvider } from "./ui/dialog"
 import { useBindings } from "@opentui/keymap/solid"
+import { startHealthPolling, serverConnected } from "./health"
 
 export type Route = "home" | "session" | "models" | "usage" | "settings"
 
@@ -41,6 +42,12 @@ function quit() {
 
 export function App() {
   const [status, setStatus] = createSignal("")
+
+  // Global health polling runs for the whole app regardless of the active page.
+  onMount(() => {
+    const dispose = startHealthPolling(30000)
+    onCleanup(dispose)
+  })
 
   // Global keys via keymap: Tab cycles pages, Ctrl+C quits.
   useBindings(() => ({
@@ -115,8 +122,10 @@ export function App() {
         borderColor={theme.border}
         backgroundColor={theme.backgroundPanel}
       >
-        <text fg={theme.textMuted}>
-          {status() || "● LLooM · REST · 鼠标点击 · Tab 切换 · ↑↓/Enter 导航"}
+        <text fg={serverConnected() ? theme.textMuted : theme.error}>
+          {serverConnected()
+            ? status() || "● LLooM · REST · 鼠标点击 · Tab 切换 · ↑↓/Enter 导航"
+            : "● 服务器连接断开 — 请确认 lloom-server (:7861) 已启动"}
         </text>
       </box>
       </box>

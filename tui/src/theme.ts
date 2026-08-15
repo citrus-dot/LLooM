@@ -1,7 +1,7 @@
 // LLooM TUI theme — tokyonight-inspired (from OpenCode).
 // Colors are RGBA instances from @opentui/core.
 
-import { RGBA, SyntaxStyle } from "@opentui/core"
+import { RGBA, SyntaxStyle, type BorderStyle } from "@opentui/core"
 
 export interface Theme {
   background: RGBA
@@ -42,5 +42,26 @@ export const theme: Theme = {
   info: RGBA.fromInts(0x86, 0xe1, 0xfc),
 }
 
+// ── Design tokens ──
+
+/** Border style used across the UI (rounded corners). */
+export const borderStyle: BorderStyle = "rounded"
+
+/** Spacing scale (cells). */
+export const spacing = {
+  xs: 1,
+  sm: 2,
+  md: 3,
+  lg: 4,
+  xl: 6,
+} as const
+
+/** Typography: 1 = bold. */
+export const textAttrs = {
+  normal: 0,
+  bold: 1,
+} as const
+
 // Default syntax style for markdown rendering (pure text chat).
 export const syntax = SyntaxStyle.create()
+
