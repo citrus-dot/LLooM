@@ -185,12 +185,24 @@ if [ "$SKIP_TAURI" = false ]; then
     fi
 
     echo "构建 Tauri 应用..."
-    # 目标平台自动选择 bundle 格式（Linux: deb/rpm/AppImage，macOS: app/dmg）
-    npx tauri build 2>&1 || {
-        echo "✗ Tauri 构建失败！"
-        echo "提示: 确保已安装 Rust 工具链（Linux 还需 webkit2gtk/gtk 等系统依赖）"
-        exit 1
-    }
+    # 按平台限定 bundle 格式（跳过不可靠的 AppImage）
+    case "$(uname)" in
+        Darwin) BUNDLES="app" ;;
+        Linux)  BUNDLES="deb,rpm" ;;
+        *)      BUNDLES="" ;;
+    esac
+    if [ -n "$BUNDLES" ]; then
+        npx tauri build --bundles "$BUNDLES" 2>&1 || {
+            echo "✗ Tauri 构建失败！"
+            echo "提示: 确保已安装 Rust 工具链（Linux 还需 webkit2gtk/gtk 等系统依赖）"
+            exit 1
+        }
+    else
+        npx tauri build 2>&1 || {
+            echo "✗ Tauri 构建失败！"
+            exit 1
+        }
+    fi
 
     echo "✓ Tauri 构建完成"
 else
@@ -205,7 +217,8 @@ echo ""
 echo "产物位置:"
 echo "  AI 微服务:  dist/ai-service/ai-service"
 echo "  Tauri 应用: tauri-app/src-tauri/target/release/bundle/"
+echo "  Rust 二进制: target/release/lloom  (workspace 根)"
 echo ""
 echo "运行方式:"
-echo "  Rust 核心 (headless): cd tauri-app/src-tauri && cargo run -- --headless"
+echo "  Rust 核心 (headless): cargo run -- --headless   (在项目根)"
 echo "  Tauri 应用:           打开 tauri-app/src-tauri/target/release/bundle/ 下的安装包"

@@ -66,13 +66,13 @@ pub fn web_port() -> u16 {
         .unwrap_or(DEFAULT_WEB_PORT)
 }
 
-/// Locate `ui/index.html` in any of the known layouts (deb / portable / repo).
+/// Locate `index.html` in any of the known layouts (deb / portable / repo).
 pub fn ui_dir() -> Option<PathBuf> {
     let candidates = [
         install_dir().join("resources/ui"),
         install_dir().join("ui"),
-        install_dir().join("../../../src-tauri/ui"),
-        PathBuf::from("tauri-app/src-tauri/ui"),
+        install_dir().join("../../webui"),
+        PathBuf::from("webui"),
         PathBuf::from("ui"),
     ];
     for c in candidates.iter() {
@@ -107,10 +107,10 @@ pub fn resolve_install_dir() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             for cand in [
-                "../../../../api/server.py",
-                "../../../api/server.py",
-                "../../api/server.py",
-                "../api/server.py",
+                "../../../../api/ai_service.py",
+                "../../../api/ai_service.py",
+                "../../api/ai_service.py",
+                "../api/ai_service.py",
             ] {
                 let p = dir.join(cand);
                 if p.exists() {
@@ -123,7 +123,7 @@ pub fn resolve_install_dir() -> PathBuf {
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.join("api/server.py").exists() {
+        if cwd.join("api/ai_service.py").exists() {
             return canonical(cwd);
         }
     }

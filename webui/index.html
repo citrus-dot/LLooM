@@ -216,7 +216,6 @@ async function restCall(cmd, args) {
     case 'delete_conversation': return jdelete('/api/conversations/' + encodeURIComponent(args.id));
     case 'open_folder': return jpost('/api/system/open-folder', { path: args.path });
     case 'open_web_interface': return jpost('/api/system/open-web', { url: args.url });
-    case 'run_cli': return jpost('/api/system/cli', { args: args.args || [] }).then(r => (r.stdout || '') + (r.stderr || ''));
     case 'chat_request':
     case 'orchestrate_request': {
       // SSE → materialize events (same shape as the Tauri command result)
@@ -1318,7 +1317,6 @@ async function loadInitWizard() {
       ${checkItem(hasAnthropic, 'Anthropic API Key', hasAnthropic ? '已配置' : '未配置')}
       <div style="margin-top:12px;display:flex;gap:6px;">
         <button class="btn btn-success btn-sm" onclick="startAll()">启动服务</button>
-        <button class="btn btn-primary btn-sm" onclick="runCliStatus()">CLI 状态检查</button>
       </div>
       <p class="muted" style="margin-top:8px;">API Key 配置请前往"设置"页面</p>
     `;
@@ -1380,19 +1378,6 @@ async function renderSettings(el) {
       </div>
       <div class="collapse-body collapsed" id="body-models">
         <pre id="models-output" style="background:#1a1d24;color:#00b894;padding:14px;border-radius:8px;font-size:12px;overflow:auto;margin-top:8px;">点击展开加载...</pre>
-      </div>
-    </div>
-    <div class="card">
-      <div class="collapse-header" onclick="toggleCollapse('cli-output')">
-        <span class="title">🖥️ CLI 诊断输出</span>
-        <span class="arrow collapsed" id="arrow-cli-output">v</span>
-      </div>
-      <div class="collapse-body collapsed" id="body-cli-output">
-        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
-          <button class="btn btn-sm btn-success" onclick="runHealthCheck()">健康检查</button>
-          <button class="btn btn-sm btn-primary" onclick="runCliStatus()">查看状态</button>
-        </div>
-        <pre id="cli-output" style="background:#1a1d24;color:#00b894;padding:14px;border-radius:8px;font-size:12px;overflow:auto;max-height:300px;white-space:pre-wrap;margin-top:8px;">点击上方按钮执行 CLI 命令...</pre>
       </div>
     </div>
   `;
@@ -1465,7 +1450,6 @@ function toggleCollapse(id) {
     if (id === 'models') loadModelsPre();
     if (id === 'pricing' || id === 'routing-table') loadPricingTable();
     if (id === 'init-wizard') loadInitWizard();
-    if (id === 'cli-output') { /* wait for button */ }
   }
 }
 
@@ -1560,19 +1544,6 @@ async function loadModelsPre() {
   } catch(e) {
     const out = document.getElementById('models-output');
     if (out) out.textContent = '错误: ' + e;
-  }
-}
-
-async function runCliStatus() {
-  const out = document.getElementById('cli-output') || document.getElementById('init-wizard-content');
-  if (out && out.id === 'cli-output') out.textContent = '执行中...';
-  try {
-    const result = await invoke('run_cli', { args: ['status'] });
-    const target = document.getElementById('cli-output');
-    if (target) target.textContent = result || '无输出';
-  } catch(e) {
-    const target = document.getElementById('cli-output');
-    if (target) target.textContent = '错误: ' + e;
   }
 }
 

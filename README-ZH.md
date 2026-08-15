@@ -91,7 +91,7 @@ cp .env.example .env
 # 在 .env 中填入你的 API 密钥
 
 # 启动 Rust 服务器（无头模式，WebUI 在 :7861）
-cd tauri-app/src-tauri && cargo run -- --headless
+cargo run -- --headless
 
 # 或启动 Tauri GUI（也会启动同一个 Rust 服务器）
 cd tauri-app && npx tauri dev
@@ -187,25 +187,20 @@ bash scripts/smoke_test.sh
 
 ```
 LLooM/
-├── tauri-app/src-tauri/src/      # Rust 核心 + 服务器
-│   ├── main.rs                   # 入口：GUI/headless + 系统托盘
-│   ├── server.rs                 # axum REST 服务器
-│   ├── db.rs                     # SQLite 层
-│   ├── router.rs                 # 任务分类 + 模型选择
-│   ├── security.rs               # 正则安全层（PII/越狱/领域）
-│   ├── ai_client.rs              # AI 微服务异步客户端
-│   ├── processes.rs              # 子进程管理
-│   ├── conversations.rs          # 对话文件 CRUD
-│   ├── models.rs                 # 类型定义
-│   ├── config.rs                 # 路径 / 端口 / 环境
-│   └── error.rs                  # 统一错误类型
-├── tauri-app/src-tauri/ui/       # WebUI 前端（index.html SPA）
-├── api/
-│   └── ai_service.py             # Python AI 微服务（litellm 封装）
+├── Cargo.toml                    # Rust workspace 根
+├── crates/lloom-core/            # 业务核心 lib（UI 无关）
+│   └── src/                      # server.rs, db.rs, router.rs, security.rs,
+│                                 # ai_client.rs, processes.rs, conversations.rs,
+│                                 # models.rs, config.rs, error.rs
+├── webui/index.html              # WebUI 前端（SPA，独立于 Tauri）
+├── tauri-app/src-tauri/          # 桌面壳（依赖 lloom-core）
+│   └── src/main.rs               # 窗口 + 系统托盘 + 启动核心
+├── api/ai_service.py             # Python AI 微服务（litellm 封装）
 ├── scripts/
-│   ├── smoke_test.sh             # 19 项冒烟测试
-│   ├── build.sh                  # 构建流水线
-│   └── download_ollama.sh        # Ollama 二进制下载
+│   ├── build.sh                  # 跨平台构建（含系统依赖检测）
+│   ├── download_ollama.sh        # 跨平台 Ollama 下载
+│   └── smoke_test.sh             # 19 项冒烟测试
+├── ai_service.spec               # PyInstaller spec（AI 微服务）
 ├── ARCHITECTURE.md               # 分层详解 + REST 参考
 ├── pyproject.toml                # Python 项目配置（AI 服务）
 └── .env.example                  # 环境模板

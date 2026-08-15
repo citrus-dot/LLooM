@@ -4,7 +4,7 @@
   "version": "2.1.0",
   "identifier": "com.lloom.desktop",
   "build": {
-    "frontendDist": "ui"
+    "frontendDist": "../../webui"
   },
   "app": {
     "withGlobalTauri": true,
@@ -41,8 +41,7 @@
     "resources": [
       "resources/ai-service",
       "resources/ollama",
-      "resources/.env.example",
-      "ui"
+      "resources/.env.example"
     ]
   }
 }

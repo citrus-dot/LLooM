@@ -211,20 +211,36 @@ bash scripts/smoke_test.sh
 ## 目录结构
 
 ```
-tauri-app/src-tauri/src/
-├── main.rs          # 入口：GUI/headless 分支 + 核心启动 + 系统托盘
-├── lib.rs           # 模块声明
-├── server.rs        # axum REST 服务器
-├── db.rs            # SQLite 层
-├── router.rs        # 任务分类 + 模型选择
-├── security.rs      # 正则安全层
-├── ai_client.rs     # AI 微服务客户端
-├── processes.rs     # 子进程管理
-├── conversations.rs # 对话 CRUD
-├── models.rs        # 类型定义
-├── config.rs        # 路径/端口配置
-└── error.rs         # 统一错误
-
-api/
-└── ai_service.py    # Python AI 微服务（litellm 封装）
+LLooM/
+├── Cargo.toml                    # Rust workspace 根
+├── crates/lloom-core/            # 业务核心 lib（UI 无关）
+│   └── src/                      # 11 个模块
+│       ├── lib.rs                # 模块声明
+│       ├── server.rs             # axum REST 服务器
+│       ├── db.rs                 # SQLite 层
+│       ├── router.rs             # 任务分类 + 模型选择
+│       ├── security.rs           # 正则安全层
+│       ├── ai_client.rs          # AI 微服务客户端
+│       ├── processes.rs          # 子进程管理
+│       ├── conversations.rs      # 对话 CRUD
+│       ├── models.rs             # 类型定义
+│       ├── config.rs             # 路径/端口配置
+│       └── error.rs              # 统一错误
+├── webui/
+│   └── index.html                # WebUI 前端（SPA，独立于 Tauri）
+├── tauri-app/src-tauri/          # 桌面壳（依赖 lloom-core）
+│   ├── src/main.rs               # 窗口 + 系统托盘 + 启动核心
+│   ├── resources/                # 构建产物（AI 服务、Ollama）—— 不提交
+│   └── tauri.conf.json           # Tauri 打包配置
+├── api/
+│   └── ai_service.py             # Python AI 微服务（litellm 封装，唯一 Python）
+├── scripts/
+│   ├── build.sh                  # 跨平台构建（含系统依赖检测）
+│   ├── download_ollama.sh        # 跨平台 Ollama 下载
+│   └── smoke_test.sh             # 19 项冒烟测试
+├── ai_service.spec               # PyInstaller spec（AI 微服务）
+├── pyproject.toml                # AI 服务 Python 依赖
+├── ARCHITECTURE.md               # 本文件
+├── README.md / README-ZH.md      # 用户文档
+└── .env.example                  # 环境变量模板
 ```

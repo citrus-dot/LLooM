@@ -524,32 +524,6 @@ async fn open_web(Json(body): Json<Value>) -> Json<Value> {
     Json(json!({ "ok": true }))
 }
 
-async fn run_cli(Json(body): Json<Value>) -> Json<Value> {
-    let args: Vec<String> = body
-        .get("args")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-    let install_dir = config::install_dir();
-    // Blocking child-process wait must run off the async executor.
-    let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("python3")
-            .arg("cli/lloom.py")
-            .args(&args)
-            .current_dir(install_dir)
-            .output()
-    })
-    .await
-    .unwrap_or(Err(std::io::Error::other("task join failed")));
-    match output {
-        Ok(o) => Json(json!({
-            "stdout": String::from_utf8_lossy(&o.stdout),
-            "stderr": String::from_utf8_lossy(&o.stderr),
-        })),
-        Err(e) => Json(json!({ "error": e.to_string() })),
-    }
-}
-
 // ── Router ──
 
 pub fn build_router(state: AppState) -> Router {
@@ -584,7 +558,6 @@ pub fn build_router(state: AppState) -> Router {
         // System
         .route("/api/system/open-folder", post(open_folder))
         .route("/api/system/open-web", post(open_web))
-        .route("/api/system/cli", post(run_cli))
         .with_state(state)
 }
 

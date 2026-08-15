@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/lloom-core", "tauri-app/src-tauri"]
+resolver = "2"

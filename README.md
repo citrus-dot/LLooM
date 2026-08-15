@@ -91,7 +91,7 @@ cp .env.example .env
 # Edit .env with your API keys
 
 # Run the Rust server (headless, Web UI on :7861)
-cd tauri-app/src-tauri && cargo run -- --headless
+cargo run -- --headless
 
 # Or start the Tauri GUI (also starts the same Rust server)
 cd tauri-app && npx tauri dev
@@ -188,25 +188,20 @@ All configuration is via environment variables in `.env`:
 
 ```
 LLooM/
-├── tauri-app/src-tauri/src/      # Rust core + server
-│   ├── main.rs                   # Entry: GUI/headless + system tray
-│   ├── server.rs                 # axum REST server
-│   ├── db.rs                     # SQLite layer
-│   ├── router.rs                 # Task classification + model selection
-│   ├── security.rs               # Regex security (PII/jailbreak/domain)
-│   ├── ai_client.rs              # AI micro-service async client
-│   ├── processes.rs              # Child-process management
-│   ├── conversations.rs          # Conversation file CRUD
-│   ├── models.rs                 # Type definitions
-│   ├── config.rs                 # Paths / ports / env
-│   └── error.rs                  # Unified error type
-├── tauri-app/src-tauri/ui/       # WebUI frontend (index.html SPA)
-├── api/
-│   └── ai_service.py             # Python AI micro-service (litellm wrapper)
+├── Cargo.toml                    # Rust workspace root
+├── crates/lloom-core/            # Business core lib (UI-agnostic)
+│   └── src/                      # server.rs, db.rs, router.rs, security.rs,
+│                                 # ai_client.rs, processes.rs, conversations.rs,
+│                                 # models.rs, config.rs, error.rs
+├── webui/index.html              # WebUI frontend (SPA, standalone)
+├── tauri-app/src-tauri/          # Desktop shell (depends on lloom-core)
+│   └── src/main.rs               # Window + tray + core bootstrap
+├── api/ai_service.py             # Python AI micro-service (litellm wrapper)
 ├── scripts/
-│   ├── smoke_test.sh             # 19-check smoke test
-│   ├── build.sh                  # Build pipeline
-│   └── download_ollama.sh        # Ollama binary download
+│   ├── build.sh                  # Cross-platform build (with dep checks)
+│   ├── download_ollama.sh        # Cross-platform Ollama download
+│   └── smoke_test.sh             # 19-check smoke test
+├── ai_service.spec               # PyInstaller spec (AI micro-service)
 ├── ARCHITECTURE.md               # Layer breakdown + REST reference
 ├── pyproject.toml                # Python project config (AI service)
 └── .env.example                  # Environment template

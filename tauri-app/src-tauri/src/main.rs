@@ -8,9 +8,9 @@
 //! The GUI frontend talks to the same REST API as the WebUI — the Tauri shell
 //! only provides the desktop window and system tray.
 
-use lloom::config;
-use lloom::db;
-use lloom::server::{AppState, build_router};
+use lloom_core::config;
+use lloom_core::db;
+use lloom_core::server::{AppState, build_router};
 use tauri::Manager;
 
 fn is_headless() -> bool {
@@ -46,19 +46,19 @@ fn start_core() -> AppState {
         let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
         rt.block_on(async move {
             println!("[core] starting Python AI service...");
-            match lloom::processes::start_ai().await {
+            match lloom_core::processes::start_ai().await {
                 Ok(child) => state_for_spawn.children.lock().unwrap().ai = child,
                 Err(e) => eprintln!("[core] ⚠ AI service start failed: {e}"),
             }
             println!("[core] starting Ollama...");
-            match lloom::processes::start_ollama().await {
+            match lloom_core::processes::start_ollama().await {
                 Ok(child) => state_for_spawn.children.lock().unwrap().ollama = child,
                 Err(e) => eprintln!("[core] ⚠ Ollama start failed: {e}"),
             }
 
             for _ in 0..30 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if lloom::processes::check_ai_health().await.status == "ok" {
+                if lloom_core::processes::check_ai_health().await.status == "ok" {
                     println!("[core] AI service healthy on :{}", config::ai_port());
                     break;
                 }

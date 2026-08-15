@@ -26,7 +26,8 @@ build/
 dist/
 tiktoken_cache/
 
-# Tauri build artifacts
+# Tauri / Rust build artifacts
+target/
 tauri-app/node_modules/
 tauri-app/src-tauri/target/
 tauri-app/src-tauri/resources/ai-service/
