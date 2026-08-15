@@ -175,7 +175,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
           {
             title: "操作",
             render: (m, { selected }) => (
-              <Button inverse={selected} variant="danger" onClick={() => del(m.name)}>删除</Button>
+              <Button fg={selected ? theme.background : theme.error} onClick={() => del(m.name)}>删除</Button>
             ),
           },
         ]}
