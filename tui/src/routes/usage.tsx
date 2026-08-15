@@ -3,7 +3,7 @@
 import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { getStats, getUsage, getBudgets, setBudget, checkBudget, getModels, type UsageRow, type Model } from "../api"
+import { getStats, getUsage, getBudgets, setBudget, checkBudget, deleteBudget, getModels, type UsageRow, type Model } from "../api"
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
 import { useDialog } from "../ui/dialog"
@@ -52,19 +52,57 @@ export function Usage(props: { setStatus: (s: string) => void }) {
         { key: "duration", label: "周期", placeholder: "30d/7d/1d" },
       ],
       onConfirm: async (vals) => {
-        try {
-          await setBudget(
-            vals.scope.trim(),
-            vals.scope_id.trim(),
-            parseFloat(vals.max_budget) || 0,
-            vals.duration.trim() || "30d",
-          )
-          props.setStatus("✓ 预算已设置")
-          await loadBudgets()
-        } catch (e) {
-          props.setStatus(`设置预算失败: ${e}`)
-        }
+        await submitBudget({
+          scope: vals.scope.trim(),
+          scope_id: vals.scope_id.trim(),
+          max_budget: parseFloat(vals.max_budget) || 0,
+          duration: vals.duration.trim() || "30d",
+        })
       },
+    })
+  }
+
+  const editBudget = (b: { scope: string; scope_id: string; max_budget: number; duration?: string }) => {
+    dialog.form(`编辑预算 ${b.scope}/${b.scope_id}`, {
+      fields: [
+        { key: "max_budget", label: "上限 ($)", placeholder: String(b.max_budget), default: String(b.max_budget), required: true },
+        { key: "duration", label: "周期", placeholder: b.duration ?? "30d", default: b.duration ?? "30d" },
+      ],
+      onConfirm: async (vals) => {
+        await submitBudget({ scope: b.scope, scope_id: b.scope_id, max_budget: parseFloat(vals.max_budget) || 0, duration: vals.duration.trim() || "30d" })
+      },
+    })
+  }
+
+  const submitBudget = async (vals: { scope: string; scope_id: string; max_budget: number; duration?: string }) => {
+    try {
+      await setBudget(vals.scope, vals.scope_id, vals.max_budget, vals.duration ?? "30d")
+      props.setStatus("✓ 预算已保存")
+      await loadBudgets()
+    } catch (e) {
+      props.setStatus(`保存预算失败: ${e}`)
+    }
+  }
+
+  const budgetMenu = (b: { scope: string; scope_id: string; max_budget: number; duration?: string }) => {
+    dialog.menu(`预算 ${b.scope}/${b.scope_id}`, {
+      items: [
+        { title: "编辑", desc: "修改上限/周期", onSelect: () => editBudget(b) },
+        {
+          title: "删除",
+          desc: "移除该预算",
+          danger: true,
+          onSelect: async () => {
+            try {
+              await deleteBudget(b.scope, b.scope_id)
+              props.setStatus(`✓ 已删除预算 ${b.scope}/${b.scope_id}`)
+              await loadBudgets()
+            } catch (e) {
+              props.setStatus(`删除预算失败: ${e}`)
+            }
+          },
+        },
+      ],
     })
   }
 
@@ -195,7 +233,13 @@ export function Usage(props: { setStatus: (s: string) => void }) {
               const filled = Math.round((pct / 100) * barWidth)
               const bar = within ? theme.success : theme.error
               return (
-                <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
+                <box
+                  flexDirection="column"
+                  paddingLeft={2}
+                  paddingRight={2}
+                  paddingBottom={1}
+                  onMouseUp={(evt: { button?: number }) => { if (evt?.button === 2) budgetMenu(b) }}
+                >
                   <box flexDirection="row" gap={2}>
                     <text fg={theme.text} attributes={1}>{b.scope}/{b.scope_id}</text>
                     <box flexGrow={1} />

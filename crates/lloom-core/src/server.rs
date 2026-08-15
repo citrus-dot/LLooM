@@ -156,6 +156,13 @@ async fn set_budget(Json(req): Json<Budget>) -> Result<Json<Value>> {
     Ok(Json(json!({ "set": true })))
 }
 
+async fn delete_budget(Query(q): Query<Value>) -> Result<Json<Value>> {
+    let scope = q.get("scope").and_then(|v| v.as_str()).unwrap_or("");
+    let scope_id = q.get("scope_id").and_then(|v| v.as_str()).unwrap_or("");
+    let deleted = db::delete_budget(scope, scope_id)?;
+    Ok(Json(json!({ "deleted": deleted })))
+}
+
 async fn check_budget(Query(q): Query<Value>) -> Result<Json<Value>> {
     let scope = q.get("scope").and_then(|v| v.as_str()).unwrap_or("");
     let scope_id = q.get("scope_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -533,7 +540,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/models/{name}", get(get_model).put(update_model).delete(delete_model))
         // Usage + budgets
         .route("/api/usage", get(get_usage))
-        .route("/api/budgets", get(list_budgets).post(set_budget))
+        .route("/api/budgets", get(list_budgets).post(set_budget).delete(delete_budget))
         .route("/api/budgets/check", get(check_budget))
         // Config + stats
         .route("/api/config", get(get_config).post(update_config))

@@ -133,6 +133,14 @@ export async function checkBudget(scope: string, scopeId: string): Promise<{ wit
   return get(`/api/budgets/check?scope=${encodeURIComponent(scope)}&scope_id=${encodeURIComponent(scopeId)}`)
 }
 
+export async function deleteBudget(scope: string, scopeId: string): Promise<{ deleted: boolean }> {
+  return fetch(`${BASE}/api/budgets?scope=${encodeURIComponent(scope)}&scope_id=${encodeURIComponent(scopeId)}`, { method: "DELETE" })
+    .then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    })
+}
+
 export async function listConversations(): Promise<{ conversations: Conversation[] }> {
   return get("/api/conversations")
 }

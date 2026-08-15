@@ -4,6 +4,7 @@
 import { createSignal, onMount, Show } from "solid-js"
 import { theme } from "../theme"
 import { useDialog } from "./dialog"
+import { Button } from "./button"
 
 export function DialogLogs(props: {
   title: string
@@ -48,9 +49,7 @@ export function DialogLogs(props: {
         </Show>
       </scrollbox>
       <box paddingBottom={1} paddingTop={1} flexDirection="row" gap={1}>
-        <text fg={theme.text} onMouseUp={() => refresh()}>r</text>
-        <text fg={theme.textMuted}>刷新</text>
-        <text fg={theme.textMuted}>·</text>
+        <Button variant="ghost" onClick={() => refresh()}>刷新</Button>
         <text fg={theme.textMuted}>esc 关闭</text>
       </box>
     </box>

@@ -58,6 +58,7 @@ export function Session(props: { setStatus: (s: string) => void }) {
       setActiveSessionId(id)
       setRoute("session")
       setSelIdx(Math.max(1, convs().findIndex((x) => x.id === id) + 1))
+      setFocus("input")
     } catch (e) {
       props.setStatus(`加载失败: ${e}`)
     }
@@ -112,12 +113,12 @@ export function Session(props: { setStatus: (s: string) => void }) {
         desc: "Open conversation",
       },
       {
-        key: "n",
+        key: "ctrl+n",
         cmd: () => newConv(),
         desc: "New conversation",
       },
       {
-        key: "d",
+        key: "ctrl+d",
         cmd: () => {
           if (activeSessionId()) delConv(activeSessionId()!)
         },
@@ -200,6 +201,7 @@ export function Session(props: { setStatus: (s: string) => void }) {
     setMsgs([])
     setInput("")
     inputRef?.clear()
+    setFocus("input")
   }
 
   const delConv = async (id: string) => {
@@ -259,7 +261,7 @@ export function Session(props: { setStatus: (s: string) => void }) {
         <box flexDirection="column" flexGrow={1} gap={0}>
           {/* "New conversation" is always the first (index 0) item. */}
           <box
-            backgroundColor={selIdx() === 0 ? theme.primary : convHover() === 0 ? theme.backgroundElement : theme.backgroundPanel}
+            backgroundColor={focus() === "conv" && selIdx() === 0 ? theme.primary : convHover() === 0 ? theme.backgroundElement : theme.backgroundPanel}
             paddingLeft={2}
             paddingRight={2}
             onMouseOver={() => setConvHover(0)}
@@ -267,14 +269,14 @@ export function Session(props: { setStatus: (s: string) => void }) {
             onMouseDown={() => { setFocus("conv"); setSelIdx(0) }}
             onMouseUp={() => newConv()}
           >
-            <text fg={selIdx() === 0 ? theme.background : theme.primary}>
-              {selIdx() === 0 ? "▸ " : "  "}[+] 新建对话
+            <text fg={focus() === "conv" && selIdx() === 0 ? theme.background : theme.primary}>
+              [+] 新建对话
             </text>
           </box>
           {convs().length === 0 && <text fg={theme.textDim} paddingLeft={2}>  暂无对话</text>}
           {convs().map((c, i) => {
             const listIdx = i + 1
-            const isSel = listIdx === selIdx()
+            const isSel = focus() === "conv" && listIdx === selIdx()
             const isHover = listIdx === convHover()
             const isActive = c.id === activeSessionId()
             return (
@@ -291,7 +293,7 @@ export function Session(props: { setStatus: (s: string) => void }) {
                 }}
               >
                 <text fg={isSel ? theme.background : isActive ? theme.primary : theme.text}>
-                  {isSel ? "▸ " : "  "}{c.title.slice(0, 18)}{isSel ? "" : ` (${c.message_count})`}
+                  {isActive ? "▸ " : "  "}{c.title.slice(0, 18)}{isSel ? "" : ` (${c.message_count})`}
                 </text>
               </box>
             )
@@ -369,7 +371,7 @@ export function Session(props: { setStatus: (s: string) => void }) {
                 { name: "return", shift: true, action: "newline" },
               ]}
             />
-            <text fg={theme.textDim}>  Enter 发送 · Tab 切页 · ↑↓ 切会话 · n 新建</text>
+            <text fg={theme.textDim}>  Enter 发送 · Tab 切页 · ↑↓ 切会话 · Ctrl+N 新建 · Ctrl+D 删除</text>
           </box>
         </box>
       </box>

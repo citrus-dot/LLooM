@@ -58,7 +58,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
         desc: "Next model",
       },
       {
-        key: "d",
+        key: "ctrl+d",
         cmd: () => {
           if (models()[selIdx()]) del(models()[selIdx()].name)
         },

@@ -291,6 +291,15 @@ pub fn get_budget(scope: &str, scope_id: &str) -> Result<Option<Budget>> {
     }
 }
 
+pub fn delete_budget(scope: &str, scope_id: &str) -> Result<bool> {
+    let conn = open()?;
+    let n = conn.execute(
+        "DELETE FROM budgets WHERE scope = ?1 AND scope_id = ?2",
+        params![scope, scope_id],
+    )?;
+    Ok(n > 0)
+}
+
 pub fn list_budgets() -> Result<Vec<Budget>> {
     let conn = open()?;
     let mut stmt = conn.prepare("SELECT * FROM budgets ORDER BY scope, scope_id")?;
