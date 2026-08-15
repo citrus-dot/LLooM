@@ -226,6 +226,8 @@ LLooM/
 │       ├── models.rs             # 类型定义
 │       ├── config.rs             # 路径/端口配置
 │       └── error.rs              # 统一错误
+├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）
+├── crates/lloom-tui/             # TUI（ratatui，链接 lloom-core）
 ├── webui/
 │   └── index.html                # WebUI 前端（SPA，独立于 Tauri）
 ├── tauri-app/src-tauri/          # 桌面壳（依赖 lloom-core）

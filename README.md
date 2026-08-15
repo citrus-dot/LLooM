@@ -184,6 +184,50 @@ All configuration is via environment variables in `.env`:
 | Desktop | Tauri v2 (Rust) | Window + system tray, frontend over REST |
 | Local LLM | Ollama | Zero-cost fallback model runtime |
 
+## CLI & TUI
+
+LLooM ships a command-line interface and a terminal UI, both linking `lloom-core` directly (offline-capable, no running server needed for local ops).
+
+### CLI (`lloom-cli`)
+
+```bash
+# Build
+cargo build -p lloom-cli
+# or use the binary at target/debug/lloom-cli
+
+# Init database
+lloom-cli init
+
+# Models
+lloom-cli models list
+lloom-cli models add qwen2.5-local --provider ollama --model ollama/qwen2.5:latest \
+  --api-base http://localhost:11434 --input-cost 0.000001 --output-cost 0.000002
+lloom-cli models remove <name>
+
+# Budgets
+lloom-cli budgets set user default 10 --duration 30d
+lloom-cli budgets list
+lloom-cli budgets check user default
+
+# Usage & status
+lloom-cli usage
+lloom-cli status
+
+# Chat (requires AI service running: cargo run -- --headless)
+lloom-cli chat "What is 2+2?"
+```
+
+### TUI (`lloom-tui`)
+
+```bash
+cargo build -p lloom-tui
+lloom-tui
+```
+
+Three tabs: **Overview** (service status + usage), **Chat** (interactive,
+Enter to send), **Models** (registered models). Switch with `Tab`/`←`/`→`,
+quit with `Ctrl+C`.
+
 ## Project Structure
 
 ```
@@ -193,6 +237,8 @@ LLooM/
 │   └── src/                      # server.rs, db.rs, router.rs, security.rs,
 │                                 # ai_client.rs, processes.rs, conversations.rs,
 │                                 # models.rs, config.rs, error.rs
+├── crates/lloom-cli/             # CLI (clap, links lloom-core)
+├── crates/lloom-tui/             # TUI (ratatui, links lloom-core)
 ├── webui/index.html              # WebUI frontend (SPA, standalone)
 ├── tauri-app/src-tauri/          # Desktop shell (depends on lloom-core)
 │   └── src/main.rs               # Window + tray + core bootstrap

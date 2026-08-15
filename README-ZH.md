@@ -183,6 +183,48 @@ bash scripts/smoke_test.sh
 | 桌面端 | Tauri v2（Rust） | 窗口 + 系统托盘，前端走 REST |
 | 本地 LLM | Ollama | 零成本兜底模型运行时 |
 
+## CLI 与 TUI
+
+LLooM 附带命令行界面和终端界面，两者都直接链接 `lloom-core`（本地操作离线可用，无需运行中的服务器）。
+
+### CLI（`lloom-cli`）
+
+```bash
+# 构建
+cargo build -p lloom-cli
+# 或直接用 target/debug/lloom-cli
+
+# 初始化数据库
+lloom-cli init
+
+# 模型
+lloom-cli models list
+lloom-cli models add qwen2.5-local --provider ollama --model ollama/qwen2.5:latest \
+  --api-base http://localhost:11434 --input-cost 0.000001 --output-cost 0.000002
+lloom-cli models remove <名称>
+
+# 预算
+lloom-cli budgets set user default 10 --duration 30d
+lloom-cli budgets list
+lloom-cli budgets check user default
+
+# 用量与状态
+lloom-cli usage
+lloom-cli status
+
+# 聊天（需 AI 服务运行：cargo run -- --headless）
+lloom-cli chat "2+2 等于几？"
+```
+
+### TUI（`lloom-tui`）
+
+```bash
+cargo build -p lloom-tui
+lloom-tui
+```
+
+三个标签页：**概览**（服务状态 + 用量）、**聊天**（交互式，Enter 发送）、**模型**（已注册模型）。`Tab`/`←`/`→` 切换，`Ctrl+C` 退出。
+
 ## 项目结构
 
 ```
@@ -192,6 +234,8 @@ LLooM/
 │   └── src/                      # server.rs, db.rs, router.rs, security.rs,
 │                                 # ai_client.rs, processes.rs, conversations.rs,
 │                                 # models.rs, config.rs, error.rs
+├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）
+├── crates/lloom-tui/             # TUI（ratatui，链接 lloom-core）
 ├── webui/index.html              # WebUI 前端（SPA，独立于 Tauri）
 ├── tauri-app/src-tauri/          # 桌面壳（依赖 lloom-core）
 │   └── src/main.rs               # 窗口 + 系统托盘 + 启动核心
