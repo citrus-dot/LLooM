@@ -1,9 +1,10 @@
 //! LLooM TUI — terminal user interface.
 //!
-//! Fully async: a single tokio runtime drives both keyboard input and all REST
-//! requests to lloom-server (:7861). No blocking calls, no block_on.
+//! Unified cursor navigation: a global cell cursor moves freely with arrow
+//! keys across a per-page grid of focusable cells. Enter activates the cell.
+//! Fully async — all data flows through the REST API via tokio tasks.
 //!
-//! Five tabs mirror the WebUI: 总览 / 用量 / 对话 / 模型 / 设置.
+//! Keys: ←→↑↓ move cursor · Enter activate · Tab next page · Ctrl+C quit
 
 mod rest;
 
@@ -13,7 +14,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Table, TableState};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::{Frame, Terminal};
 use serde_json::Value;
 use std::io;
@@ -33,20 +34,113 @@ const TABS: [&str; 5] = ["总览", "用量", "对话", "模型", "设置"];
 
 const ENV_SCHEMA: [(&str, &[(&str, &str)]); 4] = [
     ("DashScope", &[
-        ("DASHSCOPE_API_KEY", "API Key (主要供应商)"),
+        ("DASHSCOPE_API_KEY", "API Key"),
         ("DASHSCOPE_API_BASE", "API Base"),
     ]),
     ("OpenAI", &[
-        ("OPENAI_API_KEY", "API Key (sk-...)"),
+        ("OPENAI_API_KEY", "API Key"),
         ("OPENAI_BASE_URL", "Base URL"),
     ]),
-    ("Anthropic", &[("ANTHROPIC_API_KEY", "API Key (sk-ant-...)")]),
+    ("Anthropic", &[("ANTHROPIC_API_KEY", "API Key")]),
     ("核心配置", &[
         ("OLLAMA_API_BASE", "Ollama 地址"),
         ("LLOOM_WEB_PORT", "Web 端口"),
         ("LLOOM_DATA_DIR", "数据目录"),
     ]),
 ];
+
+// ── Cursor / cell model ──
+
+/// A cell in the per-page focus grid.
+struct Cell {
+    text: String,
+    kind: CellKind,
+}
+
+enum CellKind {
+    Data,      // data row cell (navigable)
+    Action,    // action button (navigable)
+    Input,     // text input (Enter to edit, typing goes here)
+    Header,    // non-focusable label
+}
+
+/// Global cursor position + current input text.
+#[derive(Default)]
+struct Cursor {
+    row: usize,
+    col: usize,
+    input: String,
+}
+
+/// Per-page grid of focusable cells.
+struct Grid {
+    cells: Vec<Vec<Cell>>,
+    rows: usize,
+    cols: usize,
+}
+
+impl Grid {
+    fn new() -> Self {
+        Self { cells: vec![], rows: 0, cols: 0 }
+    }
+
+    fn set(&mut self, data: Vec<Vec<Cell>>) {
+        self.rows = data.len();
+        self.cols = data.first().map(|r| r.len()).unwrap_or(0);
+        self.cells = data;
+    }
+
+    fn cell(&self, row: usize, col: usize) -> Option<&Cell> {
+        self.cells.get(row).and_then(|r| r.get(col))
+    }
+
+    fn is_focusable(&self, row: usize, col: usize) -> bool {
+        match self.cell(row, col) {
+            Some(c) => matches!(c.kind, CellKind::Data | CellKind::Action | CellKind::Input),
+            None => false,
+        }
+    }
+
+    /// Clamp cursor to bounds, skipping non-focusable cells.
+    fn clamp(&self, row: usize, col: usize) -> (usize, usize) {
+        let r = row.min(self.rows.saturating_sub(1));
+        let c = col.min(self.cols.saturating_sub(1));
+        if self.is_focusable(r, c) {
+            (r, c)
+        } else {
+            // Find nearest focusable in the row
+            for cc in 0..self.cols {
+                if self.is_focusable(r, cc) {
+                    return (r, cc);
+                }
+            }
+            // Fall back to any focusable anywhere
+            for rr in 0..self.rows {
+                for cc in 0..self.cols {
+                    if self.is_focusable(rr, cc) {
+                        return (rr, cc);
+                    }
+                }
+            }
+            (0, 0)
+        }
+    }
+}
+
+// ── Events ──
+
+enum UiEvent {
+    Key(KeyCode),
+    Overview(Result<(Vec<ServiceInfo>, Vec<(String, u64)>, f64), String>),
+    Usage(Result<(Vec<UsageRow>, f64, Vec<(String, String, f64, f64)>, usize), String>),
+    Conversations(Result<Vec<(String, String, usize)>, String>),
+    Models(Result<Vec<Value>, String>),
+    Env(Result<Vec<(String, String, String)>, String>),
+    ChatReply(Result<(String, String), String>),
+    ConvLoaded(Result<Vec<ChatMsg>, String>),
+    ConvSaved(Result<String, String>),
+    ServiceOp(Result<Value, String>),
+}
 
 #[derive(Clone)]
 struct ChatMsg {
@@ -69,28 +163,13 @@ struct UsageRow {
     requests: i64,
 }
 
-// ── Events flowing into the main loop ──
-
-enum UiEvent {
-    // Keyboard
-    Key(KeyCode),
-    // Async fetch results
-    Overview(Result<(Vec<ServiceInfo>, Vec<(String, u64)>, f64), String>),
-    Usage(Result<(Vec<UsageRow>, f64, Vec<(String, String, f64, f64)>, usize), String>),
-    Conversations(Result<Vec<(String, String, usize)>, String>),
-    Models(Result<Vec<Value>, String>),
-    Env(Result<Vec<(String, String, String)>, String>),
-    ChatReply(Result<(String, String), String>),
-    ConvLoaded(Result<Vec<ChatMsg>, String>),
-    ConvSaved(Result<String, String>),
-    ServiceOp(Result<Value, String>),
-}
-
-// ── App state ──
+// ── App ──
 
 struct App {
     tab: Tab,
     status_line: String,
+    cursor: Cursor,
+    grid: Grid,
 
     // Overview
     services: Vec<ServiceInfo>,
@@ -105,30 +184,23 @@ struct App {
     // Chat
     conversations: Vec<(String, String, usize)>,
     chat_msgs: Vec<ChatMsg>,
-    conv_input: String,
     conv_active: Option<String>,
     conv_loading: bool,
-    selected_conv: usize,
 
     // Models
     model_list: Vec<Value>,
 
     // Settings
     env_values: Vec<(String, String, String)>,
-    env_input: String,
-    env_cursor: usize,
-    env_msg: String,
-
-    // UI
-    scroll: usize,
-    table_state: TableState,
 }
 
 impl App {
     fn new() -> Self {
         Self {
             tab: Tab::Overview,
-            status_line: "Tab/←/→ 切换 · 对话页输入消息 Enter 发送 · Ctrl+C 退出".into(),
+            status_line: "←→↑↓ 移动光标 · Enter 激活 · Tab 下一页 · Ctrl+C 退出".into(),
+            cursor: Cursor::default(),
+            grid: Grid::new(),
             services: vec![],
             routing_stats: vec![],
             total_spend: 0.0,
@@ -137,17 +209,10 @@ impl App {
             model_count: 0,
             conversations: vec![],
             chat_msgs: vec![],
-            conv_input: String::new(),
             conv_active: None,
             conv_loading: false,
-            selected_conv: 0,
             model_list: vec![],
             env_values: vec![],
-            env_input: String::new(),
-            env_cursor: 0,
-            env_msg: String::new(),
-            scroll: 0,
-            table_state: TableState::default(),
         }
     }
 
@@ -158,20 +223,15 @@ impl App {
                 self.routing_stats = routing;
                 self.total_spend = spend;
             }
-            UiEvent::Overview(Err(e)) => self.status_line = format!("✗ 总览加载失败: {e}"),
+            UiEvent::Overview(Err(e)) => self.status_line = format!("✗ 总览失败: {e}"),
             UiEvent::Usage(Ok((usage, spend, budgets, count))) => {
                 self.usage_stats = usage;
                 self.total_spend = spend;
                 self.budgets = budgets;
                 self.model_count = count;
             }
-            UiEvent::Usage(Err(e)) => self.status_line = format!("✗ 用量加载失败: {e}"),
-            UiEvent::Conversations(Ok(c)) => {
-                self.conversations = c;
-                if self.selected_conv >= self.conversations.len() {
-                    self.selected_conv = 0;
-                }
-            }
+            UiEvent::Usage(Err(e)) => self.status_line = format!("✗ 用量失败: {e}"),
+            UiEvent::Conversations(Ok(c)) => self.conversations = c,
             UiEvent::Conversations(Err(_)) => {}
             UiEvent::Models(Ok(m)) => self.model_list = m,
             UiEvent::Models(Err(_)) => {}
@@ -187,21 +247,307 @@ impl App {
                 self.chat_msgs.push(ChatMsg { role: "assistant".into(), content: format!("请求失败: {e}"), detail: String::new() });
                 self.status_line = format!("✗ 失败: {e}");
             }
-            UiEvent::ConvLoaded(Ok(msgs)) => {
-                self.chat_msgs = msgs;
-            }
+            UiEvent::ConvLoaded(Ok(msgs)) => self.chat_msgs = msgs,
             UiEvent::ConvLoaded(Err(_)) => {}
-            UiEvent::ConvSaved(Ok(id)) => {
-                self.conv_active = Some(id);
-                self.status_line = "✓ 对话已保存".into();
-            }
+            UiEvent::ConvSaved(Ok(id)) => self.conv_active = Some(id),
             UiEvent::ConvSaved(Err(e)) => self.status_line = format!("✗ 保存失败: {e}"),
-            UiEvent::ServiceOp(Ok(_)) => {
-                self.status_line = "✓ 服务操作成功".into();
-            }
-            UiEvent::ServiceOp(Err(e)) => self.status_line = format!("✗ 服务操作失败: {e}"),
+            UiEvent::ServiceOp(Ok(_)) => {}
+            UiEvent::ServiceOp(Err(e)) => self.status_line = format!("✗ 操作失败: {e}"),
             UiEvent::Key(_) => {}
         }
+    }
+
+    /// Rebuild the focus grid for the current tab based on current data.
+    fn rebuild_grid(&mut self) {
+        match self.tab {
+            Tab::Overview => self.build_overview_grid(),
+            Tab::Usage => self.build_usage_grid(),
+            Tab::Chat => self.build_chat_grid(),
+            Tab::Models => self.build_models_grid(),
+            Tab::Settings => self.build_settings_grid(),
+        }
+        // Clamp cursor to new grid
+        let (r, c) = self.grid.clamp(self.cursor.row, self.cursor.col);
+        self.cursor.row = r;
+        self.cursor.col = c;
+    }
+
+    fn build_overview_grid(&mut self) {
+        let mut grid: Vec<Vec<Cell>> = vec![];
+        // Header row
+        grid.push(vec![
+            Cell { text: "服务名".into(), kind: CellKind::Header },
+            Cell { text: "状态".into(), kind: CellKind::Header },
+            Cell { text: "操作".into(), kind: CellKind::Header },
+        ]);
+        // Service rows
+        for s in &self.services {
+            grid.push(vec![
+                Cell { text: format!("{}", if s.healthy { "✓" } else { "✗" }), kind: CellKind::Data },
+                Cell { text: s.status.clone(), kind: CellKind::Data },
+                Cell {
+                    text: if s.name == "核心服务" { "[—]".into() } else { "[重启]".into() },
+                    kind: if s.name == "核心服务" { CellKind::Header } else { CellKind::Action },
+                },
+            ]);
+        }
+        // Action row: start / stop
+        grid.push(vec![
+            Cell { text: "[启动服务]".into(), kind: CellKind::Action },
+            Cell { text: "[停止服务]".into(), kind: CellKind::Action },
+            Cell { text: format!("花费 ${:.6}", self.total_spend), kind: CellKind::Header },
+        ]);
+        self.grid.set(grid);
+    }
+
+    fn build_usage_grid(&mut self) {
+        let mut grid: Vec<Vec<Cell>> = vec![];
+        grid.push(vec![
+            Cell { text: "模型".into(), kind: CellKind::Header },
+            Cell { text: "输入".into(), kind: CellKind::Header },
+            Cell { text: "输出".into(), kind: CellKind::Header },
+            Cell { text: "请求".into(), kind: CellKind::Header },
+            Cell { text: "花费".into(), kind: CellKind::Header },
+        ]);
+        for u in &self.usage_stats {
+            grid.push(vec![
+                Cell { text: u.model.clone(), kind: CellKind::Data },
+                Cell { text: u.input.to_string(), kind: CellKind::Data },
+                Cell { text: u.output.to_string(), kind: CellKind::Data },
+                Cell { text: u.requests.to_string(), kind: CellKind::Data },
+                Cell { text: format!("${:.4}", u.cost), kind: CellKind::Data },
+            ]);
+        }
+        if self.usage_stats.is_empty() {
+            grid.push(vec![Cell { text: "(暂无用量)".into(), kind: CellKind::Header }]);
+        }
+        // Budget rows
+        for (scope, id, _spent, max) in &self.budgets {
+            grid.push(vec![
+                Cell { text: "预算".into(), kind: CellKind::Header },
+                Cell { text: format!("{scope}/{id}"), kind: CellKind::Data },
+                Cell { text: format!("${max:.2}"), kind: CellKind::Data },
+                Cell { text: "".into(), kind: CellKind::Header },
+                Cell { text: "".into(), kind: CellKind::Header },
+            ]);
+        }
+        self.grid.set(grid);
+    }
+
+    fn build_chat_grid(&mut self) {
+        let mut grid: Vec<Vec<Cell>> = vec![];
+        // Left: conversation list (col 0)
+        grid.push(vec![
+            Cell { text: "会话".into(), kind: CellKind::Header },
+            Cell { text: "消息区".into(), kind: CellKind::Header },
+        ]);
+        for (_, title, n) in &self.conversations {
+            grid.push(vec![
+                Cell { text: format!("{title} ({n})"), kind: CellKind::Data },
+                Cell { text: String::new(), kind: CellKind::Header },
+            ]);
+        }
+        if self.conversations.is_empty() {
+            grid.push(vec![
+                Cell { text: "(无对话)".into(), kind: CellKind::Header },
+                Cell { text: String::new(), kind: CellKind::Header },
+            ]);
+        }
+        // Input row at the bottom (col 1 is the input cell)
+        grid.push(vec![
+            Cell { text: "[新建]".into(), kind: CellKind::Action },
+            Cell { text: format!("> {}", self.cursor.input), kind: CellKind::Input },
+        ]);
+        self.grid.set(grid);
+    }
+
+    fn build_models_grid(&mut self) {
+        let mut grid: Vec<Vec<Cell>> = vec![];
+        grid.push(vec![
+            Cell { text: "名称".into(), kind: CellKind::Header },
+            Cell { text: "提供商".into(), kind: CellKind::Header },
+            Cell { text: "LiteLLM 模型".into(), kind: CellKind::Header },
+            Cell { text: "操作".into(), kind: CellKind::Header },
+        ]);
+        for m in &self.model_list {
+            let name = m["name"].as_str().unwrap_or("").to_string();
+            grid.push(vec![
+                Cell { text: name.clone(), kind: CellKind::Data },
+                Cell { text: m["provider"].as_str().unwrap_or("").to_string(), kind: CellKind::Data },
+                Cell { text: m["litellm_model"].as_str().unwrap_or("").to_string(), kind: CellKind::Data },
+                Cell { text: "[删除]".into(), kind: CellKind::Action },
+            ]);
+        }
+        if self.model_list.is_empty() {
+            grid.push(vec![Cell { text: "(无模型)".into(), kind: CellKind::Header }]);
+        }
+        self.grid.set(grid);
+    }
+
+    fn build_settings_grid(&mut self) {
+        let mut grid: Vec<Vec<Cell>> = vec![];
+        grid.push(vec![
+            Cell { text: "键".into(), kind: CellKind::Header },
+            Cell { text: "值".into(), kind: CellKind::Header },
+            Cell { text: "分组".into(), kind: CellKind::Header },
+        ]);
+        for (key, val, section) in &self.env_values {
+            let shown = if val.trim().is_empty() { "(空)".into() } else { "***".into() };
+            grid.push(vec![
+                Cell { text: key.clone(), kind: CellKind::Data },
+                Cell { text: shown, kind: CellKind::Input },
+                Cell { text: section.clone(), kind: CellKind::Header },
+            ]);
+        }
+        self.grid.set(grid);
+    }
+
+    /// Move the cursor by (dr, dc). Returns true if moved.
+    fn move_cursor(&mut self, dr: i64, dc: i64) -> bool {
+        let nr = (self.cursor.row as i64 + dr).clamp(0, self.grid.rows as i64 - 1) as usize;
+        let nc = (self.cursor.col as i64 + dc).clamp(0, self.grid.cols as i64 - 1) as usize;
+        if self.grid.is_focusable(nr, nc) {
+            self.cursor.row = nr;
+            self.cursor.col = nc;
+            true
+        } else {
+            // Try to land on a focusable cell in the target row/col
+            let (r, c) = self.grid.clamp(nr, nc);
+            if r != self.cursor.row || c != self.cursor.col {
+                self.cursor.row = r;
+                self.cursor.col = c;
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    /// Activate the current cell. Returns true if quit.
+    fn activate(&mut self, tx: mpsc::Sender<UiEvent>) -> bool {
+        match self.tab {
+            Tab::Overview => {
+                let row = self.cursor.row;
+                let col = self.cursor.col;
+                // Action row = last row
+                if row + 1 == self.grid.rows {
+                    if col == 0 {
+                        self.spawn_service_op(&tx, "start", "ai");
+                        self.spawn_service_op(&tx, "start", "ollama");
+                        self.status_line = "启动 AI + Ollama...".into();
+                    } else if col == 1 {
+                        self.spawn_service_op(&tx, "stop", "ai");
+                        self.spawn_service_op(&tx, "stop", "ollama");
+                        self.status_line = "停止 AI + Ollama...".into();
+                    }
+                } else if col == 2 && row >= 1 && row - 1 < self.services.len() {
+                    let name = self.services[row - 1].name.clone();
+                    if name != "核心服务" {
+                        self.spawn_service_op(&tx, "restart", &name);
+                        self.status_line = format!("重启 {name}...");
+                    }
+                }
+            }
+            Tab::Chat => {
+                let row = self.cursor.row;
+                let col = self.cursor.col;
+                if col == 0 && row + 1 == self.grid.rows {
+                    // New conversation
+                    self.conv_active = None;
+                    self.chat_msgs.clear();
+                    self.status_line = "新对话".into();
+                } else if col == 1 && row + 1 == self.grid.rows {
+                    // Send the input
+                    self.send_chat(&tx);
+                } else if col == 0 && row >= 1 && row - 1 < self.conversations.len() {
+                    let (id, _, _) = &self.conversations[row - 1];
+                    let id = id.clone();
+                    self.conv_active = Some(id.clone());
+                    self.chat_msgs.clear();
+                    let t = tx.clone();
+                    tokio::spawn(async move {
+                        let _ = t.send(UiEvent::ConvLoaded(fetch_conv(&id).await)).await;
+                    });
+                }
+            }
+            Tab::Models => {
+                let row = self.cursor.row;
+                let col = self.cursor.col;
+                if col == 3 && row >= 1 && row - 1 < self.model_list.len() {
+                    let name = self.model_list[row - 1]["name"].as_str().unwrap_or("").to_string();
+                    let t = tx.clone();
+                    let n2 = name.clone();
+                    tokio::spawn(async move {
+                        let _ = t.send(UiEvent::ServiceOp(delete_model(&n2).await)).await;
+                        let _ = t.send(UiEvent::Models(fetch_models().await)).await;
+                    });
+                    self.status_line = format!("删除模型 {name}...");
+                } else if col == 0 && row >= 1 && row - 1 < self.model_list.len() {
+                    let name = self.model_list[row - 1]["name"].as_str().unwrap_or("").to_string();
+                    let task_types = ["", "general", "coding", "math_logic", "simple_qa", "complex_reasoning"];
+                    let cur = self.model_list[row - 1]["task_type"].as_str().unwrap_or("");
+                    let next = task_types.iter().position(|t| *t == cur).map(|p| task_types[(p + 1) % task_types.len()]).unwrap_or("").to_string();
+                    let t = tx.clone();
+                    let n2 = name.clone();
+                    let x2 = next.clone();
+                    tokio::spawn(async move {
+                        let _ = t.send(UiEvent::ServiceOp(update_model(&n2, &x2).await)).await;
+                        let _ = t.send(UiEvent::Models(fetch_models().await)).await;
+                    });
+                    self.status_line = format!("模型 {name} 任务 → {next}");
+                }
+            }
+            Tab::Settings => {
+                let row = self.cursor.row;
+                let col = self.cursor.col;
+                if col == 1 && row >= 1 && row - 1 < self.env_values.len() {
+                    let (key, _, _) = self.env_values[row - 1].clone();
+                    let v = std::mem::take(&mut self.cursor.input);
+                    let t = tx.clone();
+                    let k2 = key.clone();
+                    tokio::spawn(async move {
+                        let _ = t.send(UiEvent::ServiceOp(write_env(&key, &v).await)).await;
+                        let _ = t.send(UiEvent::Env(fetch_env().await)).await;
+                    });
+                    self.status_line = format!("✓ 已保存 {k2}");
+                }
+            }
+            Tab::Usage => {}
+        }
+        false
+    }
+
+    fn spawn_service_op(&self, tx: &mpsc::Sender<UiEvent>, action: &str, name: &str) {
+        let t = tx.clone();
+        let action = action.to_string();
+        let name = name.to_string();
+        tokio::spawn(async move {
+            let _ = t.send(UiEvent::ServiceOp(service_op(&action, &name).await)).await;
+            let _ = t.send(UiEvent::Overview(fetch_overview().await)).await;
+        });
+    }
+
+    fn send_chat(&mut self, tx: &mpsc::Sender<UiEvent>) {
+        if self.conv_loading {
+            return;
+        }
+        let q = std::mem::take(&mut self.cursor.input);
+        if q.trim().is_empty() {
+            return;
+        }
+        self.chat_msgs.push(ChatMsg { role: "user".into(), content: q.clone(), detail: String::new() });
+        self.conv_loading = true;
+        self.status_line = "思考中...".into();
+        let msgs = self.chat_msgs.clone();
+        let id = self.conv_active.clone();
+        let t = tx.clone();
+        tokio::spawn(async move {
+            let _ = t.send(UiEvent::ConvSaved(save_conv(id.as_deref(), &msgs).await)).await;
+        });
+        let t = tx.clone();
+        tokio::spawn(async move {
+            let _ = t.send(UiEvent::ChatReply(do_chat(&q).await)).await;
+        });
     }
 }
 
@@ -290,6 +636,22 @@ async fn fetch_conversations() -> Result<Vec<(String, String, usize)>, String> {
         .unwrap_or_default())
 }
 
+async fn fetch_conv(id: &str) -> Result<Vec<ChatMsg>, String> {
+    let v = rest::get(&format!("/api/conversations/{}", rest::urlencode(id))).await?;
+    Ok(v["messages"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|m| ChatMsg {
+                    role: m["role"].as_str().unwrap_or("").into(),
+                    content: m["content"].as_str().unwrap_or("").into(),
+                    detail: String::new(),
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 async fn fetch_models() -> Result<Vec<Value>, String> {
     let v = rest::get("/api/models").await?;
     Ok(v["models"].as_array().cloned().unwrap_or_default())
@@ -305,22 +667,6 @@ async fn fetch_env() -> Result<Vec<(String, String, String)>, String> {
         }
     }
     Ok(out)
-}
-
-async fn fetch_conv(id: &str) -> Result<Vec<ChatMsg>, String> {
-    let v = rest::get(&format!("/api/conversations/{}", rest::urlencode(id))).await?;
-    Ok(v["messages"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|m| ChatMsg {
-                    role: m["role"].as_str().unwrap_or("").into(),
-                    content: m["content"].as_str().unwrap_or("").into(),
-                    detail: String::new(),
-                })
-                .collect()
-        })
-        .unwrap_or_default())
 }
 
 async fn do_chat(query: &str) -> Result<(String, String), String> {
@@ -375,29 +721,19 @@ async fn write_env(key: &str, value: &str) -> Result<Value, String> {
     rest::post("/api/config", serde_json::json!({ "updates": { key: value } })).await
 }
 
-// ── Spawn all background fetches ──
+// ── Spawn background fetches ──
 
 fn spawn_refresh(tx: mpsc::Sender<UiEvent>) {
     let t = tx.clone();
-    tokio::spawn(async move {
-        let _ = t.send(UiEvent::Overview(fetch_overview().await)).await;
-    });
+    tokio::spawn(async move { let _ = t.send(UiEvent::Overview(fetch_overview().await)).await; });
     let t = tx.clone();
-    tokio::spawn(async move {
-        let _ = t.send(UiEvent::Usage(fetch_usage().await)).await;
-    });
+    tokio::spawn(async move { let _ = t.send(UiEvent::Usage(fetch_usage().await)).await; });
     let t = tx.clone();
-    tokio::spawn(async move {
-        let _ = t.send(UiEvent::Conversations(fetch_conversations().await)).await;
-    });
+    tokio::spawn(async move { let _ = t.send(UiEvent::Conversations(fetch_conversations().await)).await; });
     let t = tx.clone();
-    tokio::spawn(async move {
-        let _ = t.send(UiEvent::Models(fetch_models().await)).await;
-    });
+    tokio::spawn(async move { let _ = t.send(UiEvent::Models(fetch_models().await)).await; });
     let t = tx.clone();
-    tokio::spawn(async move {
-        let _ = t.send(UiEvent::Env(fetch_env().await)).await;
-    });
+    tokio::spawn(async move { let _ = t.send(UiEvent::Env(fetch_env().await)).await; });
 }
 
 // ── Main ──
@@ -414,7 +750,6 @@ async fn main() -> io::Result<()> {
     let (tx, mut rx) = mpsc::channel::<UiEvent>(128);
     spawn_refresh(tx.clone());
 
-    // Keyboard task (crossterm read is blocking; run on a dedicated task)
     let kbd_tx = tx.clone();
     let kbd = tokio::spawn(async move {
         loop {
@@ -446,6 +781,7 @@ async fn event_loop(
     last_refresh: &mut std::time::Instant,
 ) -> io::Result<()> {
     loop {
+        app.rebuild_grid();
         terminal.draw(|f| ui(f, app))?;
 
         let deadline = tokio::time::sleep(Duration::from_millis(100));
@@ -464,13 +800,52 @@ async fn event_loop(
                 }
             }
             _ = &mut deadline => {
-                // Periodic refresh
                 if last_refresh.elapsed().as_secs() >= 15 {
                     spawn_refresh(tx.clone());
                     *last_refresh = std::time::Instant::now();
                 }
             }
         }
+    }
+}
+
+/// Handle a key press. Returns true if the app should quit.
+fn handle_key(app: &mut App, code: KeyCode, tx: mpsc::Sender<UiEvent>) -> bool {
+    match code {
+        KeyCode::Char('c') => true,
+        KeyCode::Tab => {
+            app.tab = next_tab(app.tab, 1);
+            app.cursor = Cursor::default();
+            app.rebuild_grid();
+            false
+        }
+        KeyCode::Up => {
+            app.move_cursor(-1, 0);
+            false
+        }
+        KeyCode::Down => {
+            app.move_cursor(1, 0);
+            false
+        }
+        KeyCode::Left => {
+            app.move_cursor(0, -1);
+            false
+        }
+        KeyCode::Right => {
+            app.move_cursor(0, 1);
+            false
+        }
+        KeyCode::Enter => app.activate(tx),
+        KeyCode::Backspace => {
+            app.cursor.input.pop();
+            false
+        }
+        KeyCode::Char(c) => {
+            // Typing always goes into the cursor input buffer
+            app.cursor.input.push(c);
+            false
+        }
+        _ => false,
     }
 }
 
@@ -483,188 +858,6 @@ fn next_tab(t: Tab, dir: i8) -> Tab {
         3 => Tab::Models,
         _ => Tab::Settings,
     }
-}
-
-/// Handle a key press. Returns true if the app should quit.
-fn handle_key(app: &mut App, code: KeyCode, tx: mpsc::Sender<UiEvent>) -> bool {
-    match code {
-        KeyCode::Char('c') => return true,
-        KeyCode::Tab | KeyCode::Right => app.tab = next_tab(app.tab, 1),
-        KeyCode::Left => app.tab = next_tab(app.tab, -1),
-        KeyCode::Char('q') if app.tab != Tab::Chat => return true,
-        _ => handle_tab_key(app, code, tx),
-    }
-    false
-}
-
-fn handle_tab_key(app: &mut App, code: KeyCode, tx: mpsc::Sender<UiEvent>) {
-    match app.tab {
-        Tab::Chat => match code {
-            KeyCode::Enter => {
-                if !app.conv_loading {
-                    let q = std::mem::take(&mut app.conv_input);
-                    if q.trim().is_empty() {
-                        return;
-                    }
-                    app.chat_msgs.push(ChatMsg { role: "user".into(), content: q.clone(), detail: String::new() });
-                    app.conv_loading = true;
-                    app.status_line = "思考中...".into();
-                    // Save current state async
-                    let msgs = app.chat_msgs.clone();
-                    let id = app.conv_active.clone();
-                    let t = tx.clone();
-                    tokio::spawn(async move {
-                        let _ = t.send(UiEvent::ConvSaved(save_conv(id.as_deref(), &msgs).await)).await;
-                    });
-                    // Send chat async
-                    let t = tx.clone();
-                    tokio::spawn(async move {
-                        let _ = t.send(UiEvent::ChatReply(do_chat(&q).await)).await;
-                    });
-                }
-            }
-            KeyCode::Backspace => {
-                app.conv_input.pop();
-            }
-            KeyCode::Char('n') if app.conv_input.is_empty() => {
-                app.conv_active = None;
-                app.chat_msgs.clear();
-                app.status_line = "新对话".into();
-            }
-            KeyCode::Char(c) => app.conv_input.push(c),
-            KeyCode::Down => {
-                if app.selected_conv + 1 < app.conversations.len() {
-                    select_conv(app, app.selected_conv + 1, tx.clone());
-                }
-            }
-            KeyCode::Up => {
-                if app.selected_conv > 0 {
-                    select_conv(app, app.selected_conv - 1, tx.clone());
-                }
-            }
-            _ => {}
-        },
-        Tab::Models => match code {
-            KeyCode::Down => {
-                if !app.model_list.is_empty() {
-                    let i = (app.table_state.selected().unwrap_or(0) + 1).min(app.model_list.len() - 1);
-                    app.table_state.select(Some(i));
-                }
-            }
-            KeyCode::Up => {
-                let i = app.table_state.selected().unwrap_or(0).saturating_sub(1);
-                app.table_state.select(Some(i));
-            }
-            KeyCode::Char('d') => {
-                if let Some(i) = app.table_state.selected() {
-                    if i < app.model_list.len() {
-                        let name = app.model_list[i]["name"].as_str().unwrap_or("").to_string();
-                        let t = tx.clone();
-                        let name2 = name.clone();
-                        tokio::spawn(async move {
-                            let _ = t.send(UiEvent::ServiceOp(delete_model(&name2).await)).await;
-                            let _ = t.send(UiEvent::Models(fetch_models().await)).await;
-                        });
-                        app.status_line = format!("删除模型 {name}...");
-                    }
-                }
-            }
-            KeyCode::Char('e') => {
-                if let Some(i) = app.table_state.selected() {
-                    if i < app.model_list.len() {
-                        let name = app.model_list[i]["name"].as_str().unwrap_or("").to_string();
-                        let task_types = ["", "general", "coding", "math_logic", "simple_qa", "complex_reasoning"];
-                        let cur = app.model_list[i]["task_type"].as_str().unwrap_or("");
-                        let next = task_types
-                            .iter()
-                            .position(|t| *t == cur)
-                            .map(|p| task_types[(p + 1) % task_types.len()])
-                            .unwrap_or("")
-                            .to_string();
-                        let t = tx.clone();
-                        let name2 = name.clone();
-                        let next2 = next.clone();
-                        tokio::spawn(async move {
-                            let _ = t.send(UiEvent::ServiceOp(update_model(&name2, &next2).await)).await;
-                            let _ = t.send(UiEvent::Models(fetch_models().await)).await;
-                        });
-                        app.status_line = format!("模型 {name} 任务类型 → {next}");
-                    }
-                }
-            }
-            _ => {}
-        },
-        Tab::Settings => match code {
-            KeyCode::Down => {
-                app.env_cursor = (app.env_cursor + 1).min(app.env_values.len().saturating_sub(1));
-                app.env_input = app.env_values.get(app.env_cursor).map(|(_, v, _)| v.clone()).unwrap_or_default();
-            }
-            KeyCode::Up => {
-                app.env_cursor = app.env_cursor.saturating_sub(1);
-                app.env_input = app.env_values.get(app.env_cursor).map(|(_, v, _)| v.clone()).unwrap_or_default();
-            }
-            KeyCode::Enter => {
-                if let Some((key, _, _)) = app.env_values.get(app.env_cursor).cloned() {
-                    let v = std::mem::take(&mut app.env_input);
-                    let t = tx.clone();
-                    let key2 = key.clone();
-                    tokio::spawn(async move {
-                        let _ = t.send(UiEvent::ServiceOp(write_env(&key, &v).await)).await;
-                        let _ = t.send(UiEvent::Env(fetch_env().await)).await;
-                    });
-                    app.status_line = format!("✓ 已保存 {key2}");
-                }
-            }
-            KeyCode::Backspace => {
-                app.env_input.pop();
-            }
-            KeyCode::Char(c) => {
-                app.env_input.push(c);
-            }
-            _ => {}
-        },
-        _ => {
-            // Overview / Usage
-            match code {
-                KeyCode::Down => app.scroll += 1,
-                KeyCode::Up => app.scroll = app.scroll.saturating_sub(1),
-                KeyCode::Char('s') => {
-                    let t = tx.clone();
-                    tokio::spawn(async move {
-                        let _ = t.send(UiEvent::ServiceOp(service_op("start", "ai").await)).await;
-                        let _ = t.send(UiEvent::ServiceOp(service_op("start", "ollama").await)).await;
-                        let _ = t.send(UiEvent::Overview(fetch_overview().await)).await;
-                    });
-                    app.status_line = "启动 AI 服务 + Ollama...".into();
-                }
-                KeyCode::Char('x') => {
-                    let t = tx.clone();
-                    tokio::spawn(async move {
-                        let _ = t.send(UiEvent::ServiceOp(service_op("stop", "ai").await)).await;
-                        let _ = t.send(UiEvent::ServiceOp(service_op("stop", "ollama").await)).await;
-                        let _ = t.send(UiEvent::Overview(fetch_overview().await)).await;
-                    });
-                    app.status_line = "停止 AI 服务 + Ollama...".into();
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-fn select_conv(app: &mut App, idx: usize, tx: mpsc::Sender<UiEvent>) {
-    if idx >= app.conversations.len() {
-        return;
-    }
-    let (id, _, _) = &app.conversations[idx];
-    let id = id.clone();
-    app.selected_conv = idx;
-    app.conv_active = Some(id.clone());
-    app.chat_msgs.clear();
-    let t = tx.clone();
-    tokio::spawn(async move {
-        let _ = t.send(UiEvent::ConvLoaded(fetch_conv(&id).await)).await;
-    });
 }
 
 // ═══════════════ UI RENDERING ═══════════════
@@ -709,7 +902,14 @@ fn ui(f: &mut Frame, app: &mut App) {
         Tab::Settings => render_settings(f, content, app),
     }
 
-    let status = Paragraph::new(app.status_line.clone()).style(Style::default().fg(Color::Cyan));
+    let status = format!(
+        "{}  ·  光标({},{})  {}",
+        app.status_line,
+        app.cursor.row,
+        app.cursor.col,
+        if app.cursor.input.is_empty() { "" } else { &app.cursor.input }
+    );
+    let status = Paragraph::new(status).style(Style::default().fg(Color::Cyan));
     f.render_widget(status, outer[1]);
 }
 
@@ -717,149 +917,53 @@ fn card_block(title: &str) -> Block<'static> {
     Block::default().title(title.to_string()).borders(Borders::ALL)
 }
 
-fn render_overview(f: &mut Frame, area: Rect, app: &mut App) {
-    let cols = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(5), Constraint::Min(0), Constraint::Length(3), Constraint::Length(3)])
-        .split(area);
-
-    let n_healthy = app.services.iter().filter(|s| s.healthy).count();
-    let cards = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 4); 4])
-        .split(cols[0]);
-    let stats: Vec<(String, String, Color)> = vec![
-        ("服务健康".into(), format!("{}/{}", n_healthy, app.services.len()), Color::Blue),
-        (
-            "核心服务".into(),
-            if app.services.iter().any(|s| s.name == "核心服务" && s.healthy) { "运行中".into() } else { "异常".into() },
-            Color::Green,
-        ),
-        (
-            "Ollama".into(),
-            if app.services.iter().any(|s| s.name == "Ollama" && s.healthy) { "运行中".into() } else { "未运行".into() },
-            Color::Green,
-        ),
-        ("累计花费".into(), format!("${:.6}", app.total_spend), Color::Yellow),
-    ];
-    for (i, (label, val, color)) in stats.iter().enumerate() {
-        let lines = vec![
-            Line::from(Span::styled(val.clone(), Style::default().fg(*color).add_modifier(Modifier::BOLD))),
-            Line::from(Span::styled(label.clone(), Style::default().fg(Color::Gray))),
-        ];
-        f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL)), cards[i]);
+/// Style a grid cell — highlight the focused cell.
+fn cell_style(app: &App, row: usize, col: usize, is_header: bool) -> Style {
+    if row == app.cursor.row && col == app.cursor.col {
+        return Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
     }
+    if is_header {
+        return Style::default().add_modifier(Modifier::BOLD);
+    }
+    Style::default()
+}
 
-    let header = ["服务名", "状态", "健康"];
-    let widths = [Constraint::Length(16), Constraint::Length(26), Constraint::Length(6)];
-    let rows: Vec<Vec<String>> = app
-        .services
-        .iter()
-        .map(|s| vec![s.name.clone(), s.status.clone(), if s.healthy { "✓ 健康".into() } else { "✗ 异常".into() }])
-        .collect();
-    let table = build_table(&header, &widths, &rows, 20);
-    f.render_widget(table.block(card_block("服务列表")), cols[1]);
-
-    let mut rlines = Vec::new();
-    if app.routing_stats.is_empty() {
-        rlines.push(Line::from("  (暂无路由数据)"));
-    } else {
-        for (m, c) in &app.routing_stats {
-            rlines.push(Line::from(format!("  {m:<16} {c} 次")));
+/// Render a grid as a simple table-like paragraph with cursor highlight.
+fn render_grid(f: &mut Frame, area: Rect, app: &App, title: &str) {
+    let mut lines: Vec<Line> = Vec::new();
+    for (row, cells) in app.grid.cells.iter().enumerate() {
+        let mut spans: Vec<Span> = Vec::new();
+        for (col, cell) in cells.iter().enumerate() {
+            let is_header = matches!(cell.kind, CellKind::Header);
+            let style = cell_style(app, row, col, is_header);
+            spans.push(Span::styled(format!(" {:<18} ", cell.text), style));
         }
+        lines.push(Line::from(spans));
     }
-    f.render_widget(Paragraph::new(rlines).block(card_block("智能路由统计")), cols[2]);
+    f.render_widget(Paragraph::new(lines).block(card_block(title)), area);
+}
 
-    f.render_widget(
-        Paragraph::new(" [s] 启动服务   [x] 停止服务   [Tab] 切换页面").style(Style::default().fg(Color::DarkGray)),
-        cols[3],
-    );
+fn render_overview(f: &mut Frame, area: Rect, app: &mut App) {
+    render_grid(f, area, app, "总览");
 }
 
 fn render_usage(f: &mut Frame, area: Rect, app: &mut App) {
-    let cols = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(5), Constraint::Min(0), Constraint::Length(4 + app.budgets.len() as u16)])
-        .split(area);
-
-    let cards = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 3); 3])
-        .split(cols[0]);
-    let stats: Vec<(String, String, Color)> = vec![
-        ("核心服务".into(), "正常".into(), Color::Green),
-        ("可用模型".into(), app.model_count.to_string(), Color::Blue),
-        ("累计花费".into(), format!("${:.6}", app.total_spend), Color::Yellow),
-    ];
-    for (i, (label, val, color)) in stats.iter().enumerate() {
-        let lines = vec![
-            Line::from(Span::styled(val.clone(), Style::default().fg(*color).add_modifier(Modifier::BOLD))),
-            Line::from(Span::styled(label.clone(), Style::default().fg(Color::Gray))),
-        ];
-        f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL)), cards[i]);
-    }
-
-    let header = ["模型", "输入", "输出", "请求", "花费"];
-    let widths = [Constraint::Length(18), Constraint::Length(12), Constraint::Length(12), Constraint::Length(8), Constraint::Length(12)];
-    let rows: Vec<Vec<String>> = app
-        .usage_stats
-        .iter()
-        .map(|r| vec![r.model.clone(), r.input.to_string(), r.output.to_string(), r.requests.to_string(), format!("${:.4}", r.cost)])
-        .collect();
-    let table = build_table(&header, &widths, &rows, 20);
-    f.render_widget(table.block(card_block("用量明细")), cols[1]);
-
-    let mut blines = Vec::new();
-    if app.budgets.is_empty() {
-        blines.push(Line::from("  (未设置预算 — 用 lloom-cli budgets set)"));
-    } else {
-        for (scope, id, spent, max) in &app.budgets {
-            let pct = if *max > 0.0 { (spent / max * 100.0) as u32 } else { 0 };
-            let color = if pct >= 100 { Color::Red } else { Color::Green };
-            let filled = (pct / 10).min(10) as usize;
-            let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(10 - filled));
-            blines.push(Line::from(vec![
-                Span::raw(format!("  {scope}/{id}  ${spent:.2}/${max:.2}  ")),
-                Span::styled(bar, Style::default().fg(color)),
-                Span::styled(format!(" {pct}%"), Style::default().fg(color)),
-            ]));
-        }
-    }
-    f.render_widget(Paragraph::new(blines).block(card_block("配额管理")), cols[2]);
+    render_grid(f, area, app, "用量");
 }
 
 fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
 
-    let mut items: Vec<ListItem> = app
-        .conversations
-        .iter()
-        .enumerate()
-        .map(|(i, (_, title, n))| {
-            let s = if i == app.selected_conv {
-                Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray)
-            } else {
-                Style::default()
-            };
-            ListItem::new(format!("  {title} ({n})")).style(s)
-        })
-        .collect();
-    if items.is_empty() {
-        items.push(ListItem::new("  (无对话 — 输入消息自动新建)"));
-    }
-    items.push(ListItem::new(""));
-    items.push(ListItem::new("  [n] 新建"));
-    let list = List::new(items).block(card_block("会话"));
-    f.render_widget(list, cols[0]);
+    // Left: grid (conversation list + input)
+    render_grid(f, cols[0], app, "会话");
 
-    let right = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)])
-        .split(cols[1]);
-
+    // Right: messages
     let mut mlines: Vec<Line> = Vec::new();
     for m in &app.chat_msgs {
         match m.role.as_str() {
@@ -884,63 +988,11 @@ fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
         mlines.push(Line::from(Span::styled("  思考中...", Style::default().fg(Color::Yellow))));
     }
     let msgs = Paragraph::new(mlines).block(card_block("对话"));
-    f.render_widget(msgs, right[0]);
-
-    let prompt = if app.conv_loading { "处理中..." } else { "输入消息 (Enter 发送, n 新建) > " };
-    let input = Paragraph::new(format!("{prompt}{}", app.conv_input))
-        .style(Style::default().fg(Color::Green))
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(input, right[1]);
+    f.render_widget(msgs, cols[1]);
 }
 
 fn render_models(f: &mut Frame, area: Rect, app: &mut App) {
-    let cols = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(2)])
-        .split(area);
-
-    f.render_widget(
-        Paragraph::new("↓↑ 选择 · d 删除 · e 切换任务类型").style(Style::default().fg(Color::DarkGray)),
-        cols[0],
-    );
-
-    let header = ["名称", "提供商", "LiteLLM 模型", "输入 $/1K", "输出 $/1K"];
-    let widths = [Constraint::Length(20), Constraint::Length(12), Constraint::Length(30), Constraint::Length(12), Constraint::Length(12)];
-    let rows: Vec<Vec<String>> = app
-        .model_list
-        .iter()
-        .map(|m| {
-            vec![
-                m["name"].as_str().unwrap_or("").to_string(),
-                m["provider"].as_str().unwrap_or("").to_string(),
-                m["litellm_model"].as_str().unwrap_or("").to_string(),
-                format!("{:.6}", m["input_cost_per_token"].as_f64().unwrap_or(0.0) * 1000.0),
-                format!("{:.6}", m["output_cost_per_token"].as_f64().unwrap_or(0.0) * 1000.0),
-            ]
-        })
-        .collect();
-
-    let header_cells: Vec<ratatui::widgets::Cell> = header
-        .iter()
-        .map(|h| ratatui::widgets::Cell::from(Span::styled(h.to_string(), Style::default().add_modifier(Modifier::BOLD))))
-        .collect();
-    let header_row = ratatui::widgets::Row::new(header_cells);
-    let table = Table::new(rows.into_iter().map(ratatui::widgets::Row::new), widths)
-        .header(header_row)
-        .block(card_block("模型管理"))
-        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("> ");
-    let mut state = app.table_state.clone();
-    if !app.model_list.is_empty() && state.selected().is_none() {
-        state.select(Some(0));
-    }
-    f.render_stateful_widget(table, cols[1], &mut state);
-    app.table_state = state;
-
-    f.render_widget(
-        Paragraph::new(format!("共 {} 个模型", app.model_list.len())).style(Style::default().fg(Color::DarkGray)),
-        cols[2],
-    );
+    render_grid(f, area, app, "模型管理");
 }
 
 fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
@@ -959,39 +1011,12 @@ fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
         ]));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("API 密钥 (↑↓ 选择 · Enter 保存)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
-    for (i, (key, val, section)) in app.env_values.iter().enumerate() {
-        let marker = if i == app.env_cursor { "▶" } else { " " };
-        let is_set = !val.trim().is_empty();
-        let dot = if is_set { "✓" } else { "○" };
-        let dot_color = if is_set { Color::Green } else { Color::Gray };
-        let shown = if i == app.env_cursor { app.env_input.clone() } else if is_set { "***配置***".to_string() } else { String::new() };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{marker} "), Style::default().fg(Color::Yellow)),
-            Span::styled(format!("{dot} "), Style::default().fg(dot_color)),
-            Span::styled(format!("{key:<20}"), Style::default().fg(Color::White)),
-            Span::styled(format!("[{section}]"), Style::default().fg(Color::Gray)),
-            Span::styled(format!("  {shown}"), Style::default().fg(Color::Green)),
-        ]));
-    }
-    if !app.env_msg.is_empty() {
-        lines.push(Line::from(Span::styled(format!("  {}", app.env_msg), Style::default().fg(Color::Green))));
-    }
     f.render_widget(Paragraph::new(lines).block(card_block("设置")), cols[0]);
 
+    // Env grid in the upper portion
+    render_grid(f, cols[0], app, "API 密钥");
     f.render_widget(
-        Paragraph::new("↑↓ 选择密钥 · 输入新值 · Enter 保存").style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new("←→↑↓ 移动 · Enter 激活 · 输入会进入光标处的输入框").style(Style::default().fg(Color::DarkGray)),
         cols[1],
     );
-}
-
-fn build_table<'a>(header: &'a [&'a str], widths: &[Constraint], rows: &[Vec<String>], _max_rows: usize) -> Table<'a> {
-    let header_cells: Vec<ratatui::widgets::Cell> = header
-        .iter()
-        .map(|h| ratatui::widgets::Cell::from(Span::styled(h.to_string(), Style::default().add_modifier(Modifier::BOLD))))
-        .collect();
-    let header_row = ratatui::widgets::Row::new(header_cells);
-    Table::new(rows.iter().map(|r| ratatui::widgets::Row::new(r.clone())), widths.to_vec())
-        .header(header_row)
-        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
 }
