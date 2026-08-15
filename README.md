@@ -234,7 +234,9 @@ LLooM/
 ├── crates/lloom-server/          # Main server (REST + WebUI)
 ├── crates/lloom-cli/             # CLI (clap, links lloom-core)
 ├── crates/lloom-tui/             # TUI (ratatui, links lloom-core)
-├── webui/index.html              # WebUI frontend (SPA, standalone)
+├── webui/                        # WebUI frontend (React + Vite + Ant Design)
+│   ├── src/                      # pages: Overview/Usage/Chat/Models/Settings
+│   └── dist/                     # build output (served by lloom-server)
 ├── api/ai_service.py             # Python AI micro-service (litellm wrapper)
 ├── scripts/
 │   ├── build.sh                  # Cross-platform build (with dep checks)

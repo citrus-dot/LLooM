@@ -97,19 +97,6 @@ struct ServiceAction {
 
 // ── Health / UI ──
 
-async fn ui_root() -> Response {
-    match config::ui_dir() {
-        Some(dir) => {
-            let content = std::fs::read_to_string(dir.join("index.html")).unwrap_or_default();
-            Response::builder()
-                .header(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))
-                .body(Body::from(content))
-                .unwrap()
-        }
-        None => (StatusCode::NOT_FOUND, "ui/index.html not found").into_response(),
-    }
-}
-
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok", "version": "2.0.0" }))
 }
@@ -527,10 +514,15 @@ async fn open_web(Json(body): Json<Value>) -> Json<Value> {
 // ── Router ──
 
 pub fn build_router(state: AppState) -> Router {
+    // Serve the frontend: static assets from the ui dir, SPA fallback to index.html.
+    let ui = config::ui_dir().unwrap_or_default();
+    let serve_ui = tower_http::services::ServeDir::new(&ui).not_found_service(
+        tower_http::services::ServeFile::new(ui.join("index.html")),
+    );
+
     Router::new()
-        // UI + health
-        .route("/", get(ui_root))
-        .route("/index.html", get(ui_root))
+        // UI (SPA: static files + fallback to index.html) + health
+        .fallback_service(serve_ui)
         .route("/api/health", get(health))
         // Models
         .route("/api/models", get(list_models).post(register_model))

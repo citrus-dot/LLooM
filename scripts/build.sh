@@ -51,6 +51,8 @@ require_cmd() {
 check_common() {
     echo "检查通用依赖..."
     require_cmd cargo || echo "    → 安装 Rust: https://rustup.rs"
+    require_cmd node || echo "    → 安装 Node.js: https://nodejs.org"
+    require_cmd npm || echo "    → npm 随 Node.js 安装"
 }
 
 check_python() {
@@ -91,7 +93,7 @@ check_python() {
 }
 
 echo ""
-echo "[0/2] 系统依赖检测..."
+echo "[0/3] 系统依赖检测..."
 echo "----------------------------------------"
 check_common
 check_python
@@ -103,8 +105,21 @@ fi
 echo "✓ 系统依赖检查通过"
 echo ""
 
-# 1. 编译 Rust workspace
-echo "[1/2] 编译 Rust workspace (release)..."
+# 1. 构建 React WebUI
+echo "[1/3] 构建 React WebUI..."
+echo "----------------------------------------"
+if [ ! -d webui/node_modules ]; then
+    echo "安装 npm 依赖..."
+    (cd webui && npm install) 2>&1 || { echo "✗ npm install 失败！"; exit 1; }
+fi
+(cd webui && npm run build) 2>&1 || {
+    echo "✗ React 构建失败！"
+    exit 1
+}
+echo "✓ React 构建完成: webui/dist/"
+
+# 2. 编译 Rust workspace
+echo "[2/3] 编译 Rust workspace (release)..."
 echo "----------------------------------------"
 cargo build --workspace --release 2>&1 || {
     echo "✗ Rust 编译失败！"
@@ -115,8 +130,8 @@ echo "    target/release/lloom-server"
 echo "    target/release/lloom-cli"
 echo "    target/release/lloom-tui"
 
-# 2. 打包 Python AI 微服务 + Ollama
-echo "[2/2] AI 微服务 + Ollama..."
+# 3. 打包 Python AI 微服务 + Ollama
+echo "[3/3] AI 微服务 + Ollama..."
 echo "----------------------------------------"
 if [ "$SKIP_AI" = false ]; then
     echo "打包 Python AI 微服务 (PyInstaller)..."

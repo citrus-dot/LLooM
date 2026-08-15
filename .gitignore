@@ -16,6 +16,10 @@ env/
 # Rust build artifacts
 target/
 
+# WebUI (React)
+webui/node_modules/
+webui/dist/
+
 # PyInstaller build artifacts
 build/
 dist/
@@ -38,3 +42,4 @@ Thumbs.db
 
 # Logs
 *.log
+webui/tsconfig.tsbuildinfo

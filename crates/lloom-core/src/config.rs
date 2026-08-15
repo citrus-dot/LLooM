@@ -66,12 +66,14 @@ pub fn web_port() -> u16 {
         .unwrap_or(DEFAULT_WEB_PORT)
 }
 
-/// Locate `index.html` in any of the known layouts (deb / portable / repo).
+/// Locate the built frontend (React `dist/` or legacy single `index.html`).
 pub fn ui_dir() -> Option<PathBuf> {
     let candidates = [
+        install_dir().join("resources/webui/dist"),
         install_dir().join("resources/ui"),
-        install_dir().join("ui"),
+        install_dir().join("../../webui/dist"),
         install_dir().join("../../webui"),
+        PathBuf::from("webui/dist"),
         PathBuf::from("webui"),
         PathBuf::from("ui"),
     ];
