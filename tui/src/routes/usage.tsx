@@ -7,7 +7,7 @@ import { getStats, getUsage, getBudgets, setBudget, checkBudget, deleteBudget, g
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
 import { useDialog } from "../ui/dialog"
-import { Button, Card, StatCard, Table } from "../ui"
+import { Button, StatCard, Table } from "../ui"
 
 export function Usage(props: { setStatus: (s: string) => void }) {
   const [rows, setRows] = createSignal<UsageRow[]>([])
@@ -176,86 +176,83 @@ export function Usage(props: { setStatus: (s: string) => void }) {
       </box>
 
       {/* Usage */}
-      <Card title="用量明细">
-        <Table
-          columns={[
-            { title: "模型", width: "30%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{r.model_name}</text> },
-            { title: "输入", width: "14%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_input_tokens}</text> },
-            { title: "输出", width: "14%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_output_tokens}</text> },
-            { title: "请求", width: "12%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.request_count}</text> },
-            { title: "缓存", width: "12%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.cache_hits ?? 0}</text> },
-            { title: "花费", render: (r, { selected }) => <text fg={selected ? theme.background : theme.warning}>${r.total_cost.toFixed(4)}</text> },
-          ]}
-          rows={rows()}
-          selectedIndex={selIdx()}
-          hoverIndex={hoverIdx()}
-          onHover={setHoverIdx}
-          onSelect={setSelIdx}
-          emptyText="暂无用量数据"
-        />
-      </Card>
+      <text fg={theme.textMuted} attributes={1}>用量明细</text>
+      <Table
+        columns={[
+          { title: "模型", width: "30%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{r.model_name}</text> },
+          { title: "输入", width: "14%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_input_tokens}</text> },
+          { title: "输出", width: "14%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.total_output_tokens}</text> },
+          { title: "请求", width: "12%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.request_count}</text> },
+          { title: "缓存", width: "12%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{r.cache_hits ?? 0}</text> },
+          { title: "花费", render: (r, { selected }) => <text fg={selected ? theme.background : theme.warning}>${r.total_cost.toFixed(4)}</text> },
+        ]}
+        rows={rows()}
+        selectedIndex={selIdx()}
+        hoverIndex={hoverIdx()}
+        onHover={setHoverIdx}
+        onSelect={setSelIdx}
+        emptyText="暂无用量数据"
+      />
 
       {/* Model pricing */}
-      <Card title="模型定价 ($/1K tokens)">
-        <Table
-          columns={[
-            { title: "模型", width: "30%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.name}</text> },
-            { title: "提供商", width: "15%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{m.provider}</text> },
-            { title: "输入", width: "25%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>${(m.input_cost_per_token * 1000).toFixed(6)}</text> },
-            { title: "输出", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>${(m.output_cost_per_token * 1000).toFixed(6)}</text> },
-          ]}
-          rows={models()}
-          emptyText="暂无模型定价"
-        />
-      </Card>
+      <text fg={theme.textMuted} attributes={1}>模型定价 ($/1K tokens)</text>
+      <Table
+        columns={[
+          { title: "模型", width: "30%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.name}</text> },
+          { title: "提供商", width: "15%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{m.provider}</text> },
+          { title: "输入", width: "25%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>${(m.input_cost_per_token * 1000).toFixed(6)}</text> },
+          { title: "输出", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>${(m.output_cost_per_token * 1000).toFixed(6)}</text> },
+        ]}
+        rows={models()}
+        emptyText="暂无模型定价"
+      />
 
       {/* Budgets */}
-      <Card
-        title="预算"
-        actions={
-          <box flexDirection="row" gap={1}>
-            <Button variant="primary" onClick={() => addBudget()}>设置</Button>
-            <Button variant="ghost" onClick={() => loadBudgets()}>刷新</Button>
-          </box>
-        }
-      >
-        {budgets().length === 0 ? (
-          <text fg={theme.textDim} paddingLeft={2}>未设置预算（点「设置」或 lloom-cli budgets set）</text>
-        ) : (
-          <box flexDirection="column">
-            {budgets().map((b) => {
+      <box flexDirection="row" gap={1} paddingBottom={1}>
+        <text fg={theme.textMuted} attributes={1}>预算</text>
+        <Button variant="primary" onClick={() => addBudget()}>设置</Button>
+        <Button variant="ghost" onClick={() => loadBudgets()}>刷新</Button>
+      </box>
+      <Table
+        columns={[
+          {
+            title: "范围",
+            width: "30%",
+            render: (b) => <text fg={theme.text} attributes={1}>{b.scope}/{b.scope_id}</text>,
+          },
+          {
+            title: "已用 / 上限",
+            width: "25%",
+            render: (b) => {
+              const c = checked()[`${b.scope}/${b.scope_id}`]
+              const within = c?.within ?? true
+              return <text fg={within ? theme.text : theme.error}>${(c?.spent ?? 0).toFixed(4)} / ${(c?.max ?? b.max_budget).toFixed(2)}</text>
+            },
+          },
+          {
+            title: "进度",
+            render: (b) => {
               const c = checked()[`${b.scope}/${b.scope_id}`]
               const within = c?.within ?? true
               const spent = c?.spent ?? 0
               const max = c?.max ?? b.max_budget
               const pct = max > 0 ? Math.min((spent / max) * 100, 100) : 0
-              const barWidth = 40
+              const barWidth = 30
               const filled = Math.round((pct / 100) * barWidth)
-              const bar = within ? theme.success : theme.error
               return (
-                <box
-                  flexDirection="column"
-                  paddingLeft={2}
-                  paddingRight={2}
-                  paddingBottom={1}
-                  onMouseUp={(evt: { button?: number }) => { if (evt?.button === 2) budgetMenu(b) }}
-                >
-                  <box flexDirection="row" gap={2}>
-                    <text fg={theme.text} attributes={1}>{b.scope}/{b.scope_id}</text>
-                    <box flexGrow={1} />
-                    <text fg={within ? theme.text : theme.error}>${spent.toFixed(4)} / ${max.toFixed(2)}</text>
-                    <text fg={within ? theme.success : theme.error}>{pct.toFixed(0)}%</text>
-                  </box>
-                  <box flexDirection="row">
-                    <text fg={bar}>{"█".repeat(filled)}</text>
-                    <text fg={theme.border}>{"░".repeat(barWidth - filled)}</text>
-                  </box>
+                <box flexDirection="row">
+                  <text fg={within ? theme.success : theme.error}>{"█".repeat(filled)}</text>
+                  <text fg={theme.border}>{"░".repeat(barWidth - filled)}</text>
+                  <text fg={within ? theme.success : theme.error} paddingLeft={1}>{pct.toFixed(0)}%</text>
                 </box>
               )
-            })}
-          </box>
-        )}
-      </Card>
+            },
+          },
+        ]}
+        rows={budgets()}
+        onRowUp={(b, evt) => { if (evt?.button === 2) budgetMenu(b) }}
+        emptyText="未设置预算（点「设置」或 lloom-cli budgets set）"
+      />
       </scrollbox>
     </box>
   )
