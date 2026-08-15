@@ -98,13 +98,14 @@ Rust 服务器（`:7861`）是唯一入口，会自动拉起 Python AI 微服务
 ### 方式 C：构建发布包
 
 ```bash
-# 完整构建（Rust release + AI 微服务 PyInstaller + Ollama）
+# 完整构建（Rust release + AI 微服务打包）
 bash scripts/build.sh
 
 # 或分步：
 bash scripts/build.sh --skip-ai       # 跳过 AI 微服务打包
-bash scripts/build.sh --skip-ollama   # 跳过 Ollama 下载
 ```
+
+**不捆绑 Ollama**。服务器使用 PATH 或 `localhost:11434` 上的系统 Ollama；若缺失，CLI / WebUI / TUI 会在用到本地模型时给出安装提示。安装方式：`curl -fsSL https://ollama.com/install.sh | sh`。
 
 构建产物：
 - `dist/ai-service/ai-service` — 独立 AI 微服务可执行（约 26MB，封装 litellm）

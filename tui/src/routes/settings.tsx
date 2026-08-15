@@ -205,6 +205,7 @@ export function Settings(props: { setStatus: (s: string) => void }) {
               <text fg={theme.text}>{s.name}</text>
               <text fg={s.healthy ? theme.success : theme.error}>{s.status}</text>
             </box>
+            {s.detail && <text fg={theme.warning} wrapMode="word" paddingLeft={3}>{s.detail}</text>}
           </box>
         ))}
         <box height={1} />

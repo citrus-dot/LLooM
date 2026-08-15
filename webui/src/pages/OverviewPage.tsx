@@ -111,8 +111,12 @@ export default function OverviewPage() {
     {
       title: '健康',
       key: 'healthy',
-      render: (_: unknown, r: ServiceStatus) =>
-        r.healthy ? <Tag color="success">健康</Tag> : <Tag color="error">异常</Tag>,
+      render: (_: unknown, r: ServiceStatus) => (
+        <Space direction="vertical" size={0}>
+          <div>{r.healthy ? <Tag color="success">健康</Tag> : <Tag color="error">异常</Tag>}</div>
+          {r.detail && <div style={{ color: '#faad14', fontSize: 12, maxWidth: 420 }}>{r.detail}</div>}
+        </Space>
+      ),
     },
     {
       title: '操作',

@@ -7,7 +7,7 @@ import { createSignal } from "solid-js"
 import { getServicesStatus } from "./api"
 
 export const [healthServices, setHealthServices] = createSignal<
-  { name: string; status: string; healthy: boolean }[] | null
+  { name: string; status: string; healthy: boolean; detail?: string }[] | null
 >(null)
 export const [serverConnected, setServerConnected] = createSignal(true)
 

@@ -6,6 +6,7 @@ export interface ServiceStatus {
   name: string
   status: string
   healthy: boolean
+  detail?: string
 }
 
 export interface ServicesStatus {

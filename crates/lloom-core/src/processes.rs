@@ -207,3 +207,18 @@ pub async fn check_ollama_health() -> bool {
     let out = http_get("http://localhost:11434/api/tags", 3).await;
     out.contains("\"models\"") || out.contains("name")
 }
+
+/// Whether the ollama binary is available (bundled or on PATH). The port may
+/// still be down if it isn't running — callers use this to tell "not
+/// installed" apart from "installed but stopped".
+pub fn ollama_installed() -> bool {
+    let bin = crate::config::ollama_binary_path();
+    if bin != "ollama" {
+        return true; // bundled path found
+    }
+    Command::new("sh")
+        .args(["-c", "command -v ollama >/dev/null 2>&1"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}

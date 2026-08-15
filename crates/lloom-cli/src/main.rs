@@ -267,6 +267,11 @@ async fn cmd_status(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
         let healthy = s["healthy"].as_bool().unwrap_or(false);
         let mark = if healthy { "✓" } else { "✗" };
         println!("  {mark} {:<14} {}", name, st);
+        if let Some(d) = s["detail"].as_str() {
+            if !d.is_empty() {
+                println!("        {d}");
+            }
+        }
     }
     Ok(())
 }

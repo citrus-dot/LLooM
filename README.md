@@ -99,13 +99,16 @@ The server (`:7861`) is the single entry point. It spawns the Python AI micro-se
 ### Option C: Build the Release Bundle
 
 ```bash
-# Full build (Rust release + AI service PyInstaller + Ollama)
+# Full build (Rust release + AI service PyInstaller)
 bash scripts/build.sh
 
 # Or step by step:
 bash scripts/build.sh --skip-ai       # skip AI micro-service packaging
-bash scripts/build.sh --skip-ollama   # skip Ollama download
 ```
+
+Ollama is **not** bundled. The server uses a system Ollama on PATH or at
+`localhost:11434`; if it's missing, the CLI / WebUI / TUI show an install hint.
+Install it with `curl -fsSL https://ollama.com/install.sh | sh`.
 
 Build outputs:
 - `target/release/lloom-server` — main server (REST + WebUI)

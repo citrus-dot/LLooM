@@ -396,7 +396,7 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
         service("AI Service", ai_owns, ai_responding)
     };
 
-    let services = json!([
+    let mut services = json!([
         {
             "name": "Core Server",
             // Reaching this handler proves the server process is alive and
@@ -408,6 +408,12 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
         service("Ollama", ollama_owns, ollama_responding),
         ai_status,
     ]);
+    // Add an install hint to the Ollama entry when it's not installed at all.
+    if let Some(ollama) = services.as_array_mut().unwrap().iter_mut().find(|s| s["name"].as_str() == Some("Ollama")) {
+        if !crate::processes::ollama_installed() {
+            ollama["detail"] = json!("未安装 Ollama。本地模型不可用（云 API 不受影响）。安装: curl -fsSL https://ollama.com/install.sh | sh");
+        }
+    }
     let healthy = services.as_array().unwrap().iter().filter(|s| s["healthy"].as_bool().unwrap_or(false)).count();
     let running = services.as_array().unwrap().iter().filter(|s| s["status"].as_str().unwrap_or("").starts_with("Up")).count();
     Json(json!({

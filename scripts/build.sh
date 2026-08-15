@@ -13,7 +13,9 @@
 # 用法:
 #   bash scripts/build.sh                   # 完整构建
 #   bash scripts/build.sh --skip-ai         # 跳过 AI 微服务打包
-#   bash scripts/build.sh --skip-ollama     # 跳过 Ollama 下载
+#
+# Ollama 不捆绑。服务器复用系统 Ollama（PATH 或 localhost:11434）；
+# 缺失时 CLI / WebUI / TUI 会在用到本地模型时提示安装。
 
 set -e
 
@@ -22,12 +24,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 SKIP_AI=false
-SKIP_OLLAMA=false
 
 for arg in "$@"; do
     case $arg in
         --skip-ai) SKIP_AI=true ;;
-        --skip-ollama) SKIP_OLLAMA=true ;;
     esac
 done
 
@@ -142,20 +142,6 @@ if [ "$SKIP_AI" = false ]; then
     echo "✓ AI 服务打包完成: dist/ai-service/ai-service"
 else
     echo "跳过 AI 服务打包"
-fi
-
-if [ "$SKIP_OLLAMA" = false ]; then
-    OLLAMA_PATH="dist/ollama/ollama"
-    if [ -f "$OLLAMA_PATH" ] && [ -x "$OLLAMA_PATH" ]; then
-        echo "✓ Ollama 二进制已存在"
-    else
-        echo "下载 Ollama..."
-        bash scripts/download_ollama.sh || {
-            echo "⚠ Ollama 下载失败，将使用系统安装的 Ollama"
-        }
-    fi
-else
-    echo "跳过 Ollama 下载"
 fi
 
 echo ""
