@@ -77,7 +77,9 @@ export function Session(props: { setStatus: (s: string) => void }) {
   })
 
   useBindings(() => ({
-    enabled: () => !dialogOpen(),
+    // List navigation only applies while focus is on the conversation list;
+    // when the input is focused, Enter/arrows go to the textarea.
+    enabled: () => !dialogOpen() && focus() === "conv",
     bindings: [
       {
         key: "up",
@@ -270,7 +272,7 @@ export function Session(props: { setStatus: (s: string) => void }) {
             onMouseUp={() => newConv()}
           >
             <text fg={focus() === "conv" && selIdx() === 0 ? theme.background : theme.primary}>
-              [+] 新建对话
+              {activeSessionId() === null ? "▸ " : "  "}[+] 新建对话
             </text>
           </box>
           {convs().length === 0 && <text fg={theme.textDim} paddingLeft={2}>  暂无对话</text>}
