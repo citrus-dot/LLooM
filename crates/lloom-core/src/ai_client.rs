@@ -6,6 +6,7 @@ use crate::error::{AppError, Result};
 use crate::models::Model;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use futures::Stream;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSpec {
@@ -131,14 +132,17 @@ pub async fn classify(text: &str, classifier: &ModelSpec, valid_types: &[&str]) 
     }
 }
 
-/// Full orchestration stream. Returns materialized SSE events.
+/// Full orchestration stream. Returns a live `Stream` of SSE events forwarded
+/// from the Python AI service — NOT buffered. The Rust core proxies each event
+/// as it arrives (see `server::orchestrate_stream`), so the browser receives
+/// incremental `token` events and can render the answer word-by-word.
 pub async fn orchestrate_stream(
     query: &str,
     history: &[Value],
     sr_domain: &str,
     models: &[ModelSpec],
     cache_dir: &str,
-) -> Result<Vec<SseEvent>> {
+) -> Result<impl Stream<Item = SseEvent> + Send> {
     let url = format!("{}/v1/orchestrate/stream", base_url());
     let body = json!({
         "query": query,
@@ -146,6 +150,7 @@ pub async fn orchestrate_stream(
         "sr_domain": sr_domain,
         "models": models,
         "cache_dir": cache_dir,
+        "similarity_threshold": config::cache_threshold(),
     });
     let resp = client()
         .post(&url)
@@ -153,11 +158,59 @@ pub async fn orchestrate_stream(
         .send()
         .await
         .map_err(|e| AppError::AiService(format!("AI service unreachable: {e}")))?;
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service read error: {e}")))?;
-    Ok(parse_sse(&text))
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<SseEvent>(64);
+
+    // Read the Python SSE byte stream in a background task and parse it into
+    // discrete events, pushing each onto the channel as soon as it completes.
+    tokio::spawn(async move {
+        use futures::StreamExt;
+        let mut buf = String::new();
+        let mut event_name: Option<String> = None;
+        let mut data_buf = String::new();
+        let mut bs = resp.bytes_stream();
+        while let Some(chunk) = bs.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(_) => break,
+            };
+            let text = match String::from_utf8(chunk.to_vec()) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            buf.push_str(&text);
+            while let Some(nl) = buf.find('\n') {
+                let line = buf[..nl].to_string();
+                buf.drain(..=nl);
+                let line = line.trim_end();
+                if line.is_empty() {
+                    // Blank line => event boundary: flush the buffered event.
+                    if let Some(name) = event_name.take() {
+                        if !data_buf.is_empty() {
+                            let _ = tx.send(mk_event(name, &data_buf)).await;
+                            data_buf.clear();
+                        }
+                    }
+                } else if let Some(ev) = line.strip_prefix("event:") {
+                    event_name = Some(ev.trim().to_string());
+                } else if let Some(d) = line.strip_prefix("data:") {
+                    let d = d.strip_prefix(' ').unwrap_or(d).to_string();
+                    data_buf.push_str(&d);
+                }
+            }
+        }
+        // Flush a trailing event if the stream ended without a final blank line.
+        if let Some(name) = event_name.take() {
+            if !data_buf.is_empty() {
+                let _ = tx.send(mk_event(name, &data_buf)).await;
+            }
+        }
+    });
+
+    // Convert the receiver into a Stream for the HTTP response body.
+    Ok(futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|ev| (ev, rx))
+    }))
 }
 
 /// Parse an SSE body into a Vec of {event, data} events.

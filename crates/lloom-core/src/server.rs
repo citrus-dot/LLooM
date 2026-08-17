@@ -18,6 +18,7 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -378,13 +379,35 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
         Err(e) => return err_response(AppError::AiService(e.to_string())),
     };
 
-    let mut sse = String::new();
-    for ev in events {
-        sse.push_str(&format!("event: {}\ndata: {}\n\n", ev.event, ev.data.to_string()));
-    }
+    // Forward each event as it arrives (true SSE, not buffered). The Python
+    // side streams `token` deltas; the browser renders them incrementally.
+    let body = Body::from_stream(events.map(|ev| {
+        // Persist cache hit/miss for hit-rate stats + threshold calibration.
+        // Pure side-effect; failures are non-fatal (cache is best-effort).
+        if let Some(obj) = ev.data.as_object() {
+            if let Some(sim) = obj.get("cache_sim").and_then(|v| v.as_f64()) {
+                let is_hit = obj.get("cache_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+                let decision = if is_hit { "hit" } else { "miss" };
+                let model = obj
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default")
+                    .to_string();
+                let _ = db::insert_cache_calibration(sim, decision, &model, None, "passive");
+                if ev.event == "result" {
+                    let _ = db::insert_usage(&model, "default", 0, 0, 0.0, None, is_hit);
+                }
+            }
+        }
+        let data = serde_json::to_string(&ev.data).unwrap_or_default();
+        Ok::<_, std::io::Error>(bytes::Bytes::from(format!(
+            "event: {}\ndata: {}\n\n",
+            ev.event, data
+        )))
+    }));
     Response::builder()
         .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
-        .body(Body::from(sse))
+        .body(body)
         .unwrap()
 }
 
@@ -672,7 +695,77 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/cache/init", post(cache_init))
         .route("/api/cache/status", get(cache_status))
         .route("/api/cache/cleanup", post(cache_cleanup))
+        .route("/api/cache/feedback", post(cache_feedback))
+        .route("/api/cache/threshold", get(cache_threshold_get).post(cache_autotune_set))
         .with_state(state)
+}
+
+// ── Semantic-cache feedback + self-tuning ──
+
+#[derive(Deserialize)]
+struct CacheFeedbackBody {
+    sim: f64,
+    decision: String,
+    correct: bool,
+}
+
+async fn cache_feedback(Json(req): Json<CacheFeedbackBody>) -> Json<Value> {
+    let decision = if req.decision == "hit" { "hit" } else { "miss" };
+    // Record the inline-question answer as a labeled calibration sample.
+    let _ = db::insert_cache_calibration(req.sim, decision, "default", Some(req.correct), "inline_question");
+
+    let auto = db::get_setting("cache_auto_tune")
+        .ok()
+        .flatten()
+        .map(|v| v != "0" && v != "false")
+        .unwrap_or(true);
+
+    let mut suggested: Option<f64> = None;
+    if auto {
+        if let Ok(samples) = db::calibration_labeled_samples() {
+            if let Some(t) = db::optimal_threshold(&samples, 0.01) {
+                let cur = config::cache_threshold();
+                let next = cur + 0.5 * (t - cur); // gradual move, avoids abrupt shifts
+                if config::set_cache_threshold(next).is_ok() {
+                    suggested = Some(next);
+                    let _ = db::set_setting("cache_threshold_suggested", &format!("{t:.4}"));
+                }
+            }
+        }
+    }
+    Json(json!({
+        "ok": true,
+        "threshold": config::cache_threshold(),
+        "suggested": suggested,
+        "auto_tune": auto,
+    }))
+}
+
+async fn cache_threshold_get() -> Json<Value> {
+    let samples = db::calibration_labeled_samples().map(|s| s.len()).unwrap_or(0);
+    let suggested = db::get_setting("cache_threshold_suggested").ok().flatten();
+    let auto = db::get_setting("cache_auto_tune")
+        .ok()
+        .flatten()
+        .map(|v| v != "0" && v != "false")
+        .unwrap_or(true);
+    Json(json!({
+        "threshold": config::cache_threshold(),
+        "auto_tune": auto,
+        "labeled_samples": samples,
+        "suggested": suggested,
+    }))
+}
+
+async fn cache_autotune_set(Json(req): Json<Value>) -> Json<Value> {
+    let on = req.get("auto_tune").and_then(|v| v.as_bool()).unwrap_or(true);
+    let _ = db::set_setting("cache_auto_tune", if on { "1" } else { "0" });
+    // Manual override: an explicit threshold pins it (and implies auto-tune off).
+    if let Some(t) = req.get("threshold").and_then(|v| v.as_f64()) {
+        let _ = config::set_cache_threshold(t);
+        let _ = db::set_setting("cache_auto_tune", "0");
+    }
+    Json(json!({ "ok": true, "auto_tune": on, "threshold": config::cache_threshold() }))
 }
 
 // ── Private helpers ──

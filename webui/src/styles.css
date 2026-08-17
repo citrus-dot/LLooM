@@ -187,12 +187,20 @@ body {
   flex-shrink: 0;
   background: #52c41a;
 }
-.plan-dot.pending,
-.plan-dot.running {
+.plan-dot.pending {
   background: #faad14;
+}
+.plan-dot.running {
+  background: #1677ff;
+  animation: plan-pulse 1s ease-in-out infinite;
 }
 .plan-dot.failed {
   background: #ff4d4f;
+}
+@keyframes plan-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(22, 119, 255, 0.5); }
+  70% { box-shadow: 0 0 0 6px rgba(22, 119, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(22, 119, 255, 0); }
 }
 .plan-desc {
   flex: 1;
@@ -201,6 +209,16 @@ body {
 }
 .plan-model {
   margin: 0 !important;
+}
+.plan-running {
+  font-size: 12px;
+  color: #1677ff;
+}
+.plan-active {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #1677ff;
+  font-weight: 500;
 }
 .plan-foot {
   margin-top: 6px;

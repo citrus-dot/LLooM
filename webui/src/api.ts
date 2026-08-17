@@ -185,6 +185,33 @@ export function cacheCleanup(): Promise<{
   return jpost('/api/cache/cleanup');
 }
 
+export interface CacheThresholdInfo {
+  threshold: number;
+  auto_tune: boolean;
+  labeled_samples: number;
+  suggested: string | null;
+}
+
+export function cacheThresholdGet(): Promise<CacheThresholdInfo> {
+  return jget('/api/cache/threshold');
+}
+
+// `threshold` (manual override) or `autoTune` toggle; both optional.
+export function cacheThresholdSet(
+  opts: { threshold?: number; autoTune?: boolean },
+): Promise<{ ok: boolean; auto_tune: boolean; threshold: number }> {
+  return jpost('/api/cache/threshold', opts);
+}
+
+// Inline "did this cached answer help?" feedback used for self-tuning.
+export function cacheFeedback(
+  sim: number,
+  decision: 'hit' | 'miss',
+  correct: boolean,
+): Promise<{ ok: boolean; threshold: number; suggested: number | null; auto_tune: boolean }> {
+  return jpost('/api/cache/feedback', { sim, decision, correct });
+}
+
 // ── Model endpoints ──
 
 export function getModels(): Promise<{ models: Model[] }> {
@@ -304,4 +331,60 @@ export function parseSse(text: string): SseEvent[] {
   }
   if (cur) events.push(cur);
   return events;
+}
+
+/**
+ * Incremental orchestration stream. Reads the SSE body as it arrives and calls
+ * `onEvent` for every completed event (including `token` deltas), so the UI can
+ * render the answer word-by-word without waiting for the full response.
+ */
+export async function streamOrchestrate(
+  query: string,
+  history: ChatMessage[],
+  onEvent: (ev: SseEvent) => void,
+): Promise<void> {
+  const res = await fetch('/api/orchestrate/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, history }),
+  });
+  if (!res.ok || !res.body) {
+    onEvent({ event: 'error', data: { detail: `HTTP ${res.status}` } });
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let eventName: string | null = null;
+  let dataBuf = '';
+  const flush = () => {
+    if (eventName !== null && dataBuf) {
+      try {
+        onEvent({ event: eventName, data: JSON.parse(dataBuf) });
+      } catch {
+        /* ignore malformed */
+      }
+      dataBuf = '';
+    }
+    eventName = null;
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      let line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      line = line.replace(/\r$/, '');
+      if (line === '') {
+        flush();
+      } else if (line.startsWith('event:')) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith('data:')) {
+        dataBuf += line.slice(5).replace(/^ /, '');
+      }
+    }
+  }
+  flush();
 }

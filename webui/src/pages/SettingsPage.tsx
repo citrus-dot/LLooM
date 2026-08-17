@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Card, Row, Col, Button, Space, Tag, Form, Input, message, Descriptions, Progress, Alert } from 'antd';
+import { Card, Row, Col, Button, Space, Tag, Form, Input, message, Descriptions, Progress, Alert, Switch, Slider } from 'antd';
 import {
   CheckOutlined,
   CloseOutlined,
@@ -17,8 +17,11 @@ import {
   cacheInit,
   cacheStatus,
   cacheCleanup,
+  cacheThresholdGet,
+  cacheThresholdSet,
   ServiceStatus,
   CacheStatus,
+  CacheThresholdInfo,
 } from '../api';
 
 interface EnvItem {
@@ -83,6 +86,8 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const [cache, setCache] = useState<CacheStatus | null>(null);
+  const [thr, setThr] = useState<CacheThresholdInfo | null>(null);
+  const [thrBusy, setThrBusy] = useState(false);
   const cacheTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshCache = async () => {
@@ -135,6 +140,39 @@ export default function SettingsPage() {
     } catch (e) {
       message.error(`清理失败: ${e}`);
     }
+  };
+
+  // Semantic-cache similarity threshold: read current value + auto-tune state,
+  // and let the user toggle auto-tune or pin a manual value (disables auto).
+  const refreshThr = async () => {
+    try {
+      setThr(await cacheThresholdGet());
+    } catch {
+      /* AI service may be down */
+    }
+  };
+  useEffect(() => {
+    refreshThr();
+  }, []);
+  const handleAutoToggle = async (on: boolean) => {
+    setThrBusy(true);
+    try {
+      const r = await cacheThresholdSet({ autoTune: on });
+      setThr((t) => (t ? { ...t, auto_tune: r.auto_tune, threshold: r.threshold } : t));
+    } catch {
+      /* ignore */
+    }
+    setThrBusy(false);
+  };
+  const handleThrChange = async (v: number) => {
+    setThrBusy(true);
+    try {
+      const r = await cacheThresholdSet({ threshold: v, autoTune: false });
+      setThr((t) => (t ? { ...t, threshold: r.threshold, auto_tune: false } : t));
+    } catch {
+      /* ignore */
+    }
+    setThrBusy(false);
   };
 
   // Compact semantic-cache panel. Lives in the narrow left column (span=10)
@@ -234,6 +272,41 @@ export default function SettingsPage() {
               首次初始化需下载 all-MiniLM-L6-v2 模型（约 87MB），由内置镜像调度从 hf-mirror.com /
               modelscope.cn 高速拉取并完成 sha256 校验。初始化完成前对话不受影响，仅语义缓存未启用。
             </div>
+
+            {thr && (
+              <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: '#666',
+                    marginBottom: 4,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span>语义缓存阈值（相似度）</span>
+                  <Space size={4}>
+                    <span style={{ fontSize: 12 }}>自动调优</span>
+                    <Switch size="small" checked={thr.auto_tune} loading={thrBusy} onChange={handleAutoToggle} />
+                  </Space>
+                </div>
+                <Slider
+                  min={0.7}
+                  max={0.92}
+                  step={0.01}
+                  value={thr.threshold}
+                  disabled={thr.auto_tune}
+                  onChange={(v) => handleThrChange(v as number)}
+                  tooltip={{ formatter: (v?: number) => `${(v ?? 0).toFixed(2)}` }}
+                />
+                <div style={{ fontSize: 12, color: '#999' }}>
+                  {thr.suggested
+                    ? `系统建议 ${Number(thr.suggested).toFixed(2)}（基于 ${thr.labeled_samples} 次反馈）`
+                    : `已收集 ${thr.labeled_samples} 次反馈，自动调优${thr.auto_tune ? '中' : '已关闭'}`}
+                </div>
+              </div>
+            )}
           </Space>
         )}
       </Card>

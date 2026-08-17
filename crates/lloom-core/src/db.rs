@@ -46,6 +46,23 @@ CREATE TABLE IF NOT EXISTS budgets (
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(model_name);
 CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_records(created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_records(user_id);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cache_calibration (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sim REAL NOT NULL,
+    decision TEXT NOT NULL,
+    model TEXT,
+    label INTEGER,
+    source TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_cal_label ON cache_calibration(label);
 "#;
 
 pub fn init_db() -> Result<()> {
@@ -285,6 +302,110 @@ pub fn get_total_spend(user_id: Option<&str>, model_name: Option<&str>, since: O
         row.get::<_, f64>(0)
     })?;
     Ok(total)
+}
+
+// ── Settings (key/value store) ──
+
+pub fn get_setting(key: &str) -> Result<Option<String>> {
+    let conn = open()?;
+    let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+    let mut rows = stmt.query_map(params![key], |row| row.get::<_, String>(0))?;
+    Ok(rows.next().transpose()?)
+}
+
+pub fn set_setting(key: &str, value: &str) -> Result<()> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+// ── Semantic-cache calibration ──
+
+/// Silent, per-request log used to (a) monitor the similarity distribution and
+/// (b) accumulate labeled samples for threshold self-tuning. `label` is None for
+/// passive observations; the inline question sets it (1=correct, 0=incorrect).
+pub fn insert_cache_calibration(
+    sim: f64,
+    decision: &str,
+    model: &str,
+    label: Option<bool>,
+    source: &str,
+) -> Result<()> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO cache_calibration (sim, decision, model, label, source)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            sim,
+            decision,
+            model,
+            label.map(|b| if b { 1i64 } else { 0i64 }),
+            source
+        ],
+    )?;
+    Ok(())
+}
+
+/// All labeled (sim, correct) samples collected so far.
+pub fn calibration_labeled_samples() -> Result<Vec<(f64, bool)>> {
+    let conn = open()?;
+    let mut stmt = conn.prepare("SELECT sim, label FROM cache_calibration WHERE label IS NOT NULL")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, f64>(0)?, row.get::<_, i64>(1)? == 1))
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+/// Choose a threshold by Youden's J over the labeled samples, hard-capped so the
+/// false-positive rate stays <= `max_fpr`. Returns None when there are too few
+/// samples to tune reliably. Result is clamped to [0.70, 0.92].
+pub fn optimal_threshold(samples: &[(f64, bool)], max_fpr: f64) -> Option<f64> {
+    if samples.len() < 10 {
+        return None;
+    }
+    let lo = 0.70_f64;
+    let hi = 0.92_f64;
+    let steps = 120;
+    let mut best: Option<(f64, f64)> = None;
+    for i in 0..=steps {
+        let t = lo + (hi - lo) * (i as f64 / steps as f64);
+        let (mut tp, mut fp, mut tn, mut fn_) = (0i64, 0i64, 0i64, 0i64);
+        for (s, correct) in samples {
+            let pred_hit = *s >= t;
+            match (pred_hit, *correct) {
+                (true, true) => tp += 1,
+                (true, false) => fp += 1,
+                (false, true) => fn_ += 1,
+                (false, false) => tn += 1,
+            }
+        }
+        let tpr = if (tp + fn_) > 0 {
+            tp as f64 / (tp + fn_) as f64
+        } else {
+            0.0
+        };
+        let fpr = if (fp + tn) > 0 {
+            fp as f64 / (fp + tn) as f64
+        } else {
+            0.0
+        };
+        if fpr > max_fpr {
+            continue;
+        }
+        let youden = tpr - fpr;
+        if best.map(|(_, by)| youden <= by).unwrap_or(true) {
+            best = Some((t, youden));
+        }
+    }
+    best.map(|(t, _)| t)
 }
 
 // ── Budget ──

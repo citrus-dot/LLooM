@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+from collections.abc import Iterator
 
 import litellm
 from fastapi import FastAPI
@@ -82,7 +83,7 @@ class OrchestrateRequest(BaseModel):
     models: list[ModelSpec] = field(default_factory=list)
     # Optional semantic-cache dir; empty disables caching
     cache_dir: str = ""
-    similarity_threshold: float = 0.95
+    similarity_threshold: float = 0.80
     ttl: int = 86400
 
 
@@ -191,6 +192,23 @@ class SemanticCache:
                 "response": meta.get("response", ""),
                 "similarity": similarity,
             }
+        except Exception:
+            return None
+
+    def best_sim(self, query: str, model: str) -> float | None:
+        """Top-1 cosine similarity to the nearest cached query, ignoring the
+        threshold. Used for calibration — we need the score even on a miss."""
+        if not self._enabled or not self._collection:
+            return None
+        try:
+            results = self._collection.query(
+                query_texts=[query],
+                n_results=1,
+                where={"model": model} if model != "default" else None,
+            )
+            if not results or not results["ids"] or not results["ids"][0]:
+                return None
+            return 1 - results["distances"][0][0]
         except Exception:
             return None
 
@@ -630,6 +648,49 @@ def _estimate_subtask_cost(model_spec: ModelSpec, est_tokens: int) -> float:
     )
 
 
+def _call_llm_stream(
+    model_spec: ModelSpec,
+    messages: list[dict],
+    max_tokens: int = 500,
+    temperature: float = 0.3,
+    timeout: int = 60,
+    cache: SemanticCache | None = None,
+    cache_key: str | None = None,
+    cache_hit_ref: list[bool] | None = None,
+) -> Iterator[str]:
+    """Streaming LLM call. Yields content deltas (str) as they arrive.
+
+    Mirrors `_call_llm` but uses litellm's streaming mode so the orchestrator
+    can forward tokens to the client incrementally (true SSE, not buffered).
+    """
+    if cache and cache_key:
+        hit = cache.get(cache_key, model_spec.name)
+        if hit:
+            if cache_hit_ref is not None:
+                cache_hit_ref.append(True)
+            yield hit["response"]
+            return
+    kwargs = _litellm_kwargs(
+        model_spec,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=timeout,
+        stream=True,
+    )
+    full: list[str] = []
+    try:
+        for chunk in litellm.completion(**kwargs):
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                full.append(delta.content)
+                yield delta.content
+    except Exception as e:
+        raise RuntimeError(f"LLM stream failed: {e}")
+    if cache and cache_key and full:
+        cache.put(cache_key, "".join(full), model_spec.name)
+
+
 def _fallback_decompose(query: str) -> list[dict]:
     """LLM 分解失败时的启发式兜底：按编号/换行/标点把问题拆成多个子任务。"""
     parts = re.split(
@@ -658,7 +719,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
     def gen():
         if not _is_complex(req.query):
-            # 先选定模型，再下发事件，保证 task_start / decompose 标注的是真实模型名。
+            # 轻量默认路径：单模型直接流式回答（最快，边生成边下发 token）
             model_name = _select_model("general", req.models)
             model_spec = _model_by_name(req.models, model_name) or ModelSpec(
                 name=model_name, litellm_model=model_name
@@ -672,30 +733,36 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
             start = time.time()
             cache_hit: list[bool] = []
+            parts: list[str] = []
             try:
-                content = _call_llm(
+                for delta in _call_llm_stream(
                     model_spec,
                     messages=[
                         {"role": "system", "content": "你是一个专业的AI助手。请认真完成以下任务。请结合对话上下文回答。"},
                         *req.history[-10:],
                         {"role": "user", "content": req.query},
                     ],
-                    max_tokens=500,
+                    max_tokens=2000,
                     timeout=120,
                     cache=cache,
                     cache_key=req.query,
                     cache_hit_ref=cache_hit,
-                )
+                ):
+                    parts.append(delta)
+                    yield _sse("token", {"id": 1, "model": model_name, "delta": delta})
                 ok = True
             except Exception as e:
-                content = f"执行失败: {e}"
+                parts.append(f"执行失败: {e}")
                 ok = False
             duration = time.time() - start
+            content = "".join(parts)
+            sim = cache.best_sim(req.query, model_name)
 
             yield _sse("task_done", {
                 "id": 1, "model": model_name,
                 "duration": duration, "cost": 0.0, "tokens": 0,
                 "cache_hit": bool(cache_hit),
+                "cache_sim": sim,
             })
             yield _sse("result", {
                 "response": content,
@@ -706,6 +773,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 "sr_info": f"SR域分类: {req.sr_domain}" if req.sr_domain else "",
                 "ok": ok,
                 "cache_hit": bool(cache_hit),
+                "cache_sim": sim,
             })
             return
 
@@ -773,6 +841,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
         })
 
         completed: dict[int, dict] = {}
+        any_cache_hit = False
         for task in sub_tasks:
             context_parts = []
             for dep_id in task["depends_on"]:
@@ -792,6 +861,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 user_content = f"前置任务结果：\n{context}\n\n当前任务：{task['description']}"
 
             start = time.time()
+            task_hit: list[bool] = []
             try:
                 result = _call_llm(
                     spec,
@@ -803,7 +873,12 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                     max_tokens=task["estimated_output_tokens"],
                     timeout=120,
                     cache=cache,
-                    cache_key=task["description"],
+                    # Key on the full prompt (incl. dependency context) so a
+                    # subtask with prerequisites never returns a stale cached
+                    # answer from a different context. For independent subtasks
+                    # user_content == description, so hits are preserved.
+                    cache_key=user_content,
+                    cache_hit_ref=task_hit,
                 )
                 task["result"] = result
                 task["status"] = "done"
@@ -812,13 +887,17 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 task["status"] = "failed"
             task["duration"] = time.time() - start
             task["tokens"] = 0
+            task["cache_hit"] = bool(task_hit)
+            task["cache_sim"] = cache.best_sim(user_content, task["selected_model"])
+            any_cache_hit = any_cache_hit or bool(task_hit)
             completed[task["id"]] = task
 
             yield _sse("task_done", {"id": task["id"], "model": task["selected_model"],
                                      "duration": task["duration"], "cost": task["cost"],
-                                     "tokens": 0})
+                                     "tokens": 0, "cache_hit": bool(task_hit),
+                                     "cache_sim": task.get("cache_sim")})
 
-        # Aggregate
+        # Aggregate —— 流式输出最终回答（轻量模式：仅展示子任务进度，最终答案逐 token 下发）
         summary_parts = [f"## 子任务 {t['id']}: {t['description']}\n\n{t['result']}" for t in sub_tasks]
         agg_model = None
         for pref in ["qwen-plus", "qwen3.6-flash", "deepseek-v3", "qwen2.5-local"]:
@@ -828,8 +907,12 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 break
         if agg_model is None:
             agg_model = req.models[0] if req.models else ModelSpec(name="qwen-plus", litellm_model="qwen-plus")
+
+        yield _sse("task_start", {"id": 0, "description": "汇总最终回答", "model": agg_model.name})
+        start = time.time()
+        agg_parts: list[str] = []
         try:
-            final = _call_llm(
+            for delta in _call_llm_stream(
                 agg_model,
                 messages=[
                     {"role": "system", "content": AGGREGATE_SYSTEM_PROMPT},
@@ -839,9 +922,17 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 max_tokens=4096,
                 temperature=0.3,
                 timeout=120,
-            )
+            ):
+                agg_parts.append(delta)
+                yield _sse("token", {"id": 0, "model": agg_model.name, "delta": delta})
+            final = "".join(agg_parts)
         except Exception:
             final = "\n\n---\n\n".join(f"**子任务 {t['id']}**: {t['result']}" for t in sub_tasks)
+        agg_duration = time.time() - start
+
+        yield _sse("task_done", {"id": 0, "model": agg_model.name,
+                                 "duration": agg_duration, "cost": 0.0, "tokens": 0,
+                                 "cache_hit": False})
 
         total_cost = sum(t["cost"] for t in sub_tasks)
         models_used = sorted({t["selected_model"] for t in sub_tasks} | {agg_model.name})
@@ -852,6 +943,8 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             "total_duration": 0,
             "models_used": models_used,
             "aggregator": agg_model.name,
+            "cache_hit": any_cache_hit,
+            "cache_sim": max((t.get("cache_sim") or 0.0) for t in sub_tasks),
             "sr_info": f"SR域分类: {req.sr_domain}" if req.sr_domain else "",
         })
 

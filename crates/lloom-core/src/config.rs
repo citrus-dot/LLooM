@@ -29,6 +29,23 @@ pub fn db_path() -> PathBuf {
     data_dir().join("lloom.db")
 }
 
+/// Current semantic-cache similarity threshold. Source of truth is the `settings`
+/// kv table (so the auto-tuner can update it at runtime); falls back to 0.80.
+pub fn cache_threshold() -> f64 {
+    crate::db::get_setting("cache_threshold")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.80)
+}
+
+/// Persist the semantic-cache similarity threshold (called by the tuner).
+pub fn set_cache_threshold(t: f64) -> std::result::Result<(), String> {
+    let clamped = t.max(0.70).min(0.92);
+    crate::db::set_setting("cache_threshold", &format!("{clamped:.4}"))
+        .map_err(|e| e.to_string())
+}
+
 pub fn conversations_dir() -> PathBuf {
     let dir = data_dir().join("conversations");
     if let Err(e) = std::fs::create_dir_all(&dir) {
