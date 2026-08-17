@@ -23,6 +23,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
+# pip 镜像源：由仓库根目录 pip.conf 提供（默认清华大学 PyPI 镜像，已验证可达）。
+export PIP_CONFIG_FILE="$PROJECT_DIR/pip.conf"
+
 SKIP_AI=false
 
 for arg in "$@"; do
@@ -81,13 +84,13 @@ check_python() {
     # 检查 AI 服务所需模块
     if ! "$py" -c "import litellm, fastapi, uvicorn, pydantic" 2>/dev/null; then
         echo "  ✗ Python 缺少 AI 服务依赖 (litellm/fastapi/uvicorn/pydantic)"
-        echo "    → 运行: pip install -e '.[dev]'"
+        echo "    → 运行: pip install -e '.[dev]'  （已启用 pip.conf 镜像源）"
         FAILED_DEPS=$((FAILED_DEPS+1))
     fi
     if [ "$SKIP_AI" = false ]; then
         if ! "$py" -c "import PyInstaller" 2>/dev/null; then
             echo "  ✗ Python 缺少 PyInstaller"
-            echo "    → 运行: pip install pyinstaller"
+            echo "    → 运行: pip install pyinstaller  （已启用 pip.conf 镜像源）"
             FAILED_DEPS=$((FAILED_DEPS+1))
         fi
     fi

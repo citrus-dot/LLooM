@@ -123,6 +123,30 @@ pub fn update_model(name: &str, updates: &serde_json::Map<String, serde_json::Va
     if updates.is_empty() {
         return Ok(false);
     }
+    // Whitelist of updatable columns. Any key outside this set is rejected to
+    // prevent SQL injection — column names can't be parameterized, so an
+    // attacker-controlled key like `name='x' WHERE 1=1--` would otherwise be
+    // interpolated directly into the statement.
+    const ALLOWED: &[&str] = &[
+        "name",
+        "provider",
+        "litellm_model",
+        "api_base",
+        "api_key_env",
+        "task_type",
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "rpm",
+        "is_active",
+    ];
+    for k in updates.keys() {
+        if !ALLOWED.contains(&k.as_str()) {
+            return Err(AppError::InvalidRequest(format!(
+                "unknown column '{k}'; allowed: {}",
+                ALLOWED.join(", ")
+            )));
+        }
+    }
     let conn = open()?;
     let mut sql = String::from("UPDATE models SET ");
     let mut vals: Vec<rusqlite::types::Value> = Vec::new();

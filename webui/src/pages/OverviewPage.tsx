@@ -7,6 +7,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   FileTextOutlined,
+  PoweroffOutlined,
 } from '@ant-design/icons';
 import {
   getServicesStatus,
@@ -15,6 +16,7 @@ import {
   startService,
   stopService,
   restartService,
+  shutdownAll,
   ServiceStatus,
   UsageStats,
 } from '../api';
@@ -63,6 +65,28 @@ export default function OverviewPage() {
     await stopService('ollama');
     message.info('服务已停止');
     setTimeout(refresh, 2000);
+  };
+
+  // Shut down everything (AI service + Ollama + the core server itself) so no
+  // stale processes hold the ports. Used when the user is done and wants a
+  // clean state for the next launch.
+  const handleShutdownAll = () => {
+    Modal.confirm({
+      title: '关闭全部服务',
+      content: '将关闭 AI 服务、Ollama 和主服务进程，页面将无法继续访问。下次使用请双击 start-lloom.command 重新启动。确认关闭？',
+      okText: '关闭全部',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await shutdownAll();
+          message.info('服务正在关闭，本页面即将不可用...');
+        } catch {
+          // server may die before responding — that's expected
+          message.info('服务已关闭');
+        }
+      },
+    });
   };
 
   const handleRestart = async (name: string) => {
@@ -186,6 +210,9 @@ export default function OverviewPage() {
             </Button>
             <Button size="small" danger icon={<StopOutlined />} onClick={handleStop}>
               停止
+            </Button>
+            <Button size="small" danger icon={<PoweroffOutlined />} onClick={handleShutdownAll}>
+              关闭全部服务
             </Button>
             <Button size="small" icon={<ReloadOutlined />} onClick={refresh}>
               刷新

@@ -32,6 +32,9 @@ hidden_imports = (
         "email.mime.text",
         "email.mime.multipart",
         "backoff",
+        # Sibling module of the entry script; imported via a launch-mode
+        # fallback in ai_service.py, so PyInstaller can't infer it statically.
+        "embedding_model",
     ]
 )
 

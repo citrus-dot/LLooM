@@ -165,6 +165,16 @@ pub fn read_env() -> std::collections::HashMap<String, String> {
     result
 }
 
+/// Load `.env` into the current process environment so that subprocesses
+/// (Python AI service, Ollama) inherit the variables. Existing env vars take precedence.
+pub fn load_env() {
+    for (k, v) in read_env() {
+        if std::env::var(&k).is_err() {
+            std::env::set_var(k, v);
+        }
+    }
+}
+
 /// Resolve an API key for a model: value of `api_key_env` var, or the literal
 /// value if it looks like a key (not an env var name).
 pub fn api_key_for(api_key_env: &str) -> String {
@@ -180,6 +190,23 @@ pub fn api_key_for(api_key_env: &str) -> String {
         return api_key_env.to_string();
     }
     std::env::var(api_key_env).unwrap_or_default()
+}
+
+/// Resolve a value that may be either a literal (e.g. an URL) or an env var name.
+/// Used for `api_base` stored in the DB as `DASHSCOPE_API_BASE` etc.
+pub fn resolve_env_or_literal(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    // Treat as env var name if it looks like one: all uppercase, contains underscore, no spaces/slashes/colons.
+    let looks_like_env = value.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+        && value.contains('_')
+        && !value.chars().any(|c| c.is_ascii_whitespace());
+    if looks_like_env {
+        std::env::var(value).unwrap_or_default()
+    } else {
+        value.to_string()
+    }
 }
 
 /// A value that can be a literal or a path. No-op; kept for API symmetry.

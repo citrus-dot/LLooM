@@ -8,3 +8,202 @@ body {
 .ant-layout {
   background: #f5f7fa;
 }
+
+/* ── Markdown 渲染（ChatGPT / Claude 风格）── */
+.md-body {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #1f2329;
+  word-break: break-word;
+}
+.md-body > *:first-child {
+  margin-top: 0;
+}
+.md-body > *:last-child {
+  margin-bottom: 0;
+}
+.md-body p {
+  margin: 6px 0;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  margin: 14px 0 8px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.md-body h1 {
+  font-size: 1.4em;
+}
+.md-body h2 {
+  font-size: 1.25em;
+}
+.md-body h3 {
+  font-size: 1.1em;
+}
+.md-body ul,
+.md-body ol {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+.md-body li {
+  margin: 3px 0;
+}
+.md-body blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid #d0d7de;
+  background: #f6f8fa;
+  color: #57606a;
+}
+.md-body a {
+  color: #0984e3;
+  text-decoration: none;
+}
+.md-body a:hover {
+  text-decoration: underline;
+}
+.md-body table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+  font-size: 13px;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid #e1e4e8;
+  padding: 6px 10px;
+  text-align: left;
+}
+.md-body th {
+  background: #f6f8fa;
+  font-weight: 600;
+}
+.md-body img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.md-body hr {
+  border: none;
+  border-top: 1px solid #e1e4e8;
+  margin: 12px 0;
+}
+
+/* 行内代码 */
+.md-inline-code {
+  background: rgba(175, 184, 193, 0.2);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.9em;
+  color: #c0341d;
+}
+
+/* 代码块 + 复制按钮 */
+.md-codeblock {
+  margin: 8px 0;
+  border: 1px solid #e1e4e8;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f6f8fa;
+}
+.md-codeblock-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: #eef1f4;
+  border-bottom: 1px solid #e1e4e8;
+}
+.md-codeblock-lang {
+  font-size: 12px;
+  color: #57606a;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  text-transform: uppercase;
+}
+.md-copy-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  color: #0984e3;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.md-copy-btn:hover {
+  background: rgba(9, 132, 227, 0.1);
+}
+.md-codeblock pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+}
+.md-codeblock pre code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+/* ── 执行计划卡片 ── */
+.plan-card {
+  border: 1px solid #e6f0fb;
+  background: #f3f9ff;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.plan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.plan-title {
+  font-weight: 600;
+  color: #0958d9;
+}
+.plan-models {
+  display: inline-flex;
+  flex-wrap: wrap;
+}
+.plan-list {
+  margin: 0;
+  padding-left: 18px;
+}
+.plan-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.plan-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #52c41a;
+}
+.plan-dot.pending,
+.plan-dot.running {
+  background: #faad14;
+}
+.plan-dot.failed {
+  background: #ff4d4f;
+}
+.plan-desc {
+  flex: 1;
+  min-width: 0;
+  color: #1f2329;
+}
+.plan-model {
+  margin: 0 !important;
+}
+.plan-foot {
+  margin-top: 6px;
+  color: #57606a;
+}
+

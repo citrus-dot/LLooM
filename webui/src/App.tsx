@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Layout, Menu, Typography } from 'antd';
 import {
   DashboardOutlined,
@@ -27,6 +27,20 @@ const NAV_ITEMS = [
 
 export default function App() {
   const [page, setPage] = useState<PageKey>('overview');
+
+  // Light beforeunload warning: reminds the user that closing/refreshing the
+  // tab will lose the connection to the local server. (Modern browsers only
+  // show a generic prompt; we can't customize the text.) The actual service
+  // shutdown is done via the "关闭全部服务" button, not here, to avoid
+  // killing the server on every refresh.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, []);
 
   return (
     <Layout style={{ minHeight: '100vh' }}>

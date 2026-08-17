@@ -13,6 +13,22 @@ fn conv_path(id: &str) -> PathBuf {
     config::conversations_dir().join(format!("{id}.json"))
 }
 
+/// Validate a conversation id. Only `[A-Za-z0-9_-]` are allowed — this blocks
+/// path traversal (`../`) and other filesystem-unsafe input that comes straight
+/// from the URL path `/api/conversations/{id}`. Returns an error on violation.
+fn validate_id(id: &str) -> Result<()> {
+    if id.is_empty() {
+        return Err(AppError::InvalidRequest("conversation id is empty".to_string()));
+    }
+    if id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        Ok(())
+    } else {
+        Err(AppError::InvalidRequest(format!(
+            "invalid conversation id '{id}': only letters, digits, '_' and '-' are allowed"
+        )))
+    }
+}
+
 pub fn list() -> Result<Vec<ConversationMeta>> {
     let dir = config::conversations_dir();
     let mut convs = Vec::new();
@@ -39,6 +55,7 @@ pub fn list() -> Result<Vec<ConversationMeta>> {
 }
 
 pub fn load(id: &str) -> Result<Value> {
+    validate_id(id)?;
     let path = conv_path(id);
     let content = std::fs::read_to_string(&path)
         .map_err(|_| AppError::NotFound(format!("conversation '{id}'")))?;
@@ -46,17 +63,31 @@ pub fn load(id: &str) -> Result<Value> {
 }
 
 pub fn save(id: &str, data: &Value) -> Result<()> {
+    validate_id(id)?;
     let path = conv_path(id);
     std::fs::write(&path, data.to_string())
         .map_err(|e| AppError::Io(e))
 }
 
 pub fn delete(id: &str) -> Result<()> {
+    validate_id(id)?;
     let path = conv_path(id);
     if !path.exists() {
         return Err(AppError::NotFound(format!("conversation '{id}'")));
     }
     std::fs::remove_file(&path).map_err(AppError::Io)
+}
+
+/// Rename a conversation. Loads the existing JSON, updates only `title` (and
+/// bumps `updated_at` so the list re-sorts to the top), and writes it back.
+/// Messages are preserved — unlike `save_or_create`, this never clears them.
+pub fn rename(id: &str, title: &str) -> Result<()> {
+    validate_id(id)?;
+    let mut data = load(id)?;
+    data["title"] = Value::String(title.to_string());
+    data["updated_at"] = Value::String(now_iso());
+    let path = conv_path(id);
+    std::fs::write(&path, data.to_string()).map_err(AppError::Io)
 }
 
 /// Auto-title a conversation from its first user message.

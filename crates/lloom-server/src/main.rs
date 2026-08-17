@@ -6,11 +6,15 @@
 
 use lloom_core::config;
 use lloom_core::db;
-use lloom_core::server::{AppState, build_router};
+use lloom_core::server::{self, AppState, build_router};
 
 fn main() {
     let install_dir = config::resolve_install_dir();
     std::env::set_var("LLOOM_INSTALL_DIR", install_dir.to_string_lossy().to_string());
+
+    // Load `.env` into the process environment so models can resolve API keys/bases
+    // and subprocesses inherit them.
+    config::load_env();
 
     if let Err(e) = db::init_db() {
         eprintln!("[core] db init failed: {e}");
@@ -50,7 +54,29 @@ fn main() {
                     std::process::exit(1);
                 });
             println!("[core] REST server on :{web_port}");
-            axum::serve(listener, router).await.expect("server error");
+
+            // Graceful shutdown: on SIGINT (Ctrl+C) or SIGTERM (kill/stop-lloom.command),
+            // clean up all child processes so no stale AI service / Ollama holds the ports.
+            let s = state_for_spawn.clone();
+            let shutdown_signal = async move {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        println!("[core] SIGINT received, shutting down...");
+                    }
+                    _ = sigterm() => {
+                        println!("[core] SIGTERM received, shutting down...");
+                    }
+                }
+                server::shutdown_all(&s);
+                println!("[core] all services stopped.");
+            };
+
+            axum::serve(listener, router)
+                .with_graceful_shutdown(shutdown_signal)
+                .await
+                .ok();
+            // Ensure the whole process exits even if background tasks linger.
+            std::process::exit(0);
         });
     });
 
@@ -59,4 +85,23 @@ fn main() {
     println!("[server] Press Ctrl+C to stop");
 
     std::thread::park();
+}
+
+/// Wait for SIGTERM on Unix. On non-Unix, this future never resolves (ctrl_c
+/// above still handles the common case).
+#[cfg(unix)]
+async fn sigterm() {
+    use tokio::signal::unix::{signal, SignalKind};
+    match signal(SignalKind::terminate()) {
+        Ok(mut s) => { s.recv().await; }
+        Err(_) => {
+            // Fallback: never resolve.
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn sigterm() {
+    std::future::pending::<()>().await;
 }

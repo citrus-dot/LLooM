@@ -26,7 +26,7 @@ impl From<&Model> for ModelSpec {
         Self {
             name: m.name.clone(),
             litellm_model: m.litellm_model.clone(),
-            api_base: m.api_base.clone(),
+            api_base: config::resolve_env_or_literal(&m.api_base),
             api_key: config::api_key_for(&m.api_key_env),
             input_cost_per_token: m.input_cost_per_token,
             output_cost_per_token: m.output_cost_per_token,
@@ -188,6 +188,48 @@ pub fn parse_sse(text: &str) -> Vec<SseEvent> {
         events.push(mk_event(name, &data));
     }
     events
+}
+
+// ── Semantic-cache management (proxied to the AI service) ──
+
+/// Start the embedding-model pre-initialization on the AI service. Returns the
+/// AI service's JSON response.
+pub async fn cache_init() -> Result<Value> {
+    let url = format!("{}/v1/cache/init", base_url());
+    let resp = client()
+        .post(&url)
+        .send()
+        .await
+        .map_err(|e| AppError::AiService(format!("AI service unreachable: {e}")))?;
+    resp.json::<Value>()
+        .await
+        .map_err(|e| AppError::AiService(format!("AI service bad response: {e}")))
+}
+
+/// Poll the cache-init progress.
+pub async fn cache_status() -> Result<Value> {
+    let url = format!("{}/v1/cache/status", base_url());
+    let resp = client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| AppError::AiService(format!("AI service unreachable: {e}")))?;
+    resp.json::<Value>()
+        .await
+        .map_err(|e| AppError::AiService(format!("AI service bad response: {e}")))
+}
+
+/// Reset cache init state and remove partial chroma data.
+pub async fn cache_cleanup() -> Result<Value> {
+    let url = format!("{}/v1/cache/cleanup", base_url());
+    let resp = client()
+        .post(&url)
+        .send()
+        .await
+        .map_err(|e| AppError::AiService(format!("AI service unreachable: {e}")))?;
+    resp.json::<Value>()
+        .await
+        .map_err(|e| AppError::AiService(format!("AI service bad response: {e}")))
 }
 
 fn mk_event(name: String, data: &str) -> SseEvent {

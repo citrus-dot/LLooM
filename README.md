@@ -84,6 +84,9 @@ git clone -b v2 https://github.com/citrus-dot/LLooM.git
 cd LLooM
 
 # Install Python dependencies (Python AI micro-service)
+# 仓库已内置镜像源：pip.conf（清华大学 PyPI 镜像）/ .npmrc（npmmirror），
+# 构建脚本会自动启用；手动安装可显式指定：
+export PIP_CONFIG_FILE="$PWD/pip.conf"
 pip install -e ".[dev]"
 
 # Copy and edit environment

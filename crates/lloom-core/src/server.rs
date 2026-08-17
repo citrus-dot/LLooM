@@ -21,6 +21,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 // ── AppState ──
@@ -89,6 +90,12 @@ struct ConversationSave {
     title: String,
     #[serde(default)]
     messages: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConversationRename {
+    #[serde(default)]
+    title: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,7 +192,30 @@ async fn check_budget(Query(q): Query<Value>) -> Result<Json<Value>> {
 // ── Config / Stats ──
 
 async fn get_config() -> Json<Value> {
-    Json(json!(config::read_env()))
+    // Mask secret values before exposing them over the API. Any key whose name
+    // looks like a credential (ends with _API_KEY / _KEY / _TOKEN / _SECRET) is
+    // returned as "****" + last 4 chars (or just "****" if too short). The raw
+    // values are still on disk in .env and are read directly by write_env /
+    // the AI service — the frontend only ever needs to know *whether* a key is
+    // set, not its value.
+    let env = config::read_env();
+    let masked: HashMap<String, String> = env
+        .iter()
+        .map(|(k, v)| {
+            let upper = k.to_ascii_uppercase();
+            let is_secret = upper.ends_with("_API_KEY")
+                || upper.ends_with("_KEY")
+                || upper.ends_with("_TOKEN")
+                || upper.ends_with("_SECRET");
+            if is_secret && !v.is_empty() {
+                let tail: String = v.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+                (k.clone(), if v.len() <= 4 { "****".to_string() } else { format!("****{tail}") })
+            } else {
+                (k.clone(), v.clone())
+            }
+        })
+        .collect();
+    Json(json!(masked))
 }
 
 async fn update_config(Json(req): Json<ConfigUpdate>) -> Result<Json<Value>> {
@@ -221,6 +251,14 @@ async fn save_conversation(Json(req): Json<ConversationSave>) -> Result<Json<Val
 async fn delete_conversation(Path(id): Path<String>) -> Result<Json<Value>> {
     conversations::delete(&id)?;
     Ok(Json(json!({ "deleted": true })))
+}
+
+async fn rename_conversation(
+    Path(id): Path<String>,
+    Json(req): Json<ConversationRename>,
+) -> Result<Json<Value>> {
+    conversations::rename(&id, &req.title)?;
+    Ok(Json(json!({ "id": id, "renamed": true })))
 }
 
 // ── Chat / Orchestrate (SSE) ──
@@ -321,6 +359,10 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
         Err(e) => return err_response(e),
     };
     let specs: Vec<ModelSpec> = models.iter().map(ModelSpec::from).collect();
+    // Semantic cache dir. The Python SemanticCache gates on an internal
+    // _cache_ready flag (set only after /v1/cache/init succeeds), so passing a
+    // non-empty path here is safe — it will NOT trigger a download unless the
+    // user has explicitly pre-initialized the embedding model.
     let cache_dir = config::data_dir().join("chroma").to_string_lossy().to_string();
 
     let events = match ai_client::orchestrate_stream(
@@ -508,6 +550,64 @@ async fn smart_restart(State(state): State<AppState>, Json(action): Json<Service
     Json(json!({ "ok": errors.is_empty(), "restarted": restarted, "errors": errors }))
 }
 
+/// Full cleanup: kill owned child processes (AI service, Ollama) then pkill any
+/// external/system-managed instances by name. Shared by the `/api/shutdown`
+/// endpoint and the SIGINT/SIGTERM signal handler so both paths leave no stale
+/// processes behind on the ports.
+pub fn shutdown_all(state: &AppState) {
+    // 1. Kill processes we spawned (we hold their Child handles).
+    {
+        let mut guard = state.children.lock().unwrap();
+        if let Some(child) = guard.ai.as_mut() {
+            let _ = child.kill();
+            guard.ai = None;
+        }
+        if let Some(child) = guard.ollama.as_mut() {
+            let _ = child.kill();
+            guard.ollama = None;
+        }
+    }
+    // 2. Kill any external instances we didn't spawn (e.g. started by a
+    //    previous run, or a system-managed Ollama). Matches dev + bundled
+    //    invocation patterns.
+    for pat in [
+        "uvicorn api.ai_service:app",
+        "ai_service.py --port",
+        "ai-service/ai-service",
+        "ollama serve",
+    ] {
+        let _ = Command::new("pkill").args(["-f", pat]).status();
+    }
+}
+
+async fn shutdown_server(State(state): State<AppState>) -> Json<Value> {
+    // Spawn a short-delayed task so the HTTP response is flushed before the
+    // process exits. 400ms is enough for axum to write the JSON body back.
+    let s = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        println!("[core] shutdown requested via API, cleaning up...");
+        shutdown_all(&s);
+        println!("[core] all services stopped, exiting.");
+        std::process::exit(0);
+    });
+    Json(json!({ "shutting_down": true }))
+}
+
+// ── Semantic-cache management (proxied to the AI service) ──
+
+async fn cache_init() -> Result<Json<Value>> {
+    Ok(Json(ai_client::cache_init().await?))
+}
+
+async fn cache_status() -> Result<Json<Value>> {
+    Ok(Json(ai_client::cache_status().await?))
+}
+
+async fn cache_cleanup() -> Result<Json<Value>> {
+    Ok(Json(ai_client::cache_cleanup().await?))
+}
+
 // ── System ──
 
 async fn open_folder(Json(body): Json<Value>) -> Json<Value> {
@@ -553,7 +653,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/stats", get(get_stats))
         // Conversations
         .route("/api/conversations", get(list_conversations).post(save_conversation))
-        .route("/api/conversations/{id}", get(get_conversation).delete(delete_conversation))
+        .route("/api/conversations/{id}", get(get_conversation).put(rename_conversation).delete(delete_conversation))
         // Chat + orchestrate (SSE)
         .route("/api/chat/stream", post(chat_stream))
         .route("/api/orchestrate/stream", post(orchestrate_stream))
@@ -567,6 +667,11 @@ pub fn build_router(state: AppState) -> Router {
         // System
         .route("/api/system/open-folder", post(open_folder))
         .route("/api/system/open-web", post(open_web))
+        .route("/api/shutdown", post(shutdown_server))
+        // Semantic cache management
+        .route("/api/cache/init", post(cache_init))
+        .route("/api/cache/status", get(cache_status))
+        .route("/api/cache/cleanup", post(cache_cleanup))
         .with_state(state)
 }
 
@@ -602,6 +707,13 @@ fn write_env(updates: &HashMap<String, String>) -> Result<()> {
     let env_path = config::env_file_path();
     let mut env = config::read_env();
     for (k, v) in updates {
+        // Defense-in-depth: skip masked values sent back by the frontend (the
+        // get_config endpoint masks secrets as "****xxxx"). Accepting them
+        // would overwrite the real key with the mask. An unchanged secret is
+        // represented by the mask; only non-mask values are written.
+        if v.starts_with("****") {
+            continue;
+        }
         env.insert(k.clone(), v.clone());
     }
     let mut keys: Vec<&String> = env.keys().collect();

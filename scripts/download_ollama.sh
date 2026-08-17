@@ -29,18 +29,34 @@ if [ -z "$VERSION" ]; then
 fi
 echo "Ollama 最新版本: $VERSION"
 
-download_and_verify() {
-    # $1 = URL, $2 = 输出文件, $3 = 最小字节数
-    local url="$1" out="$2" min="${3:-1048576}"
-    echo "下载 $url ..."
-    curl -L -o "$out" "$url"
+# GitHub 资产镜像：本机直连 github.com 的 release 资产经常卡死/超时，
+# 因此下载先走直连，失败（curl 非零或体积过小）再自动改用 GH_MIRROR。
+# 已验证 https://ghproxy.net 可正常代理 Ollama 的 release 资产下载。
+# 如需其它代理，可覆盖：GH_MIRROR=https://your-proxy bash scripts/download_ollama.sh
+GH_MIRROR="${GH_MIRROR:-https://ghproxy.net}"
+
+file_ok() {
+    # $1 = 文件, $2 = 最小字节数
+    local f="$1" min="$2"
     local size
-    size="$(stat -c%s "$out" 2>/dev/null || stat -f%z "$out" 2>/dev/null || echo 0)"
-    if [ "$size" -lt "$min" ]; then
-        echo "⚠ 下载失败（仅 ${size} 字节），尝试使用系统安装的 Ollama..."
-        return 1
+    size="$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)"
+    [ "$size" -ge "$min" ]
+}
+
+download_and_verify() {
+    # $1 = 直连 URL, $2 = 输出文件, $3 = 最小字节数
+    local url="$1" out="$2" min="${3:-1048576}"
+    local mirror="${GH_MIRROR%/}/https://github.com${url#https://github.com}"
+    echo "下载 $url ..."
+    if curl -L -o "$out" "$url" 2>/dev/null && file_ok "$out" "$min"; then
+        return 0
     fi
-    return 0
+    echo "⚠ 直连失败，改用镜像 $GH_MIRROR ..."
+    if curl -L -o "$out" "$mirror" 2>/dev/null && file_ok "$out" "$min"; then
+        return 0
+    fi
+    echo "⚠ 下载失败（直连与镜像均不可用），尝试使用系统安装的 Ollama..."
+    return 1
 }
 
 fallback_system() {

@@ -142,6 +142,49 @@ export function smartRestart(changedKeys: string[]): Promise<{ ok: boolean; rest
   return jpost('/api/services/smart-restart', { changed_keys: changedKeys });
 }
 
+export function shutdownAll(): Promise<{ shutting_down: boolean }> {
+  return jpost('/api/shutdown');
+}
+
+// ── Semantic cache ──
+
+export function cacheInit(): Promise<{ status: string; detail?: string }> {
+  return jpost('/api/cache/init');
+}
+
+export interface CacheStatus {
+  status: string;
+  ready: boolean;
+  elapsed: number;
+  timeout: number;
+  detail: string;
+  error: string;
+  // Byte-level download progress reported by the model provisioner.
+  phase: string;
+  mirror: string;
+  file: string;
+  percent: number;
+  file_done: number;
+  file_total: number;
+  file_percent: number;
+  done_bytes: number;
+  total_bytes: number;
+  speed_bps: number;
+}
+
+export function cacheStatus(): Promise<CacheStatus> {
+  return jget('/api/cache/status');
+}
+
+export function cacheCleanup(): Promise<{
+  cleaned: boolean;
+  removed_dir: boolean;
+  model_kept: boolean;
+  purged: string[];
+}> {
+  return jpost('/api/cache/cleanup');
+}
+
 // ── Model endpoints ──
 
 export function getModels(): Promise<{ models: Model[] }> {
@@ -210,6 +253,10 @@ export function saveConversation(c: { id?: string; title?: string; messages: Cha
 
 export function deleteConversation(id: string): Promise<{ deleted: boolean }> {
   return jdelete(`/api/conversations/${encodeURIComponent(id)}`);
+}
+
+export function renameConversation(id: string, title: string): Promise<{ id: string; renamed: boolean }> {
+  return jput(`/api/conversations/${encodeURIComponent(id)}`, { title });
 }
 
 // ── SSE: chat / orchestrate ──

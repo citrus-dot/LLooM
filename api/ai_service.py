@@ -16,6 +16,7 @@ Endpoints:
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -25,6 +26,15 @@ import litellm
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+# Embedding-model provisioner. Imported three different ways depending on how
+# this service was launched: as `api.ai_service` under uvicorn (dev), as a bare
+# script from `resources/` (installed), or from a PyInstaller bundle.
+try:
+    from api import embedding_model as embed_model
+except ImportError:  # pragma: no cover - depends on launch mode
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import embedding_model as embed_model
 
 app = FastAPI(title="LLooM AI Service", version="2.0.0")
 
@@ -113,6 +123,25 @@ def _plain_sse(data: dict) -> str:
 
 # ── Semantic cache (optional, in-process ChromaDB) ──
 
+# Whether the embedding model is available. The SemanticCache stays disabled
+# until this is True, so the default (cold-start) path never triggers chroma's
+# own ~79MB download from its S3 bucket (measured 6 KB/s here — hours, or never).
+#
+# Seeded from disk: once the model has been provisioned, a service restart
+# re-enables the semantic cache automatically instead of making the user click
+# "初始化" again.
+_cache_ready = embed_model.is_provisioned()
+
+# In-memory state for the cache-init workflow, polled by the frontend.
+_cache_init: dict[str, Any] = {
+    "status": "idle",        # idle | running | done | error | timeout
+    "started_at": 0.0,       # epoch seconds
+    "finished_at": 0.0,
+    "detail": "",
+    "error": "",
+}
+_CACHE_INIT_TIMEOUT = 300.0  # seconds before the status endpoint flags a timeout
+
 
 class SemanticCache:
     def __init__(self, path: str, threshold: float, ttl: int):
@@ -121,7 +150,9 @@ class SemanticCache:
         self.ttl = ttl
         self._collection = None
         self._enabled = False
-        if not path:
+        # Only enable when a path is given AND the embedding model has been
+        # pre-initialized. This prevents the synchronous download that hangs.
+        if not path or not _cache_ready:
             return
         try:
             import chromadb
@@ -181,6 +212,171 @@ class SemanticCache:
             )
         except Exception:
             pass
+
+
+# ── Semantic-cache pre-initialization ──
+
+
+@app.post("/v1/cache/init")
+def cache_init() -> dict:
+    """Provision the embedding model in a background thread, then warm chroma.
+
+    Downloads the model ourselves from a fast, checksum-verified mirror (see
+    `embedding_model`) instead of letting chroma pull it from its S3 bucket.
+    Returns immediately; poll /v1/cache/status for byte-level progress. The
+    SemanticCache stays disabled until this completes successfully.
+    """
+    import threading
+
+    global _cache_ready, _cache_init
+
+    if _cache_init["status"] == "running":
+        return {"status": "running", "detail": "initialization already in progress"}
+    if _cache_ready:
+        return {"status": "done", "detail": "already initialized"}
+
+    _cache_init = {
+        "status": "running",
+        "started_at": time.time(),
+        "finished_at": 0.0,
+        "detail": "fetching embedding model from mirror...",
+        "error": "",
+    }
+
+    def _run():
+        global _cache_ready, _cache_init
+        try:
+            # 1. Fetch + checksum-verify the six ONNX files chroma expects.
+            res = embed_model.provision()
+            # 2. Prove the model actually drives chroma's pipeline correctly
+            #    (right dims, L2-normalised, sane semantic ordering) — a valid
+            #    checksum alone doesn't prove it's the right kind of export.
+            checks = embed_model.verify_model()
+            # 3. Warm the real collection so the first query isn't a cold start.
+            import chromadb
+            from chromadb.config import Settings as ChromaSettings
+
+            cache_path = os.getenv(
+                "LLOOM_CACHE_DIR",
+                os.path.join(os.getenv("LLOOM_DATA_DIR", "data"), "chroma"),
+            )
+            client = chromadb.PersistentClient(
+                path=cache_path,
+                settings=ChromaSettings(anonymized_telemetry=False),
+            )
+            col = client.get_or_create_collection(
+                name="lloom_cache",
+                metadata={"hnsw:space": "cosine"},
+            )
+            col.upsert(ids=["__init__"], documents=["warmup"], metadatas=[{"init": True}])
+            col.query(query_texts=["warmup"], n_results=1)
+            col.delete(ids=["__init__"])
+
+            _cache_ready = True
+            source = res.get("mirror", "mirror")
+            _cache_init = {
+                "status": "done",
+                "started_at": _cache_init["started_at"],
+                "finished_at": time.time(),
+                "detail": (
+                    f"就绪（来源 {source}，{checks['dim']} 维，语义校验 "
+                    f"{checks['similarity_related']:.2f} / "
+                    f"{checks['similarity_unrelated']:.2f}）"
+                ),
+                "error": "",
+            }
+        except Exception as e:
+            _cache_init = {
+                "status": "error",
+                "started_at": _cache_init["started_at"],
+                "finished_at": time.time(),
+                "detail": "",
+                "error": str(e),
+            }
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "running", "detail": "initialization started"}
+
+
+@app.get("/v1/cache/status")
+def cache_status() -> dict:
+    """Report cache-init progress. Flags a timeout if running too long."""
+    global _cache_init
+    elapsed = 0.0
+    if _cache_init["started_at"]:
+        end = _cache_init["finished_at"] or time.time()
+        elapsed = end - _cache_init["started_at"]
+    # Surface a timeout without killing the thread (Python threads aren't
+    # cancelable); the frontend can offer cleanup once this is flagged.
+    status = _cache_init["status"]
+    if status == "running" and elapsed > _CACHE_INIT_TIMEOUT:
+        status = "timeout"
+
+    # Byte-level download progress, so the UI can show a real bar instead of
+    # guessing from elapsed/timeout.
+    prog = embed_model.progress()
+    return {
+        "status": status,
+        "ready": _cache_ready,
+        "elapsed": round(elapsed, 1),
+        "timeout": _CACHE_INIT_TIMEOUT,
+        "detail": _cache_init["detail"],
+        "error": _cache_init["error"],
+        "phase": prog["phase"],
+        "mirror": prog["mirror"],
+        "file": prog["file"],
+        "percent": prog["percent"],
+        "file_done": prog["file_done"],
+        "file_total": prog["file_total"],
+        "file_percent": prog["file_percent"],
+        "done_bytes": prog["done_bytes"],
+        "total_bytes": prog["total_bytes"],
+        "speed_bps": round(prog["speed_bps"], 1),
+    }
+
+
+@app.post("/v1/cache/cleanup")
+def cache_cleanup(purge_model: bool = False) -> dict:
+    """Reset init state and drop the cached vectors so a fresh init can run.
+
+    Does NOT kill an in-flight download thread (can't); call this only after the
+    user confirms a timeout/failure. Flips _cache_ready back to False so the
+    SemanticCache stops trying to use a half-broken store.
+
+    The ~87MB embedding model is kept by default — it is the expensive part, and
+    keeping it makes re-initialisation instant. Pass `purge_model=true` to also
+    delete it and force a fresh download.
+    """
+    global _cache_ready, _cache_init
+    import shutil
+
+    _cache_ready = False
+    _cache_init = {
+        "status": "idle",
+        "started_at": 0.0,
+        "finished_at": 0.0,
+        "detail": "",
+        "error": "",
+    }
+    cache_path = os.getenv(
+        "LLOOM_CACHE_DIR",
+        os.path.join(os.getenv("LLOOM_DATA_DIR", "data"), "chroma"),
+    )
+    removed = False
+    try:
+        if os.path.isdir(cache_path):
+            shutil.rmtree(cache_path)
+            removed = True
+    except Exception:
+        pass
+    # Always sweep download leftovers (staging dir, truncated S3 archive).
+    purged = embed_model.purge(model=purge_model)
+    return {
+        "cleaned": True,
+        "removed_dir": removed,
+        "model_kept": not purge_model and embed_model.is_provisioned(),
+        "purged": purged["removed"],
+    }
 
 
 # ── Task classification (LLM fallback) ──
@@ -322,7 +518,17 @@ COMPLEXITY_INDICATORS = [
     r"(对比|比较|分析|评估).+(和|与|跟|vs)",
     r"(写|实现|开发).+(并|然后|接着).*(测试|验证|部署)",
     r"(翻译|总结|摘要).+(并|然后).+(分析|评论)",
+    # 序列/枚举标记：首先…其次…最后、第一/第二、1. 2. 等
+    r"(首先|其次|然后|再次|最后|第一|第二|第三|第四|第五)",
+    r"(\d+[\.、])\s*\S+.*(\d+[\.、])\s*\S+",
+    # 多子任务提示词
+    r"(分别|各自|逐一).{2,}(说明|分析|列出|给出|介绍|总结|处理)",
+    # 显式对比/权衡
+    r"(权衡|优缺点|利弊|方案).{2,}(对比|比较|选择)",
 ]
+
+# 分解阶段需要一个「便宜 + 快」的模型做结构化抽取，不占用重型推理模型。
+DECOMPOSER_PREFERENCE = ["qwen3.6-flash", "qwen-plus", "deepseek-v3", "qwen2.5-local"]
 
 TASK_MODEL_PREFERENCE = {
     "simple_qa": ["qwen2.5-local", "qwen3.6-flash", "qwen-plus"],
@@ -369,7 +575,11 @@ def _is_complex(query: str) -> bool:
     if len(query) > 100:
         return True
     sentences = [s.strip() for s in re.split(r"[。！？.!?]", query) if s.strip()]
-    return len(sentences) > 2
+    if len(sentences) > 2:
+        return True
+    # 含多个换行/编号项也视为多子任务
+    numbered = re.findall(r"^\s*(?:\d+[\.、]|[-*])\s+\S", query, re.MULTILINE)
+    return len(numbered) >= 2
 
 
 def _select_model(task_type: str, models: list[ModelSpec]) -> str:
@@ -420,23 +630,46 @@ def _estimate_subtask_cost(model_spec: ModelSpec, est_tokens: int) -> float:
     )
 
 
+def _fallback_decompose(query: str) -> list[dict]:
+    """LLM 分解失败时的启发式兜底：按编号/换行/标点把问题拆成多个子任务。"""
+    parts = re.split(
+        r"(?m)^\s*(?:\d+[\.、]|[一二三四五六七八九十]+[、.]|[-*])\s+", query
+    )
+    parts = [p.strip(" \t-*\n") for p in parts if p.strip(" \t-*\n")]
+    if len(parts) < 2:
+        parts = [s.strip() for s in re.split(r"[。！？.!?]", query) if s.strip()]
+    tasks = []
+    for i, p in enumerate(parts, 1):
+        if not p:
+            continue
+        tasks.append({
+            "id": i,
+            "description": p,
+            "task_type": "general",
+            "depends_on": [],
+            "estimated_output_tokens": 300,
+        })
+    return tasks
+
+
 @app.post("/v1/orchestrate/stream")
 def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
     cache = SemanticCache(req.cache_dir, req.similarity_threshold, req.ttl)
 
     def gen():
         if not _is_complex(req.query):
-            yield _sse("decompose", {
-                "sub_tasks": [{"id": 1, "description": req.query,
-                               "selected_model": "auto", "cost": 0.0001}],
-                "total_cost": 0.0001,
-            })
-            yield _sse("task_start", {"id": 1, "description": req.query, "model": "auto"})
-
+            # 先选定模型，再下发事件，保证 task_start / decompose 标注的是真实模型名。
             model_name = _select_model("general", req.models)
             model_spec = _model_by_name(req.models, model_name) or ModelSpec(
                 name=model_name, litellm_model=model_name
             )
+            yield _sse("decompose", {
+                "sub_tasks": [{"id": 1, "description": req.query,
+                               "selected_model": model_name, "cost": 0.0001}],
+                "total_cost": 0.0001,
+            })
+            yield _sse("task_start", {"id": 1, "description": req.query, "model": model_name})
+
             start = time.time()
             cache_hit: list[bool] = []
             try:
@@ -469,17 +702,23 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 "total_cost": 0.0,
                 "total_tokens": 0,
                 "total_duration": duration,
+                "models_used": [model_name],
                 "sr_info": f"SR域分类: {req.sr_domain}" if req.sr_domain else "",
                 "ok": ok,
                 "cache_hit": bool(cache_hit),
             })
             return
 
-        # Complex: decompose
-        model_spec = _model_by_name(req.models, "qwen3.6-plus") or (
-            _model_by_name(req.models, "deepseek-v3")
-            or (req.models[0] if req.models else ModelSpec(name="auto", litellm_model="auto"))
-        )
+        # Complex: decompose —— 优先用便宜快速的分解模型，避免占用重型推理模型
+        model_spec = None
+        for pref in DECOMPOSER_PREFERENCE:
+            spec = _model_by_name(req.models, pref)
+            if spec:
+                model_spec = spec
+                break
+        if model_spec is None:
+            model_spec = req.models[0] if req.models else ModelSpec(name="auto", litellm_model="auto")
+        tasks_data: list[dict] = []
         try:
             content = _call_llm(
                 model_spec,
@@ -487,14 +726,28 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                     {"role": "system", "content": DECOMPOSE_SYSTEM_PROMPT},
                     {"role": "user", "content": req.query},
                 ],
-                max_tokens=500,
+                max_tokens=800,
                 temperature=0,
                 timeout=30,
             )
-            json_match = re.search(r"\[.*\]", content, re.DOTALL)
-            tasks_data = json.loads(json_match.group()) if json_match else []
+            # 去掉可能的 ```json 代码围栏后再抽取数组
+            cleaned = re.sub(r"```(?:json)?", "", content).strip()
+            json_match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+            if json_match:
+                try:
+                    tasks_data = json.loads(json_match.group())
+                except Exception:
+                    tasks_data = []
         except Exception:
             tasks_data = []
+
+        # 分解失败时的启发式兜底：若原始问题含多个编号项，则按编号拆分
+        if not tasks_data:
+            numbered = re.findall(
+                r"(?m)^\s*(?:\d+[\.、]|[一二三四五六七八九十]+[、.]|[-*])\s+\S", req.query
+            )
+            if len(numbered) >= 2:
+                tasks_data = _fallback_decompose(req.query)
 
         if not tasks_data:
             tasks_data = [{"id": 1, "description": req.query, "task_type": "complex_reasoning",
@@ -567,9 +820,14 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
         # Aggregate
         summary_parts = [f"## 子任务 {t['id']}: {t['description']}\n\n{t['result']}" for t in sub_tasks]
-        agg_model = _model_by_name(req.models, "qwen-plus") or (
-            req.models[0] if req.models else ModelSpec(name="qwen-plus", litellm_model="qwen-plus")
-        )
+        agg_model = None
+        for pref in ["qwen-plus", "qwen3.6-flash", "deepseek-v3", "qwen2.5-local"]:
+            spec = _model_by_name(req.models, pref)
+            if spec:
+                agg_model = spec
+                break
+        if agg_model is None:
+            agg_model = req.models[0] if req.models else ModelSpec(name="qwen-plus", litellm_model="qwen-plus")
         try:
             final = _call_llm(
                 agg_model,
@@ -586,11 +844,14 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             final = "\n\n---\n\n".join(f"**子任务 {t['id']}**: {t['result']}" for t in sub_tasks)
 
         total_cost = sum(t["cost"] for t in sub_tasks)
+        models_used = sorted({t["selected_model"] for t in sub_tasks} | {agg_model.name})
         yield _sse("result", {
             "response": final,
             "total_cost": total_cost,
             "total_tokens": 0,
             "total_duration": 0,
+            "models_used": models_used,
+            "aggregator": agg_model.name,
             "sr_info": f"SR域分类: {req.sr_domain}" if req.sr_domain else "",
         })
 
