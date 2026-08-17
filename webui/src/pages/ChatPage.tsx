@@ -105,12 +105,20 @@ function PlanCard({ plan }: { plan: PlanView }) {
             <span className="plan-desc">{t.description}</span>
             {t.model && (
               <Tooltip title={`子任务 #${t.id} 执行模型`}>
-                <Tag color={t.status === 'running' ? 'processing' : 'blue'} className="plan-model">
+                <Tag
+                  color={t.status === 'running' ? 'processing' : t.status === 'failed' ? 'error' : 'blue'}
+                  className="plan-model"
+                >
                   {t.model}
                 </Tag>
               </Tooltip>
             )}
             {t.status === 'running' && <span className="plan-running">进行中…</span>}
+            {t.status === 'failed' && t.error && (
+              <Tooltip title={t.error}>
+                <span className="plan-error">失败</span>
+              </Tooltip>
+            )}
           </li>
         ))}
       </ol>

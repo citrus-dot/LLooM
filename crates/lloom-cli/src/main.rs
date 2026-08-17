@@ -70,6 +70,13 @@ enum ConversationCmd {
         /// Conversation/session ID (see `lloom-cli conversation list`)
         id: String,
     },
+    /// Rename a conversation
+    Rename {
+        /// Conversation/session ID (see `lloom-cli conversation list`)
+        id: String,
+        /// New title
+        title: String,
+    },
     /// Start a fresh conversation
     New,
 }
@@ -103,6 +110,8 @@ enum ServiceCmd {
         /// Env keys that changed (e.g. DASHSCOPE_API_KEY)
         keys: Vec<String>,
     },
+    /// Shut down all services (AI + Ollama + core server)
+    Shutdown,
 }
 
 #[derive(Subcommand)]
@@ -314,6 +323,10 @@ async fn cmd_service(client: &Client, cmd: ServiceCmd) -> Result<(), Box<dyn std
                 eprintln!("✗ 重启失败: {}", errors.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("; "));
             }
         }
+        ServiceCmd::Shutdown => {
+            let r = post(client, "/api/shutdown", Value::Null).await?;
+            println!("{}", if r["shutting_down"].as_bool().unwrap_or(false) { "正在关闭全部服务..." } else { "关闭请求已发送" });
+        }
     }
     Ok(())
 }
@@ -512,23 +525,12 @@ async fn cmd_chat(client: &Client, query: &str, session: Option<&str>, interacti
         }
     }
 
-    // Single-shot: send query once, print the reply, done.
+    // Single-shot: send query once, stream the reply, done.
     if !interactive {
         let mut messages = history.clone();
         messages.push(serde_json::json!({ "role": "user", "content": query }));
-        let text = post_chat_stream(client, &messages).await?;
-        for line in text.lines() {
-            if let Some(data) = line.strip_prefix("data: ") {
-                if let Ok(v) = serde_json::from_str::<Value>(data) {
-                    if let Some(content) = v["content"].as_str() {
-                        println!("{content}");
-                    } else if v["error"].as_bool().unwrap_or(false) {
-                        eprintln!("✗ 请求失败: {}", v["detail"].as_str().unwrap_or(""));
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        stream_chat(client, &messages).await?;
+        println!();
         return Ok(());
     }
 
@@ -536,21 +538,8 @@ async fn cmd_chat(client: &Client, query: &str, session: Option<&str>, interacti
     use std::io::{self, Write};
     history.push(serde_json::json!({ "role": "user", "content": query }));
     loop {
-        let text = post_chat_stream(client, &history).await?;
-        let mut reply = String::new();
-        for line in text.lines() {
-            if let Some(data) = line.strip_prefix("data: ") {
-                if let Ok(v) = serde_json::from_str::<Value>(data) {
-                    if let Some(content) = v["content"].as_str() {
-                        println!("{content}");
-                        reply.push_str(content);
-                    } else if v["error"].as_bool().unwrap_or(false) {
-                        eprintln!("✗ 请求失败: {}", v["detail"].as_str().unwrap_or(""));
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let reply = stream_chat(client, &history).await?;
+        println!();
         if !reply.is_empty() {
             history.push(serde_json::json!({ "role": "assistant", "content": reply }));
         }
@@ -568,8 +557,10 @@ async fn cmd_chat(client: &Client, query: &str, session: Option<&str>, interacti
     }
 }
 
-/// POST /api/chat/stream, returning the raw SSE text.
-async fn post_chat_stream(client: &Client, messages: &[Value]) -> Result<String, Box<dyn std::error::Error>> {
+/// POST /api/chat/stream, printing tokens as they arrive; returns the full reply.
+async fn stream_chat(client: &Client, messages: &[Value]) -> Result<String, Box<dyn std::error::Error>> {
+    use futures_util::StreamExt;
+    use std::io::Write;
     let res = client
         .post(format!("{BASE}/api/chat/stream"))
         .json(&serde_json::json!({ "messages": messages }))
@@ -578,7 +569,29 @@ async fn post_chat_stream(client: &Client, messages: &[Value]) -> Result<String,
     if !res.status().is_success() {
         return Err(format!("HTTP {}", res.status()).into());
     }
-    Ok(res.text().await?)
+    let mut stream = res.bytes_stream();
+    let mut buf = String::new();
+    let mut reply = String::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buf.find('\n') {
+            let line: String = buf.drain(..=pos).collect();
+            let line = line.trim_end_matches(['\r', '\n']);
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(v) = serde_json::from_str::<Value>(data) {
+                    if let Some(content) = v["content"].as_str() {
+                        print!("{content}");
+                        std::io::stdout().flush()?;
+                        reply.push_str(content);
+                    } else if v["error"].as_bool().unwrap_or(false) {
+                        eprintln!("\n✗ 请求失败: {}", v["detail"].as_str().unwrap_or(""));
+                    }
+                }
+            }
+        }
+    }
+    Ok(reply)
 }
 
 async fn cmd_conversation(client: &Client, cmd: ConversationCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -611,6 +624,17 @@ async fn cmd_conversation(client: &Client, cmd: ConversationCmd) -> Result<(), B
             let r = del(client, &format!("/api/conversations/{resolved}")).await?;
             println!("{}", if r["deleted"].as_bool().unwrap_or(false) { "已删除" } else { "删除失败" });
         }
+        ConversationCmd::Rename { id, title } => {
+            let resolved = resolve_session_id(client, &id).await?;
+            let r = client
+                .put(format!("{BASE}/api/conversations/{resolved}"))
+                .json(&serde_json::json!({ "title": title }))
+                .send()
+                .await?
+                .json::<Value>()
+                .await?;
+            println!("{}", if r["renamed"].as_bool().unwrap_or(false) { "已重命名" } else { "重命名失败" });
+        }
         ConversationCmd::New => {
             let r = post(client, "/api/conversations", serde_json::json!({ "messages": [] })).await?;
             println!("新建会话: {}", r["id"].as_str().unwrap_or(""));
@@ -620,50 +644,108 @@ async fn cmd_conversation(client: &Client, cmd: ConversationCmd) -> Result<(), B
 }
 
 async fn cmd_orchestrate(client: &Client, query: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+
     let res = client
         .post(format!("{BASE}/api/orchestrate/stream"))
         .json(&serde_json::json!({ "query": query, "history": [] }))
         .send()
         .await?;
-    let text = res.text().await?;
+    if !res.status().is_success() {
+        return Err(format!("HTTP {}", res.status()).into());
+    }
+
+    // True streaming: consume the SSE byte stream line by line, printing token
+    // deltas as they arrive (instead of buffering the whole response first).
+    let mut stream = res.bytes_stream();
+    let mut buf = String::new();
     let mut current_event = String::new();
-    for line in text.lines() {
-        if let Some(ev) = line.strip_prefix("event:") {
-            current_event = ev.trim().to_string();
-        } else if let Some(data) = line.strip_prefix("data: ") {
-            match current_event.as_str() {
-                "decompose" => {
-                    if let Ok(v) = serde_json::from_str::<Value>(data) {
-                        let n = v["sub_tasks"].as_array().map(|a| a.len()).unwrap_or(0);
-                        println!("📋 任务分解: {} 个子任务", n);
-                    }
-                }
-                "task_start" => {
-                    if let Ok(v) = serde_json::from_str::<Value>(data) {
-                        let desc = v["description"].as_str().unwrap_or("");
-                        let model = v["model"].as_str().unwrap_or("");
-                        println!("  ▶ 执行: {desc}  [{model}]");
-                    }
-                }
-                "task_done" => {
-                    if let Ok(v) = serde_json::from_str::<Value>(data) {
-                        let id = v["id"].as_i64().unwrap_or(0);
-                        let dur = v["duration"].as_f64().unwrap_or(0.0);
-                        println!("    ✓ 子任务 {id} 完成 ({dur:.1}s)");
-                    }
-                }
-                "result" => {
-                    if let Ok(v) = serde_json::from_str::<Value>(data) {
-                        if let Some(r) = v["response"].as_str() {
-                            println!("\n{r}");
-                        }
-                    }
-                }
-                _ => {}
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buf.find('\n') {
+            let line: String = buf.drain(..=pos).collect();
+            let line = line.trim_end_matches(['\r', '\n']);
+            if let Some(ev) = line.strip_prefix("event:") {
+                current_event = ev.trim().to_string();
+            } else if let Some(data) = line.strip_prefix("data: ") {
+                handle_orchestrate_event(&current_event, data);
             }
         }
     }
+    // Flush any trailing line without a newline terminator.
+    if let Some(data) = buf.strip_prefix("data: ") {
+        handle_orchestrate_event(&current_event, data);
+    }
+    let _ = std::io::stdout().flush();
     Ok(())
+}
+
+/// Handle one SSE `data:` payload from the orchestrate stream.
+fn handle_orchestrate_event(ev: &str, data: &str) {
+    use std::io::Write;
+    match ev {
+        "decompose" => {
+            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                let n = v["sub_tasks"].as_array().map(|a| a.len()).unwrap_or(0);
+                println!("📋 任务分解: {} 个子任务", n);
+            }
+        }
+        "task_start" => {
+            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                let desc = v["description"].as_str().unwrap_or("");
+                let model = v["model"].as_str().unwrap_or("");
+                println!("  ▶ 执行: {desc}  [{model}]");
+            }
+        }
+        "token" => {
+            // Stream tokens to stdout as they arrive — no trailing newline.
+            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                if let Some(delta) = v["delta"].as_str() {
+                    print!("{delta}");
+                    let _ = std::io::stdout().flush();
+                }
+            }
+        }
+        "task_done" => {
+            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                let id = v["id"].as_i64().unwrap_or(0);
+                let dur = v["duration"].as_f64().unwrap_or(0.0);
+                if let Some(err) = v["error"].as_str() {
+                    if !err.is_empty() {
+                        println!("\n    ✗ 子任务 {id} 失败: {err}");
+                    }
+                } else {
+                    let cached = v["cache_hit"].as_bool().unwrap_or(false);
+                    let mark = if cached { "（缓存命中）" } else { "" };
+                    println!("\n    ✓ 子任务 {id} 完成 ({dur:.1}s){mark}");
+                }
+            }
+        }
+        "result" => {
+            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                if let Some(r) = v["response"].as_str() {
+                    println!("\n\n{r}");
+                }
+                let models = v["models_used"].as_array().cloned().unwrap_or_default();
+                let names: Vec<&str> = models.iter().filter_map(|m| m.as_str()).collect();
+                if !names.is_empty() {
+                    println!("\n── 调用模型: {}", names.join(" | "));
+                }
+                if let Some(agg) = v["aggregator"].as_str() {
+                    if !agg.is_empty() {
+                        println!("   汇总模型: {agg}");
+                    }
+                }
+                if v["cache_hit"].as_bool().unwrap_or(false) {
+                    println!("   来自语义缓存");
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 // ── Config ──

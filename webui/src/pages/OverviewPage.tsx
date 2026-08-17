@@ -73,7 +73,7 @@ export default function OverviewPage() {
   const handleShutdownAll = () => {
     Modal.confirm({
       title: '关闭全部服务',
-      content: '将关闭 AI 服务、Ollama 和主服务进程，页面将无法继续访问。下次使用请双击 start-lloom.command 重新启动。确认关闭？',
+      content: '将关闭 AI 服务、Ollama 和主服务进程，页面将无法继续访问。确认关闭？',
       okText: '关闭全部',
       okType: 'danger',
       cancelText: '取消',

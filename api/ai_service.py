@@ -504,16 +504,23 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
         temperature=req.temperature,
         timeout=req.timeout,
         stream=True,
+        stream_options={"include_usage": True},
     )
 
     def gen():
-        input_tokens = 0
-        output_tokens = 0
+        usage = None
         try:
             for chunk in litellm.completion(**kwargs):
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
                     yield _plain_sse({"chunk": delta.content})
+                # Providers that support include_usage attach usage on the last
+                # chunk; capture it for the final "done" event.
+                u = getattr(chunk, "usage", None)
+                if u is not None:
+                    usage = u
+            input_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+            output_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
             yield _plain_sse({
                 "done": True,
                 "cost": _estimate_cost(req.model, input_tokens, output_tokens),
@@ -583,7 +590,28 @@ AGGREGATE_SYSTEM_PROMPT = """你是一个结果汇总专家。用户提出了一
 2. 去除冗余信息
 3. 突出关键结论
 4. 使用中文回答
-5. 结合对话上下文，确保回答与之前的对话连贯"""
+5. 结合对话上下文，确保回答与之前的对话连贯
+6. 严禁编造不存在的测试脚本、文件或可执行代码。如果子任务结果中包含代码示例，必须明确说明它来自子任务结果；如果子任务结果中没有代码，不要主动生成“附：一键运行测试脚本”之类的内容。
+7. 如果某个子任务执行失败，结果中会包含“执行失败:”前缀，请如实说明该部分失败，不要替它编造内容或假装已完成。"""
+
+
+# 比较/对比类关键词。这类问题往往需要把多个对象分别分析再综合，
+# 因此当出现「比较/对比 + 多个并列实体」时应进入复杂路径做分解。
+_COMPARE_KW = re.compile(r"(比较|对比|对照|区别|差异|异同|优缺点|利弊|对比分析|vs|VS|Vs)")
+# 实体分隔符：顿号/逗号/斜杠/空格，以及「和/与/跟/vs」等连接词。
+_ENTITY_SEP = re.compile(r"[、，,；;／/\s]+|(?:和|与|跟|vs|VS|Vs)")
+
+
+def _is_comparison(query: str) -> bool:
+    """含比较类关键词，且能切分出 ≥2 个并列实体，视为多对象比较 → 复杂任务。
+
+    反例：纯「排序算法比较」「快速排序的优缺点」只有一个对象，不触发，
+    保持单模型轻快直答（符合「混合：默认轻快」策略）。
+    """
+    if not _COMPARE_KW.search(query):
+        return False
+    entities = [e.strip() for e in _ENTITY_SEP.split(query) if len(e.strip()) >= 2]
+    return len(entities) >= 2
 
 
 def _is_complex(query: str) -> bool:
@@ -597,7 +625,12 @@ def _is_complex(query: str) -> bool:
         return True
     # 含多个换行/编号项也视为多子任务
     numbered = re.findall(r"^\s*(?:\d+[\.、]|[-*])\s+\S", query, re.MULTILINE)
-    return len(numbered) >= 2
+    if len(numbered) >= 2:
+        return True
+    # 多对象比较（比较 A、B、C 的优缺点；A vs B 区别 等）
+    if _is_comparison(query):
+        return True
+    return False
 
 
 def _select_model(task_type: str, models: list[ModelSpec]) -> str:
@@ -835,6 +868,15 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             spec = _model_by_name(req.models, t["selected_model"])
             t["cost"] = _estimate_subtask_cost(spec, t["estimated_output_tokens"]) if spec else 0.0
 
+        # 多模型可视化分配：可用模型 ≥2 时，按序轮询把各子任务分配到不同模型，
+        # 使计划卡片清晰展示「哪部分交给哪个模型」——这是用户最想看到的信息。
+        # 代价是牺牲一点类型-模型最优匹配（当前 active 模型均为通用对话模型，
+        # 对分析/对比类子任务影响极小）。聚合阶段仍用较强的汇总模型。
+        if len(req.models) >= 2:
+            names = [m.name for m in req.models]
+            for i, t in enumerate(sub_tasks):
+                t["selected_model"] = names[i % len(names)]
+
         yield _sse("decompose", {
             "sub_tasks": sub_tasks,
             "total_cost": sum(t["cost"] for t in sub_tasks),
@@ -885,6 +927,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             except Exception as e:
                 task["result"] = f"执行失败: {e}"
                 task["status"] = "failed"
+                task["error"] = str(e)
             task["duration"] = time.time() - start
             task["tokens"] = 0
             task["cache_hit"] = bool(task_hit)
@@ -892,13 +935,16 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             any_cache_hit = any_cache_hit or bool(task_hit)
             completed[task["id"]] = task
 
-            yield _sse("task_done", {"id": task["id"], "model": task["selected_model"],
-                                     "duration": task["duration"], "cost": task["cost"],
-                                     "tokens": 0, "cache_hit": bool(task_hit),
-                                     "cache_sim": task.get("cache_sim")})
+            done_payload: dict = {"id": task["id"], "model": task["selected_model"],
+                                  "duration": task["duration"], "cost": task["cost"],
+                                  "tokens": 0, "cache_hit": bool(task_hit),
+                                  "cache_sim": task.get("cache_sim")}
+            if task.get("status") == "failed":
+                done_payload["error"] = task.get("error") or "执行失败"
+            yield _sse("task_done", done_payload)
 
         # Aggregate —— 流式输出最终回答（轻量模式：仅展示子任务进度，最终答案逐 token 下发）
-        summary_parts = [f"## 子任务 {t['id']}: {t['description']}\n\n{t['result']}" for t in sub_tasks]
+        failed_tasks = [t for t in sub_tasks if t.get("status") == "failed"]
         agg_model = None
         for pref in ["qwen-plus", "qwen3.6-flash", "deepseek-v3", "qwen2.5-local"]:
             spec = _model_by_name(req.models, pref)
@@ -908,27 +954,40 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
         if agg_model is None:
             agg_model = req.models[0] if req.models else ModelSpec(name="qwen-plus", litellm_model="qwen-plus")
 
-        yield _sse("task_start", {"id": 0, "description": "汇总最终回答", "model": agg_model.name})
-        start = time.time()
-        agg_parts: list[str] = []
-        try:
-            for delta in _call_llm_stream(
-                agg_model,
-                messages=[
-                    {"role": "system", "content": AGGREGATE_SYSTEM_PROMPT},
-                    *req.history[-6:],
-                    {"role": "user", "content": f"原始任务：{req.query}\n\n子任务执行结果：\n\n{chr(10).join(summary_parts)}\n\n请汇总以上结果，生成最终回答。"},
-                ],
-                max_tokens=4096,
-                temperature=0.3,
-                timeout=120,
-            ):
-                agg_parts.append(delta)
-                yield _sse("token", {"id": 0, "model": agg_model.name, "delta": delta})
-            final = "".join(agg_parts)
-        except Exception:
-            final = "\n\n---\n\n".join(f"**子任务 {t['id']}**: {t['result']}" for t in sub_tasks)
-        agg_duration = time.time() - start
+        # 如果有子任务失败，直接拼接结果，避免汇总模型对失败内容编造/美化。
+        # 同时把真实错误信息保留在最终回答里，让用户知道哪一步出了问题。
+        if failed_tasks:
+            final = "## 部分子任务执行失败\n\n" + "\n\n".join(
+                f"**子任务 {t['id']}**（{t['selected_model']}）: {t['description']}\n\n执行失败：{t.get('error', '未知错误')}"
+                for t in sub_tasks
+            )
+            yield _sse("task_start", {"id": 0, "description": "汇总最终回答（部分子任务失败）", "model": agg_model.name})
+            for chunk in [final[i:i+30] for i in range(0, len(final), 30)]:
+                yield _sse("token", {"id": 0, "model": agg_model.name, "delta": chunk})
+            agg_duration = 0.0
+        else:
+            summary_parts = [f"## 子任务 {t['id']}: {t['description']}\n\n{t['result']}" for t in sub_tasks]
+            yield _sse("task_start", {"id": 0, "description": "汇总最终回答", "model": agg_model.name})
+            start = time.time()
+            agg_parts: list[str] = []
+            try:
+                for delta in _call_llm_stream(
+                    agg_model,
+                    messages=[
+                        {"role": "system", "content": AGGREGATE_SYSTEM_PROMPT},
+                        *req.history[-6:],
+                        {"role": "user", "content": f"原始任务：{req.query}\n\n子任务执行结果：\n\n{chr(10).join(summary_parts)}\n\n请汇总以上结果，生成最终回答。"},
+                    ],
+                    max_tokens=4096,
+                    temperature=0.3,
+                    timeout=120,
+                ):
+                    agg_parts.append(delta)
+                    yield _sse("token", {"id": 0, "model": agg_model.name, "delta": delta})
+                final = "".join(agg_parts)
+            except Exception:
+                final = "\n\n---\n\n".join(f"**子任务 {t['id']}**: {t['result']}" for t in sub_tasks)
+            agg_duration = time.time() - start
 
         yield _sse("task_done", {"id": 0, "model": agg_model.name,
                                  "duration": agg_duration, "cost": 0.0, "tokens": 0,

@@ -198,12 +198,11 @@ pub fn api_key_for(api_key_env: &str) -> String {
     if api_key_env.is_empty() {
         return String::new();
     }
-    // If the stored value is a real key (contains no whitespace and is short),
-    // treat it as the key itself. Otherwise read the named env var.
-    let looks_like_key = api_key_env.contains("sk-")
-        || api_key_env.contains("-")
-        && !api_key_env.chars().any(|c| c.is_ascii_whitespace());
-    if looks_like_key && !api_key_env.contains('_') {
+    // Treat the stored value as a literal key only when it clearly is one
+    // (`sk-...` with no underscore). Anything else is an env-var *name*
+    // (e.g. `DASHSCOPE_API_KEY`) and is read from the process environment.
+    let is_literal_key = api_key_env.starts_with("sk-") && !api_key_env.contains('_');
+    if is_literal_key {
         return api_key_env.to_string();
     }
     std::env::var(api_key_env).unwrap_or_default()

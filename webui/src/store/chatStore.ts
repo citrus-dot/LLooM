@@ -18,6 +18,7 @@ export interface SubTaskView {
   task_type?: string;
   status?: 'pending' | 'running' | 'done' | 'failed';
   duration?: number;
+  error?: string;
 }
 
 export interface PlanView {
@@ -229,7 +230,15 @@ export async function send() {
       } else if (ev.event === 'task_done') {
         const id = d.id;
         plan.sub_tasks = plan.sub_tasks.map((t) =>
-          t.id === id ? { ...t, status: d.error ? 'failed' : 'done', duration: d.duration } : t,
+          t.id === id
+            ? {
+                ...t,
+                status: d.error ? 'failed' : 'done',
+                duration: d.duration,
+                model: d.model || t.model,
+                error: d.error,
+              }
+            : t,
         );
         patchPlan();
       } else if (ev.event === 'result' && d.response !== undefined) {

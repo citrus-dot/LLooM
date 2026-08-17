@@ -158,6 +158,17 @@ export async function deleteConversation(id: string): Promise<{ deleted: boolean
   return del(`/api/conversations/${encodeURIComponent(id)}`)
 }
 
+export async function renameConversation(id: string, title: string): Promise<{ id: string; renamed: boolean }> {
+  return fetch(`${BASE}/api/conversations/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  }).then((res) => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  })
+}
+
 export async function readEnv(): Promise<Record<string, string>> {
   return get("/api/config")
 }
@@ -196,27 +207,88 @@ export interface SseEvent {
   data: any
 }
 
-export async function orchestrateStream(query: string, history: ChatMessage[] = []): Promise<SseEvent[]> {
+/**
+ * Stream the orchestrate SSE, calling `onEvent` for each event as it arrives
+ * (true streaming — token deltas surface immediately). Returns all events too.
+ */
+export async function orchestrateStream(
+  query: string,
+  history: ChatMessage[] = [],
+  onEvent?: (ev: SseEvent) => void,
+): Promise<SseEvent[]> {
   const res = await fetch(`${BASE}/api/orchestrate/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, history }),
   })
-  const text = await res.text()
+  if (!res.body) {
+    const text = await res.text()
+    return parseSse(text, onEvent)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  const events: SseEvent[] = []
+  let buf = ""
+  let cur: SseEvent | null = null
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let idx: number
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx).replace(/\r$/, "")
+      buf = buf.slice(idx + 1)
+      if (line.startsWith("event:")) {
+        if (cur) {
+          events.push(cur)
+          onEvent?.(cur)
+        }
+        cur = { event: line.slice(7).trim(), data: null }
+      } else if (line.startsWith("data: ")) {
+        try {
+          const v = JSON.parse(line.slice(6))
+          if (cur && cur.data === null) cur.data = v
+          else {
+            const ev = { event: "data", data: v }
+            events.push(ev)
+            onEvent?.(ev)
+          }
+        } catch {}
+      }
+    }
+  }
+  if (cur) {
+    events.push(cur)
+    onEvent?.(cur)
+  }
+  return events
+}
+
+function parseSse(text: string, onEvent?: (ev: SseEvent) => void): SseEvent[] {
   const events: SseEvent[] = []
   let cur: SseEvent | null = null
   for (const line of text.split("\n")) {
     if (line.startsWith("event:")) {
-      if (cur) events.push(cur)
+      if (cur) {
+        events.push(cur)
+        onEvent?.(cur)
+      }
       cur = { event: line.slice(7).trim(), data: null }
     } else if (line.startsWith("data: ")) {
       try {
         const v = JSON.parse(line.slice(6))
         if (cur && cur.data === null) cur.data = v
-        else events.push({ event: "data", data: v })
+        else {
+          const ev = { event: "data", data: v }
+          events.push(ev)
+          onEvent?.(ev)
+        }
       } catch {}
     }
   }
-  if (cur) events.push(cur)
+  if (cur) {
+    events.push(cur)
+    onEvent?.(cur)
+  }
   return events
 }

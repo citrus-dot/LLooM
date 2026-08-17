@@ -112,9 +112,28 @@ pub fn save_or_create(req_id: &str, title: &str, messages: &[Value]) -> Result<S
         req_id.to_string()
     };
     let now = now_iso();
-    let title = if title.is_empty() { auto_title(messages) } else { title.to_string() };
-
     let path = conv_path(&id);
+
+    // 标题策略：
+    // - 新建对话（req_id 为空）且未提供 title：从首条用户消息自动生成。
+    // - 已存在对话且 title 为空：保留原 title，避免用户编辑过的标题被后续消息覆盖。
+    // - 任何显式传入的 title：直接使用（首次保存或重命名）。
+    let title = if !title.is_empty() {
+        title.to_string()
+    } else if path.exists() {
+        if let Ok(existing) = std::fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<Value>(&existing) {
+                v["title"].as_str().unwrap_or(&auto_title(messages)).to_string()
+            } else {
+                auto_title(messages)
+            }
+        } else {
+            auto_title(messages)
+        }
+    } else {
+        auto_title(messages)
+    };
+
     let created_at = if path.exists() {
         if let Ok(existing) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<Value>(&existing) {

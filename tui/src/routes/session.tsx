@@ -9,6 +9,7 @@ import {
   loadConversation,
   saveConversation,
   deleteConversation,
+  renameConversation,
   chatStream,
   orchestrateStream,
   type Conversation,
@@ -132,8 +133,11 @@ export function Session(props: { setStatus: (s: string) => void }) {
   const persist = async (final: DisplayMsg[]) => {
     try {
       const messages = final.map((m) => ({ role: m.role, content: m.content }))
-      const title = final.find((m) => m.role === "user")?.content.slice(0, 20) ?? "新对话"
-      const res = await saveConversation({ id: activeSessionId() ?? undefined, title, messages })
+      // Only a brand-new conversation gets an auto-title; existing ones pass an
+      // empty title so the backend preserves the user's (possibly edited) title.
+      const id = activeSessionId()
+      const title = id ? "" : (final.find((m) => m.role === "user")?.content.slice(0, 20) ?? "新对话")
+      const res = await saveConversation({ id: id ?? undefined, title, messages })
       setActiveSessionId(res.id)
       refreshConvs()
     } catch {}
@@ -144,52 +148,84 @@ export function Session(props: { setStatus: (s: string) => void }) {
     if (!q || loading()) return
     setInput("")
     inputRef?.clear()
+    const base = msgs()
     const userMsg: DisplayMsg = { role: "user", content: q }
-    const next = [...msgs(), userMsg]
-    setMsgs(next)
+    const assistantIdx = base.length + 1
+    setMsgs([...base, userMsg, { role: "assistant", content: "", detail: "" }])
     setLoading(true)
     props.setStatus("思考中...")
 
+    // Streaming accumulators, updated from the onEvent callback.
+    let streaming = ""
+    const models = new Set<string>()
+    let aggregator = ""
+    let subTasks = 0
+    let doneCount = 0
+    let totalDur = 0
+    let cached = false
+    let blocked = ""
+    let failed = false
+
+    const patch = (content: string, detail: string) => {
+      setMsgs((prev) => {
+        const copy = prev.slice()
+        if (assistantIdx < copy.length) copy[assistantIdx] = { role: "assistant", content, detail }
+        return copy
+      })
+    }
+
     try {
-      let response = ""
-      let detail = ""
-      let blocked = ""
+      const history = base.filter((m) => m.role === "user" || m.role === "assistant")
       try {
-        const history = next.filter((m) => m.role === "user" || m.role === "assistant").slice(0, -1)
-        const events = await orchestrateStream(q, history)
-        let models: string[] = []
-        let cached = false
-        let subTasks = 0
-        let doneCount = 0
-        let totalDur = 0
-        for (const ev of events) {
-          if (ev.event === "task_start" && ev.data?.model) models.push(ev.data.model)
-          else if (ev.event === "decompose" && ev.data?.sub_tasks) subTasks = ev.data.sub_tasks.length
-          else if (ev.event === "task_done") {
-            doneCount++
-            totalDur += ev.data?.duration ?? 0
-          } else if (ev.event === "result" && ev.data?.response) {
-            response = ev.data.response
-            cached = !!ev.data?.cache_hit
-          } else if (ev.data?.error && ev.data?.detail) {
-            blocked = String(ev.data.detail)
+        await orchestrateStream(q, history, (ev) => {
+          switch (ev.event) {
+            case "task_start":
+              if (ev.data?.model) models.add(ev.data.model)
+              break
+            case "decompose":
+              if (ev.data?.sub_tasks) subTasks = ev.data.sub_tasks.length
+              break
+            case "task_done":
+              doneCount++
+              totalDur += ev.data?.duration ?? 0
+              if (ev.data?.cache_hit) cached = true
+              if (ev.data?.error) failed = true
+              break
+            case "token":
+              if (ev.data?.delta) {
+                streaming += ev.data.delta
+                patch(streaming, "")
+              }
+              break
+            case "result":
+              if (ev.data?.response) streaming = ev.data.response
+              if (ev.data?.models_used) (ev.data.models_used as string[]).forEach((m) => models.add(m))
+              if (ev.data?.aggregator) aggregator = ev.data.aggregator
+              if (ev.data?.cache_hit) cached = true
+              break
+            default:
+              if (ev.data?.error && ev.data?.detail) blocked = String(ev.data.detail)
           }
-        }
-        const parts: string[] = []
-        if (models.length) parts.push(`调用模型: ${[...new Set(models)].join(" | ")}`)
-        if (subTasks > 1) parts.push(`${doneCount}/${subTasks} 子任务 · ${totalDur.toFixed(1)}s`)
-        if (cached) parts.push("来自缓存")
-        detail = parts.join(" · ")
+        })
       } catch {
-        response = await chatStream([...next.filter((m) => m.role === "user" || m.role === "assistant")])
+        streaming = await chatStream(history)
       }
-      const content = blocked ? `请求被拦截: ${blocked}` : response || "(无响应)"
-      const final = [...next, { role: "assistant", content, detail }]
+
+      const parts: string[] = []
+      if (models.size) parts.push(`调用模型: ${[...models].join(" | ")}`)
+      if (subTasks > 1) parts.push(`${doneCount}/${subTasks} 子任务 · ${totalDur.toFixed(1)}s`)
+      if (aggregator) parts.push(`汇总: ${aggregator}`)
+      if (cached) parts.push("来自缓存")
+      if (failed) parts.push("部分子任务失败")
+      const detail = parts.join(" · ")
+
+      const content = blocked ? `请求被拦截: ${blocked}` : streaming || "(无响应)"
+      const final = [...base, userMsg, { role: "assistant", content, detail }]
       setMsgs(final)
       await persist(final)
       props.setStatus("")
     } catch (e) {
-      const final = [...next, { role: "assistant", content: `请求失败: ${e}` }]
+      const final = [...base, userMsg, { role: "assistant", content: `请求失败: ${e}`, detail: "" }]
       setMsgs(final)
       await persist(final)
       props.setStatus(`失败: ${e}`)
@@ -221,6 +257,23 @@ export function Session(props: { setStatus: (s: string) => void }) {
     dialog.menu(c.title.slice(0, 18), {
       items: [
         { title: "打开", desc: "进入对话", onSelect: () => openConv(c.id) },
+        {
+          title: "重命名",
+          desc: "修改对话标题",
+          onSelect: () => {
+            dialog.prompt("重命名对话", {
+              value: c.title,
+              onConfirm: async (title) => {
+                const t = title.trim()
+                if (!t) return
+                try {
+                  await renameConversation(c.id, t)
+                  refreshConvs()
+                } catch {}
+              },
+            })
+          },
+        },
         {
           title: "删除",
           desc: "移除该对话",

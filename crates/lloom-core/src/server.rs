@@ -132,14 +132,14 @@ async fn get_model(Path(name): Path<String>) -> Result<Json<Model>> {
 
 async fn update_model(Path(name): Path<String>, Json(updates): Json<serde_json::Map<String, Value>>) -> Result<Json<Value>> {
     if !db::update_model(&name, &updates)? {
-        return Err(AppError::NotFound(format!("model ':name'")));
+        return Err(AppError::NotFound(format!("model '{name}'")));
     }
     Ok(Json(json!({ "updated": true })))
 }
 
 async fn delete_model(Path(name): Path<String>) -> Result<Json<Value>> {
     if !db::delete_model(&name)? {
-        return Err(AppError::NotFound(format!("model ':name'")));
+        return Err(AppError::NotFound(format!("model '{name}'")));
     }
     Ok(Json(json!({ "deleted": true })))
 }
