@@ -286,6 +286,11 @@ export default function ChatPage() {
                       style={{ background: '#0984e3', width: 24, height: 24, flexShrink: 0 }}
                     />
                     <div style={{ minWidth: 0, width: '100%' }}>
+                      {m.status === 'interrupted' && (
+                        <div style={{ marginBottom: 4 }}>
+                          <Tag color="warning">回答中断（服务关闭前未完成）</Tag>
+                        </div>
+                      )}
                       {m.plan && (
                         <div style={{ marginBottom: 8 }}>
                           <PlanCard plan={m.plan} />

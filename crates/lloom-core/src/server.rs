@@ -16,7 +16,7 @@ use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use futures::StreamExt;
 use serde::Deserialize;
@@ -76,6 +76,27 @@ struct OrchestrateBody {
     history: Vec<Value>,
     #[serde(default)]
     sr_domain: Option<String>,
+    /// Server-side context building: when present, history is loaded from the
+    /// conversation store (SQLite) and the client-sent `history` is ignored.
+    #[serde(default)]
+    conversation_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageAppend {
+    role: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    meta: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageUpdate {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    meta: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -262,6 +283,45 @@ async fn rename_conversation(
     Ok(Json(json!({ "id": id, "renamed": true })))
 }
 
+/// Append a single message (phase 1 of two-phase persistence — the user
+/// message and the assistant placeholder land on disk BEFORE the LLM call).
+async fn append_conversation_message(
+    Path(id): Path<String>,
+    Json(req): Json<MessageAppend>,
+) -> Result<Json<Value>> {
+    let role = req.role.trim().to_string();
+    if role != "user" && role != "assistant" {
+        return Err(AppError::InvalidRequest(format!(
+            "role must be 'user' or 'assistant', got '{role}'"
+        )));
+    }
+    // Defense-in-depth: run the same PII/jailbreak rules the chat path uses on
+    // user content that is about to be persisted (append bypasses the
+    // orchestrate-time check only for assistant placeholders, which are empty).
+    if role == "user" && !req.content.is_empty() {
+        let sec = security::check(&req.content, true, true);
+        if sec.blocked {
+            return Err(AppError::InvalidRequest(format!(
+                "blocked: {}",
+                sec.block_reason
+            )));
+        }
+    }
+    let (conv_id, seq) =
+        conversations::append_message(&id, &role, &req.content, req.meta.as_ref())?;
+    Ok(Json(json!({ "id": conv_id, "seq": seq, "appended": true })))
+}
+
+/// Fill in / update an existing message (phase 2 — assistant reply + metadata
+/// after the stream completes, error text on failure).
+async fn update_conversation_message(
+    Path((id, seq)): Path<(String, i64)>,
+    Json(req): Json<MessageUpdate>,
+) -> Result<Json<Value>> {
+    conversations::update_message(&id, seq, req.content.as_deref(), req.meta.as_ref())?;
+    Ok(Json(json!({ "id": id, "seq": seq, "updated": true })))
+}
+
 // ── Chat / Orchestrate (SSE) ──
 
 async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
@@ -366,12 +426,29 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
     // user has explicitly pre-initialized the embedding model.
     let cache_dir = config::data_dir().join("chroma").to_string_lossy().to_string();
 
+    // Server-side context building: load history + rolling summary from the
+    // conversation store. Client-sent `history` is the legacy fallback (CLI/TUI).
+    let (history, conversation_id, summary, summary_upto) = match &req.conversation_id {
+        Some(cid) => {
+            let h = match conversations::load_history_for_orchestrate(cid, &req.query) {
+                Ok(h) => h,
+                Err(e) => return err_response(e),
+            };
+            let (s, upto) = conversations::get_summary(cid).unwrap_or((None, 0));
+            (h, Some(cid.clone()), s, upto)
+        }
+        None => (req.history.clone(), None, None, 0),
+    };
+
     let events = match ai_client::orchestrate_stream(
         &req.query,
-        &req.history,
+        &history,
         req.sr_domain.as_deref().unwrap_or(""),
         &specs,
         &cache_dir,
+        conversation_id.as_deref(),
+        summary.as_deref(),
+        summary_upto,
     )
     .await
     {
@@ -381,10 +458,22 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
 
     // Forward each event as it arrives (true SSE, not buffered). The Python
     // side streams `token` deltas; the browser renders them incrementally.
-    let body = Body::from_stream(events.map(|ev| {
+    let conv_for_events = conversation_id.clone();
+    let body = Body::from_stream(events.map(move |ev| {
         // Persist cache hit/miss for hit-rate stats + threshold calibration.
         // Pure side-effect; failures are non-fatal (cache is best-effort).
         if let Some(obj) = ev.data.as_object() {
+            // Rolling-summary persistence: the AI service recomputed the L2
+            // summary because the token budget dropped older turns.
+            if ev.event == "summary_updated" {
+                if let (Some(cid), Some(text), Some(upto)) = (
+                    conv_for_events.as_deref(),
+                    obj.get("text").and_then(|v| v.as_str()),
+                    obj.get("upto").and_then(|v| v.as_i64()),
+                ) {
+                    let _ = conversations::set_summary(cid, text, upto);
+                }
+            }
             if let Some(sim) = obj.get("cache_sim").and_then(|v| v.as_f64()) {
                 let is_hit = obj.get("cache_hit").and_then(|v| v.as_bool()).unwrap_or(false);
                 let decision = if is_hit { "hit" } else { "miss" };
@@ -395,7 +484,12 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     .to_string();
                 let _ = db::insert_cache_calibration(sim, decision, &model, None, "passive");
                 if ev.event == "result" {
-                    let _ = db::insert_usage(&model, "default", 0, 0, 0.0, None, is_hit);
+                    // Real usage accounting: the Python side now reports actual
+                    // token counts / cost from litellm (was hard-coded 0).
+                    let in_tok = obj.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let out_tok = obj.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let cost = obj.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let _ = db::insert_usage(&model, "default", in_tok, out_tok, cost, None, is_hit);
                 }
             }
         }
@@ -677,6 +771,9 @@ pub fn build_router(state: AppState) -> Router {
         // Conversations
         .route("/api/conversations", get(list_conversations).post(save_conversation))
         .route("/api/conversations/{id}", get(get_conversation).put(rename_conversation).delete(delete_conversation))
+        // Two-phase persistence: append (phase 1) / fill-in (phase 2)
+        .route("/api/conversations/{id}/messages", post(append_conversation_message))
+        .route("/api/conversations/{id}/messages/{seq}", patch(update_conversation_message))
         // Chat + orchestrate (SSE)
         .route("/api/chat/stream", post(chat_stream))
         .route("/api/orchestrate/stream", post(orchestrate_stream))

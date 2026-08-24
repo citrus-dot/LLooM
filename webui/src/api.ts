@@ -75,6 +75,10 @@ export interface Conversation {
 export interface ChatMessage {
   role: string;
   content: string;
+  /** Optional metadata persisted alongside the message (model, tokens, cost,
+   * cache state, plan, status). Old conversations have no meta; the UI must
+   * tolerate undefined. See CONTEXT-PLAN §3.1. */
+  meta?: Record<string, any>;
 }
 
 export interface SseEvent {
@@ -286,6 +290,32 @@ export function renameConversation(id: string, title: string): Promise<{ id: str
   return jput(`/api/conversations/${encodeURIComponent(id)}`, { title });
 }
 
+// ── Two-phase persistence (CONTEXT-PLAN §3.1) ──
+// The user message and assistant placeholder are appended BEFORE the LLM call;
+// the placeholder is filled in (content + meta) once the stream completes.
+
+export function appendMessage(
+  id: string,
+  msg: { role: string; content: string; meta?: Record<string, any> },
+): Promise<{ id: string; seq: number; appended: boolean }> {
+  return jpost(`/api/conversations/${encodeURIComponent(id)}/messages`, msg);
+}
+
+export function updateMessage(
+  id: string,
+  seq: number,
+  patch: { content?: string; meta?: Record<string, any> },
+): Promise<{ id: string; seq: number; updated: boolean }> {
+  return fetch(`/api/conversations/${encodeURIComponent(id)}/messages/${seq}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  });
+}
+
 // ── SSE: chat / orchestrate ──
 
 export async function orchestrateStream(query: string, history: ChatMessage[]): Promise<SseEvent[]> {
@@ -342,11 +372,14 @@ export async function streamOrchestrate(
   query: string,
   history: ChatMessage[],
   onEvent: (ev: SseEvent) => void,
+  conversationId?: string,
 ): Promise<void> {
+  const body: Record<string, unknown> = { query, history };
+  if (conversationId) body.conversation_id = conversationId;
   const res = await fetch('/api/orchestrate/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, history }),
+    body: JSON.stringify(body),
   });
   if (!res.ok || !res.body) {
     onEvent({ event: 'error', data: { detail: `HTTP ${res.status}` } });

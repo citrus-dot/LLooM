@@ -52,6 +52,29 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '新对话',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    summary TEXT,
+    summary_upto INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conv_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    meta TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(conv_id, seq),
+    FOREIGN KEY (conv_id) REFERENCES conversations(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_id, seq);
+
 CREATE TABLE IF NOT EXISTS cache_calibration (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -72,9 +95,23 @@ pub fn init_db() -> Result<()> {
     Ok(())
 }
 
-fn open() -> Result<Connection> {
+fn open_impl() -> Result<Connection> {
     let conn = Connection::open(crate::config::db_path())?;
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+    Ok(conn)
+}
+
+/// Public connection for domain modules (e.g. the conversations store). WAL
+/// mode is enabled for concurrency.
+pub fn open() -> Result<Connection> {
+    open_impl()
+}
+
+/// Open a connection with foreign keys enforced (needed for cascade deletes
+/// on the conversations/messages tables).
+pub fn open_fk() -> Result<Connection> {
+    let conn = open_impl()?;
+    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
     Ok(conn)
 }
 

@@ -21,6 +21,12 @@ fn main() {
         std::process::exit(1);
     }
 
+    // One-time (idempotent) import of legacy JSON conversations into SQLite.
+    // Files stay in place as a rollback backup; already-imported ids are skipped.
+    if let Err(e) = lloom_core::conversations::migrate_json_dir() {
+        eprintln!("[core] conversation migration failed (non-fatal): {e}");
+    }
+
     let state = AppState::new();
     let state_for_spawn = state.clone();
     let web_port = config::web_port();

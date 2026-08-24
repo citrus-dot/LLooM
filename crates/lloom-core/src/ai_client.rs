@@ -136,22 +136,37 @@ pub async fn classify(text: &str, classifier: &ModelSpec, valid_types: &[&str]) 
 /// from the Python AI service — NOT buffered. The Rust core proxies each event
 /// as it arrives (see `server::orchestrate_stream`), so the browser receives
 /// incremental `token` events and can render the answer word-by-word.
+///
+/// `conversation_id` (optional) enables cache namespacing + context
+/// fingerprinting on the Python side; `summary`/`summary_upto` carry the
+/// persisted rolling summary so it is not recomputed on every request.
+#[allow(clippy::too_many_arguments)]
 pub async fn orchestrate_stream(
     query: &str,
     history: &[Value],
     sr_domain: &str,
     models: &[ModelSpec],
     cache_dir: &str,
+    conversation_id: Option<&str>,
+    summary: Option<&str>,
+    summary_upto: i64,
 ) -> Result<impl Stream<Item = SseEvent> + Send> {
     let url = format!("{}/v1/orchestrate/stream", base_url());
-    let body = json!({
+    let mut body = json!({
         "query": query,
         "history": history,
         "sr_domain": sr_domain,
         "models": models,
         "cache_dir": cache_dir,
         "similarity_threshold": config::cache_threshold(),
+        "summary_upto": summary_upto,
     });
+    if let Some(cid) = conversation_id {
+        body["conversation_id"] = json!(cid);
+    }
+    if let Some(s) = summary {
+        body["summary"] = json!(s);
+    }
     let resp = client()
         .post(&url)
         .json(&body)

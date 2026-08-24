@@ -1,8 +1,10 @@
 """LLooM AI micro-service — the only remaining Python layer.
 
-Stateless: the Rust host passes explicit model params (litellm_model, api_base,
-api_key, pricing) with every request. Python never touches SQLite, .env config,
-or business logic — it only calls litellm.
+Stateless as to business data: the Rust host passes explicit model params
+(litellm_model, api_base, api_key, pricing) and the conversation context with
+every request. Python owns only the LLM calls, the two-layer cache stores
+(exact sqlite + chroma vectors) and the context compressor; conversation
+records live in the Rust host's SQLite (`lloom.db`).
 
 Endpoints:
   GET  /v1/health                 liveness
@@ -18,6 +20,9 @@ import os
 import re
 import sys
 import time
+import hashlib
+import sqlite3
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -36,6 +41,62 @@ try:
 except ImportError:  # pragma: no cover - depends on launch mode
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import embedding_model as embed_model
+
+# ── Token counting (context budgeting) ──
+# Point tiktoken at the repo's offline cache BEFORE importing it, so no encoder
+# download is attempted in restricted-network environments. Falls back to a
+# char-based approximation when the cache (or tiktoken itself) is unavailable.
+_TIKTOKEN_CACHE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tiktoken_cache"
+)
+if os.path.isdir(_TIKTOKEN_CACHE):
+    os.environ.setdefault("TIKTOKEN_CACHE_DIR", _TIKTOKEN_CACHE)
+
+try:
+    import tiktoken as _tiktoken
+except Exception:  # pragma: no cover - tiktoken ships with litellm anyway
+    _tiktoken = None
+
+_ENCODER: Any = None
+_ENCODER_TRIED = False
+
+
+def _encoder():
+    global _ENCODER, _ENCODER_TRIED
+    if not _ENCODER_TRIED:
+        _ENCODER_TRIED = True
+        if _tiktoken is not None:
+            try:
+                _ENCODER = _tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                _ENCODER = None
+    return _ENCODER
+
+
+def count_tokens(text: str) -> int:
+    """Token count for budgeting. tiktoken cl100k when available; otherwise a
+    CJK-aware character approximation (CJK ≈ 1 token, latin ≈ 3.5 chars/token)."""
+    if not text:
+        return 0
+    enc = _encoder()
+    if enc is not None:
+        try:
+            return len(enc.encode(text, disallowed_special=()))
+        except Exception:
+            pass
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    return int(cjk + (len(text) - cjk) / 3.5)
+
+
+# Prompt-token budget for [summary + history]. The current query and system
+# prompt are always kept outside this budget. Configurable via .env.
+CONTEXT_BUDGET = int(os.getenv("LLOOM_CONTEXT_BUDGET", "24000"))
+
+# Rolling-summary update policy: re-summarize only when at least this many
+# uncovered messages have fallen out of the kept window. Between updates the
+# summary prefix stays byte-stable, which also maximizes provider-side
+# prefix-cache hits (CONTEXT-PLAN §3.2).
+SUMMARY_BLOCK = int(os.getenv("LLOOM_SUMMARY_BLOCK", "6"))
 
 app = FastAPI(title="LLooM AI Service", version="2.0.0")
 
@@ -85,6 +146,13 @@ class OrchestrateRequest(BaseModel):
     cache_dir: str = ""
     similarity_threshold: float = 0.80
     ttl: int = 86400
+    # Server-side context building (CONTEXT-PLAN §3.2): the Rust host loads the
+    # conversation, computes a rolling-summary fingerprint, and passes both the
+    # persisted summary text and how many leading messages it covers. Empty
+    # `conversation_id` disables cache namespacing + context fingerprinting.
+    conversation_id: str = ""
+    summary: str = ""
+    summary_upto: int = 0
 
 
 # ── Helpers ──
@@ -145,14 +213,28 @@ _CACHE_INIT_TIMEOUT = 300.0  # seconds before the status endpoint flags a timeou
 
 
 class SemanticCache:
+    """Optional chroma-backed semantic cache (L2 in the two-layer design).
+
+    Singleton across requests: chroma's PersistentClient is expensive to
+    construct and the underlying sqlite is lock-guarded, so one instance +
+    a threading.Lock is both faster and safer than per-request clients.
+
+    Scope rules (CONTEXT-PLAN §3.3 C-a):
+      - context-free queries → global namespace (where model=<m>, conv_id IS NULL)
+      - context-dependent queries → per-conversation namespace
+        (where model=<m> AND conv_id=<cid>)
+    """
+
+    _singleton: "SemanticCache | None" = None
+    _singleton_key: tuple = ()
+    _lock = threading.Lock()
+
     def __init__(self, path: str, threshold: float, ttl: int):
         self.path = path
         self.threshold = threshold
         self.ttl = ttl
         self._collection = None
         self._enabled = False
-        # Only enable when a path is given AND the embedding model has been
-        # pre-initialized. This prevents the synchronous download that hangs.
         if not path or not _cache_ready:
             return
         try:
@@ -171,15 +253,37 @@ class SemanticCache:
         except Exception:
             self._enabled = False
 
-    def get(self, query: str, model: str) -> dict | None:
+    @classmethod
+    def get(cls, path: str, threshold: float, ttl: int) -> "SemanticCache | None":
+        key = (path, round(threshold, 4), ttl)
+        with cls._lock:
+            if cls._singleton is None or cls._singleton_key != key:
+                cls._singleton = cls(path, threshold, ttl)
+                cls._singleton_key = key
+            return cls._singleton if cls._singleton._enabled else None
+
+    def _where(self, model: str, conv_id: str | None) -> dict | None:
+        if model == "default" and not conv_id:
+            return None
+        clauses = []
+        if model != "default":
+            clauses.append({"model": model})
+        if conv_id:
+            clauses.append({"conv_id": conv_id})
+        if not clauses:
+            return None
+        return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+    def lookup(self, query: str, model: str, conv_id: str | None) -> dict | None:
         if not self._enabled or not self._collection:
             return None
         try:
-            results = self._collection.query(
-                query_texts=[query],
-                n_results=1,
-                where={"model": model} if model != "default" else None,
-            )
+            with self._lock:
+                results = self._collection.query(
+                    query_texts=[query],
+                    n_results=1,
+                    where=self._where(model, conv_id),
+                )
             if not results or not results["ids"] or not results["ids"][0]:
                 return None
             similarity = 1 - results["distances"][0][0]
@@ -195,41 +299,267 @@ class SemanticCache:
         except Exception:
             return None
 
-    def best_sim(self, query: str, model: str) -> float | None:
+    def best_sim(self, query: str, model: str, conv_id: str | None = None) -> float | None:
         """Top-1 cosine similarity to the nearest cached query, ignoring the
         threshold. Used for calibration — we need the score even on a miss."""
         if not self._enabled or not self._collection:
             return None
         try:
-            results = self._collection.query(
-                query_texts=[query],
-                n_results=1,
-                where={"model": model} if model != "default" else None,
-            )
+            with self._lock:
+                results = self._collection.query(
+                    query_texts=[query],
+                    n_results=1,
+                    where=self._where(model, conv_id),
+                )
             if not results or not results["ids"] or not results["ids"][0]:
                 return None
             return 1 - results["distances"][0][0]
         except Exception:
             return None
 
-    def put(self, query: str, response: str, model: str) -> None:
+    def store(self, query: str, response: str, model: str, conv_id: str | None) -> None:
         if not self._enabled or not self._collection:
             return
-        import hashlib
-
-        doc_id = hashlib.md5(f"{model}:{query}".encode()).hexdigest()
+        # conv_id in the id makes global vs scoped entries distinct on disk;
+        # global entries (conv_id None) dedupe across conversations.
+        doc_id = hashlib.md5(
+            f"{model}:{'g' if conv_id is None else conv_id}:{query}".encode()
+        ).hexdigest()
+        meta: dict[str, Any] = {
+            "response": response,
+            "model": model,
+            "cached_at": time.time(),
+        }
+        if conv_id:
+            meta["conv_id"] = conv_id
         try:
-            self._collection.upsert(
-                ids=[doc_id],
-                documents=[query],
-                metadatas=[{
-                    "response": response,
-                    "model": model,
-                    "cached_at": time.time(),
-                }],
-            )
+            with self._lock:
+                self._collection.upsert(
+                    ids=[doc_id],
+                    documents=[query],
+                    metadatas=[meta],
+                )
         except Exception:
             pass
+
+    def sweep(self) -> int:
+        """Drop TTL-expired entries and evict the oldest beyond the size cap.
+        Best-effort; failures are non-fatal (cache is best-effort)."""
+        if not self._enabled or not self._collection:
+            return 0
+        max_entries = int(os.getenv("LLOOM_CACHE_MAX_ENTRIES", "5000"))
+        removed = 0
+        try:
+            with self._lock:
+                all_rows = self._collection.get(include=["metadatas"])
+                ids = all_rows.get("ids", [])
+                metas = all_rows.get("metadatas", [])
+                now = time.time()
+                expired = [
+                    ids[i]
+                    for i, m in enumerate(metas)
+                    if self.ttl > 0 and (now - m.get("cached_at", 0)) > self.ttl
+                ]
+                if expired:
+                    self._collection.delete(ids=expired)
+                    removed += len(expired)
+                # LRU cap: keep newest max_entries by cached_at.
+                remaining = self._collection.get(include=["metadatas"])
+                r_ids = remaining.get("ids", [])
+                r_metas = remaining.get("metadatas", [])
+                if len(r_ids) > max_entries:
+                    order = sorted(
+                        range(len(r_ids)), key=lambda i: r_metas[i].get("cached_at", 0)
+                    )
+                    drop = [r_ids[i] for i in order[: len(r_ids) - max_entries]]
+                    if drop:
+                        self._collection.delete(ids=drop)
+                        removed += len(drop)
+        except Exception:
+            pass
+        return removed
+
+
+# ── Exact-match cache (L1): O(1) hash lookup, zero false positives ──
+
+
+class ExactCache:
+    """SQLite key→response store. Key = sha256(model + system_id + fingerprint
+    + normalized_query). Cross-conversation sharing for context-free queries
+    (fingerprint empty), per-conversation otherwise. Own sqlite file, separate
+    from the Rust host's business DB."""
+
+    _singleton: "ExactCache | None" = None
+    _lock = threading.Lock()
+
+    def __init__(self, path: str, ttl: int):
+        self.path = path
+        self.ttl = ttl
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            self._conn = sqlite3.connect(path, check_same_thread=False)
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS exact_cache ("
+                " key TEXT PRIMARY KEY, model TEXT, response TEXT, "
+                " conv_id TEXT, created_at REAL, hits INTEGER DEFAULT 0)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_exact_created ON exact_cache(created_at)"
+            )
+            self._conn.commit()
+            self._enabled = True
+        except Exception:
+            self._enabled = False
+
+    @classmethod
+    def get(cls, path: str, ttl: int) -> "ExactCache | None":
+        with cls._lock:
+            if cls._singleton is None or cls._singleton.path != path:
+                cls._singleton = cls(path, ttl)
+            return cls._singleton if cls._singleton._enabled else None
+
+    def lookup(self, key: str) -> str | None:
+        if not self._enabled:
+            return None
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT response, created_at FROM exact_cache WHERE key = ?",
+                    (key,),
+                ).fetchone()
+                if not row:
+                    return None
+                if self.ttl > 0 and (time.time() - (row[1] or 0)) > self.ttl:
+                    return None
+                self._conn.execute(
+                    "UPDATE exact_cache SET hits = hits + 1 WHERE key = ?", (key,)
+                )
+                self._conn.commit()
+                return row[0]
+        except Exception:
+            return None
+
+    def store(self, key: str, model: str, response: str, conv_id: str | None) -> None:
+        if not self._enabled:
+            return
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO exact_cache "
+                    "(key, model, response, conv_id, created_at, hits) "
+                    "VALUES (?, ?, ?, ?, ?, 0)",
+                    (key, model, response, conv_id, time.time()),
+                )
+                self._conn.commit()
+        except Exception:
+            pass
+
+    def sweep(self) -> int:
+        if not self._enabled:
+            return 0
+        max_entries = int(os.getenv("LLOOM_CACHE_MAX_ENTRIES", "5000"))
+        removed = 0
+        try:
+            with self._lock:
+                if self.ttl > 0:
+                    c = self._conn.execute(
+                        "DELETE FROM exact_cache WHERE created_at < ?",
+                        (time.time() - self.ttl,),
+                    )
+                    removed += c.rowcount
+                n = self._conn.execute("SELECT COUNT(*) FROM exact_cache").fetchone()[0]
+                if n > max_entries:
+                    c = self._conn.execute(
+                        "DELETE FROM exact_cache WHERE key IN ("
+                        " SELECT key FROM exact_cache ORDER BY created_at ASC LIMIT ?)",
+                        (n - max_entries,),
+                    )
+                    removed += c.rowcount
+                self._conn.commit()
+        except Exception:
+            pass
+        return removed
+
+
+# Background cache-eviction thread (runs every 5 min, daemon).
+_EVICTION_PERIOD = int(os.getenv("LLOOM_CACHE_SWEEP_SECS", "300"))
+_eviction_started = False
+
+
+def _start_eviction_thread(exact: ExactCache | None, sem: SemanticCache | None) -> None:
+    global _eviction_started
+    if _eviction_started or (not exact and not sem):
+        return
+    _eviction_started = True
+
+    def _loop():
+        while True:
+            time.sleep(_EVICTION_PERIOD)
+            if exact:
+                exact.sweep()
+            if sem:
+                sem.sweep()
+
+    threading.Thread(target=_loop, daemon=True).start()
+
+
+# ── Cache key helpers (CONTEXT-PLAN §3.3) ──
+
+# Anaphora / deictic markers: when present in a follow-up question, the query
+# depends on prior context and must NOT be served from the global cache.
+_ANAPHORA = re.compile(
+    r"(它|他|她|它们|他们|她们|这个|那个|这些|那些|上面|上文|刚才|之前|"
+    r"继续|再说|再讲|再说一遍|另外|那么|此|该|前面|上述|以上|接下来|这样|那样)"
+)
+# Time-sensitive queries should never be cached (stale answers).
+_TIME_SENSITIVE = re.compile(r"(今天|现在|当前|最新|最近|today|now|latest)")
+
+
+def _normalize_query(q: str) -> str:
+    return re.sub(r"\s+", " ", q.strip().lower())
+
+
+def _is_context_free(query: str, history: list[dict]) -> bool:
+    """Decide whether a query can be served from the *global* (cross-conversation)
+    cache. Heuristic v1 (no extra LLM cost): empty history → free; anaphora →
+    bound; very short follow-ups → bound (conservative). The gray zone is left
+    to the calibration loop to label."""
+    if not history:
+        return True
+    if _ANAPHORA.search(query):
+        return False
+    # Short follow-ups without an explicit subject are almost always contextual.
+    if len(query) < 12:
+        return False
+    return True
+
+
+def _fingerprint(conv_id: str, history: list[dict]) -> str:
+    """Stable digest of the conversation tail (last 2 messages) — the part a
+    context-dependent query is most likely to refer back to."""
+    tail = "".join(m.get("content", "")[:80] for m in history[-2:])
+    return hashlib.sha256(f"{conv_id}:{tail}".encode()).hexdigest()[:16]
+
+
+def _exact_key(model: str, system_id: str, fingerprint: str, query: str) -> str:
+    raw = f"{model}|{system_id}|{fingerprint}|{_normalize_query(query)}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _cacheable(query: str, temperature: float) -> bool:
+    """Gate writes: skip non-deterministic or time-sensitive answers."""
+    if temperature > 0.7:
+        return False
+    if _TIME_SENSITIVE.search(query):
+        return False
+    return True
+
+
+# Back-compat shims: the legacy module-level functions in this file called
+# SemanticCache(query, model) / .put(query, response, model). We route them
+# through the singleton so existing call sites keep compiling.
+def _semantic_for(cache_dir: str, threshold: float, ttl: int) -> SemanticCache | None:
+    return SemanticCache.get(cache_dir, threshold, ttl)
 
 
 # ── Semantic-cache pre-initialization ──
@@ -641,22 +971,108 @@ def _select_model(task_type: str, models: list[ModelSpec]) -> str:
     return "qwen2.5-local"
 
 
+def _system_id(messages: list[dict]) -> str:
+    """Stable digest of the system prompt so cache keys invalidate when the
+    system prompt changes (different role instructions ≠ same answer)."""
+    for m in messages:
+        if m.get("role") == "system":
+            return hashlib.sha256((m.get("content") or "").encode()).hexdigest()[:16]
+    return "none"
+
+
+def _two_layer_lookup(
+    exact: ExactCache | None,
+    sem: SemanticCache | None,
+    query: str,
+    model: str,
+    conv_id: str,
+    fingerprint: str,
+    context_free: bool,
+    system_id: str,
+) -> tuple[str | None, float | None, bool]:
+    """L1 exact → L2 semantic. Returns (response, similarity, hit_layer).
+
+    L2 (semantic) is only consulted for context-free queries — a context-
+    dependent query must never match a global entry from another conversation.
+    """
+    scope = fingerprint if not context_free else ""
+    key = _exact_key(model, system_id, scope, query)
+    if exact:
+        resp = exact.lookup(key)
+        if resp is not None:
+            return resp, 1.0, True
+    if sem and context_free:
+        hit = sem.lookup(query, model, None)
+        if hit:
+            return hit["response"], hit["similarity"], False
+    return None, None, False
+
+
+def _two_layer_store(
+    exact: ExactCache | None,
+    sem: SemanticCache | None,
+    query: str,
+    response: str,
+    model: str,
+    conv_id: str,
+    fingerprint: str,
+    context_free: bool,
+    system_id: str,
+) -> None:
+    scope = fingerprint if not context_free else ""
+    key = _exact_key(model, system_id, scope, query)
+    if exact:
+        exact.store(key, model, response, conv_id if not context_free else None)
+    # Semantic store only for context-free queries (cross-conversation reuse).
+    if sem and context_free:
+        sem.store(query, response, model, None)
+
+
 def _call_llm(
     model_spec: ModelSpec,
     messages: list[dict],
     max_tokens: int = 500,
     temperature: float = 0.3,
     timeout: int = 60,
-    cache: SemanticCache | None = None,
-    cache_key: str | None = None,
+    *,
+    exact: ExactCache | None = None,
+    sem: SemanticCache | None = None,
+    cache_query: str | None = None,
+    conv_id: str = "",
+    fingerprint: str = "",
+    context_free: bool = True,
     cache_hit_ref: list[bool] | None = None,
+    usage_ref: dict | None = None,
 ) -> str:
-    if cache and cache_key:
-        hit = cache.get(cache_key, model_spec.name)
-        if hit:
+    """Non-streaming LLM call with two-layer cache + real usage accounting.
+
+    `cache_query` is the user-facing query text used to key the cache (NOT the
+    full prompt — dependency context for subtasks is folded into the messages
+    but the cache key still uses the query so independent subtasks stay keyed
+    on the question). When None, caching is disabled for this call.
+    """
+    system_id = _system_id(messages)
+    if cache_query and exact is not None or sem is not None:
+        resp, sim, _layer = _two_layer_lookup(
+            exact, sem, cache_query, model_spec.name, conv_id,
+            fingerprint, context_free, system_id,
+        )
+        if resp is not None:
             if cache_hit_ref is not None:
                 cache_hit_ref.append(True)
-            return hit["response"]
+            if usage_ref is not None:
+                in_est = sum(count_tokens(m.get("content", "")) for m in messages)
+                out_est = count_tokens(resp)
+                usage_ref.update({
+                    "input_tokens": in_est,
+                    "output_tokens": out_est,
+                    "cost": 0.0,
+                    "saved_cost": _estimate_cost(model_spec, in_est, out_est),
+                    "cache_hit": True,
+                    "cache_sim": sim,
+                })
+            return resp
+
     kwargs = _litellm_kwargs(
         model_spec,
         messages=messages,
@@ -667,10 +1083,26 @@ def _call_llm(
     try:
         response = litellm.completion(**kwargs)
         content = response.choices[0].message.content or ""
+        usage = getattr(response, "usage", None)
+        in_tok = getattr(usage, "prompt_tokens", 0) or 0
+        out_tok = getattr(usage, "completion_tokens", 0) or 0
     except Exception as e:
         raise RuntimeError(f"LLM call failed: {e}")
-    if cache and cache_key:
-        cache.put(cache_key, content, model_spec.name)
+
+    if usage_ref is not None:
+        usage_ref.update({
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "cost": _estimate_cost(model_spec, in_tok, out_tok),
+            "saved_cost": 0.0,
+            "cache_hit": False,
+        })
+
+    if cache_query and _cacheable(cache_query, temperature) and (exact or sem):
+        _two_layer_store(
+            exact, sem, cache_query, content, model_spec.name,
+            conv_id, fingerprint, context_free, system_id,
+        )
     return content
 
 
@@ -687,22 +1119,44 @@ def _call_llm_stream(
     max_tokens: int = 500,
     temperature: float = 0.3,
     timeout: int = 60,
-    cache: SemanticCache | None = None,
-    cache_key: str | None = None,
+    *,
+    exact: ExactCache | None = None,
+    sem: SemanticCache | None = None,
+    cache_query: str | None = None,
+    conv_id: str = "",
+    fingerprint: str = "",
+    context_free: bool = True,
     cache_hit_ref: list[bool] | None = None,
+    usage_ref: dict | None = None,
 ) -> Iterator[str]:
     """Streaming LLM call. Yields content deltas (str) as they arrive.
 
     Mirrors `_call_llm` but uses litellm's streaming mode so the orchestrator
     can forward tokens to the client incrementally (true SSE, not buffered).
     """
-    if cache and cache_key:
-        hit = cache.get(cache_key, model_spec.name)
-        if hit:
+    system_id = _system_id(messages)
+    if cache_query and (exact is not None or sem is not None):
+        resp, sim, _layer = _two_layer_lookup(
+            exact, sem, cache_query, model_spec.name, conv_id,
+            fingerprint, context_free, system_id,
+        )
+        if resp is not None:
             if cache_hit_ref is not None:
                 cache_hit_ref.append(True)
-            yield hit["response"]
+            if usage_ref is not None:
+                in_est = sum(count_tokens(m.get("content", "")) for m in messages)
+                out_est = count_tokens(resp)
+                usage_ref.update({
+                    "input_tokens": in_est,
+                    "output_tokens": out_est,
+                    "cost": 0.0,
+                    "saved_cost": _estimate_cost(model_spec, in_est, out_est),
+                    "cache_hit": True,
+                    "cache_sim": sim,
+                })
+            yield resp
             return
+
     kwargs = _litellm_kwargs(
         model_spec,
         messages=messages,
@@ -710,18 +1164,39 @@ def _call_llm_stream(
         temperature=temperature,
         timeout=timeout,
         stream=True,
+        stream_options={"include_usage": True},
     )
     full: list[str] = []
+    in_tok = 0
+    out_tok = 0
     try:
         for chunk in litellm.completion(**kwargs):
-            delta = chunk.choices[0].delta
+            delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
                 full.append(delta.content)
                 yield delta.content
+            u = getattr(chunk, "usage", None)
+            if u is not None:
+                in_tok = getattr(u, "prompt_tokens", 0) or 0
+                out_tok = getattr(u, "completion_tokens", 0) or 0
     except Exception as e:
         raise RuntimeError(f"LLM stream failed: {e}")
-    if cache and cache_key and full:
-        cache.put(cache_key, "".join(full), model_spec.name)
+
+    if usage_ref is not None:
+        usage_ref.update({
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "cost": _estimate_cost(model_spec, in_tok, out_tok),
+            "saved_cost": 0.0,
+            "cache_hit": False,
+        })
+
+    content = "".join(full)
+    if cache_query and content and _cacheable(cache_query, temperature) and (exact or sem):
+        _two_layer_store(
+            exact, sem, cache_query, content, model_spec.name,
+            conv_id, fingerprint, context_free, system_id,
+        )
 
 
 def _fallback_decompose(query: str) -> list[dict]:
@@ -746,11 +1221,164 @@ def _fallback_decompose(query: str) -> list[dict]:
     return tasks
 
 
+LIGHT_SYSTEM = "你是一个专业的AI助手。请认真完成以下任务。请结合对话上下文回答。"
+
+
+def build_context(
+    query: str,
+    history: list[dict],
+    summary: str,
+    summary_upto: int,
+    system_prompt: str,
+    budget: int = CONTEXT_BUDGET,
+) -> tuple[list[dict], str, int, dict]:
+    """Assemble a token-budgeted prompt: [system][?summary][kept history][query].
+
+    Returns (messages, new_summary, new_upto, stats). When the kept window
+    drops messages not yet covered by the summary and at least
+    `SUMMARY_BLOCK` such uncovered messages accumulate, a fresh rolling
+    summary is generated (the caller — orchestrate_stream — performs the LLM
+    call and emits `summary_updated`). Between updates the summary prefix is
+    byte-stable, which maximizes provider-side prefix-cache hits.
+
+    stats keys: budget, query_tokens, history_total, kept, dropped, summary_used,
+                needs_summary, uncovered.
+    """
+    q_tokens = count_tokens(query)
+    sys_tokens = count_tokens(system_prompt)
+    summary_tokens = count_tokens(summary) if summary else 0
+    avail = max(0, budget - q_tokens - sys_tokens - summary_tokens)
+
+    # Walk from newest to oldest, packing history into the budget.
+    kept_rev: list[dict] = []
+    used = 0
+    for m in reversed(history):
+        t = count_tokens(m.get("content", ""))
+        if used + t > avail:
+            break
+        kept_rev.append(m)
+        used += t
+    kept = list(reversed(kept_rev))
+    kept_count = len(kept)
+    dropped = history[: len(history) - kept_count]
+
+    upto = min(summary_upto, len(history))
+    uncovered = dropped[upto:] if upto < len(dropped) else (
+        dropped[upto:] if upto <= len(dropped) else []
+    )
+    needs_summary = bool(uncovered) and (
+        not summary or len(uncovered) >= SUMMARY_BLOCK
+    )
+
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    if summary:
+        messages.append({
+            "role": "system",
+            "content": f"以下是本对话早前内容的摘要，供你参考：\n{summary}",
+        })
+    messages.extend(kept)
+    messages.append({"role": "user", "content": query})
+
+    stats = {
+        "budget": budget,
+        "query_tokens": q_tokens,
+        "history_total": len(history),
+        "kept": kept_count,
+        "dropped": len(dropped),
+        "summary_used": bool(summary),
+        "needs_summary": needs_summary,
+        "uncovered": len(uncovered),
+    }
+    return messages, summary, upto, stats
+
+
+def _make_summary(
+    models: list[ModelSpec],
+    prev_summary: str,
+    uncovered: list[dict],
+) -> str | None:
+    """Generate/extend the rolling summary of older turns via a cheap model.
+    Returns None on failure (caller keeps the old summary / falls back)."""
+    spec = None
+    for pref in DECOMPOSER_PREFERENCE:
+        s = _model_by_name(models, pref)
+        if s:
+            spec = s
+            break
+    if spec is None:
+        spec = models[0] if models else None
+    if spec is None:
+        return None
+    transcript = "\n".join(
+        f"{('用户' if m.get('role') == 'user' else '助手')}: {m.get('content', '')[:400]}"
+        for m in uncovered
+    )
+    base = f"已有摘要：\n{prev_summary}\n\n" if prev_summary else ""
+    prompt = (
+        f"{base}请把以下对话片段压缩成一段简洁的事实摘要（≤300字），保留关键事实、"
+        f"用户意图与已做决定，忽略寒暄：\n{transcript}"
+    )
+    try:
+        out = _call_llm(
+            spec,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400,
+            temperature=0,
+            timeout=30,
+        )
+        return out.strip() or None
+    except Exception:
+        return None
+
+
 @app.post("/v1/orchestrate/stream")
 def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
-    cache = SemanticCache(req.cache_dir, req.similarity_threshold, req.ttl)
+    # Two-layer cache singletons. L1 (exact, sqlite) is always available when a
+    # cache_dir is given; L2 (semantic, chroma) only after /v1/cache/init.
+    exact: ExactCache | None = None
+    sem: SemanticCache | None = None
+    if req.cache_dir:
+        exact_path = os.path.join(
+            os.path.dirname(req.cache_dir.rstrip("/")) or ".",
+            "cache_exact.sqlite3",
+        )
+        exact = ExactCache.get(exact_path, req.ttl)
+        sem = SemanticCache.get(req.cache_dir, req.similarity_threshold, req.ttl)
+    _start_eviction_thread(exact, sem)
 
     def gen():
+        # ── Context building (L1 truncation + L2 summary) ──
+        history = req.history
+        summary = req.summary
+        upto = req.summary_upto
+        messages, summary, upto, ctx_stats = build_context(
+            req.query, history, summary, upto, LIGHT_SYSTEM
+        )
+        # NOTE: `messages` already ends with the user query; downstream LLM
+        # calls reuse this prefix (light path) or derive subtask messages from
+        # `history` (complex path) — both stay within the same token budget.
+        yield _sse("context", ctx_stats)
+
+        # If the budget dropped older turns not yet summarized, generate/extend
+        # the rolling summary now (one cheap LLM call, persisted by the Rust
+        # host on the `summary_updated` event). Skipped when there are too few
+        # uncovered messages — keep the prefix stable a little longer.
+        if ctx_stats["needs_summary"]:
+            uncovered = history[upto: len(history) - ctx_stats["kept"]]
+            new_summary = _make_summary(req.models, summary, uncovered)
+            if new_summary:
+                summary = new_summary
+                upto = len(history) - ctx_stats["kept"]
+                # Rebuild messages so the fresh summary is in the prompt.
+                messages, _, _, _ = build_context(
+                    req.query, history, summary, upto, LIGHT_SYSTEM
+                )
+                yield _sse("summary_updated", {"text": summary, "upto": upto})
+
+        # Context-free flag + per-conversation fingerprint drive cache scope.
+        context_free = _is_context_free(req.query, history)
+        fingerprint = "" if context_free else _fingerprint(req.conversation_id, history)
+
         if not _is_complex(req.query):
             # 轻量默认路径：单模型直接流式回答（最快，边生成边下发 token）
             model_name = _select_model("general", req.models)
@@ -766,20 +1394,22 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
             start = time.time()
             cache_hit: list[bool] = []
+            usage: dict = {}
             parts: list[str] = []
             try:
                 for delta in _call_llm_stream(
                     model_spec,
-                    messages=[
-                        {"role": "system", "content": "你是一个专业的AI助手。请认真完成以下任务。请结合对话上下文回答。"},
-                        *req.history[-10:],
-                        {"role": "user", "content": req.query},
-                    ],
+                    messages=messages,
                     max_tokens=2000,
                     timeout=120,
-                    cache=cache,
-                    cache_key=req.query,
+                    exact=exact,
+                    sem=sem,
+                    cache_query=req.query,
+                    conv_id=req.conversation_id,
+                    fingerprint=fingerprint,
+                    context_free=context_free,
                     cache_hit_ref=cache_hit,
+                    usage_ref=usage,
                 ):
                     parts.append(delta)
                     yield _sse("token", {"id": 1, "model": model_name, "delta": delta})
@@ -789,23 +1419,31 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 ok = False
             duration = time.time() - start
             content = "".join(parts)
-            sim = cache.best_sim(req.query, model_name)
+            sim = sem.best_sim(req.query, model_name) if sem else usage.get("cache_sim")
+            hit = bool(cache_hit) or usage.get("cache_hit", False)
 
             yield _sse("task_done", {
                 "id": 1, "model": model_name,
-                "duration": duration, "cost": 0.0, "tokens": 0,
-                "cache_hit": bool(cache_hit),
+                "duration": duration,
+                "cost": usage.get("cost", 0.0),
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "saved_cost": usage.get("saved_cost", 0.0),
+                "cache_hit": hit,
                 "cache_sim": sim,
             })
             yield _sse("result", {
                 "response": content,
-                "total_cost": 0.0,
-                "total_tokens": 0,
+                "model": model_name,
+                "cost": usage.get("cost", 0.0),
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "saved_cost": usage.get("saved_cost", 0.0),
                 "total_duration": duration,
                 "models_used": [model_name],
                 "sr_info": f"SR域分类: {req.sr_domain}" if req.sr_domain else "",
                 "ok": ok,
-                "cache_hit": bool(cache_hit),
+                "cache_hit": hit,
                 "cache_sim": sim,
             })
             return
@@ -868,10 +1506,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             spec = _model_by_name(req.models, t["selected_model"])
             t["cost"] = _estimate_subtask_cost(spec, t["estimated_output_tokens"]) if spec else 0.0
 
-        # 多模型可视化分配：可用模型 ≥2 时，按序轮询把各子任务分配到不同模型，
-        # 使计划卡片清晰展示「哪部分交给哪个模型」——这是用户最想看到的信息。
-        # 代价是牺牲一点类型-模型最优匹配（当前 active 模型均为通用对话模型，
-        # 对分析/对比类子任务影响极小）。聚合阶段仍用较强的汇总模型。
+        # 多模型可视化分配：可用模型 ≥2 时，按序轮询把各子任务分配到不同模型
         if len(req.models) >= 2:
             names = [m.name for m in req.models]
             for i, t in enumerate(sub_tasks):
@@ -884,6 +1519,12 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
         completed: dict[int, dict] = {}
         any_cache_hit = False
+        total_in = total_out = 0
+        total_cost = 0.0
+        total_saved = 0.0
+        # Complex subtasks use the budgeted history window (kept turns only —
+        # the summary already covers dropped older turns).
+        kept_history = history[len(history) - ctx_stats["kept"]:] if ctx_stats["kept"] else []
         for task in sub_tasks:
             context_parts = []
             for dep_id in task["depends_on"]:
@@ -904,23 +1545,25 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
             start = time.time()
             task_hit: list[bool] = []
+            task_usage: dict = {}
             try:
                 result = _call_llm(
                     spec,
                     messages=[
-                        {"role": "system", "content": "你是一个专业的AI助手。请认真完成以下任务。请结合对话上下文回答。"},
-                        *req.history[-10:],
+                        {"role": "system", "content": LIGHT_SYSTEM},
+                        *kept_history[-10:],
                         {"role": "user", "content": user_content},
                     ],
                     max_tokens=task["estimated_output_tokens"],
                     timeout=120,
-                    cache=cache,
-                    # Key on the full prompt (incl. dependency context) so a
-                    # subtask with prerequisites never returns a stale cached
-                    # answer from a different context. For independent subtasks
-                    # user_content == description, so hits are preserved.
-                    cache_key=user_content,
+                    exact=exact,
+                    sem=sem,
+                    cache_query=user_content,
+                    conv_id=req.conversation_id,
+                    fingerprint=fingerprint,
+                    context_free=context_free,
                     cache_hit_ref=task_hit,
+                    usage_ref=task_usage,
                 )
                 task["result"] = result
                 task["status"] = "done"
@@ -929,21 +1572,32 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 task["status"] = "failed"
                 task["error"] = str(e)
             task["duration"] = time.time() - start
-            task["tokens"] = 0
-            task["cache_hit"] = bool(task_hit)
-            task["cache_sim"] = cache.best_sim(user_content, task["selected_model"])
-            any_cache_hit = any_cache_hit or bool(task_hit)
+            hit = bool(task_hit) or task_usage.get("cache_hit", False)
+            sim = task_usage.get("cache_sim") or (sem.best_sim(user_content, task["selected_model"]) if sem else None)
+            task["cache_hit"] = hit
+            task["cache_sim"] = sim
+            any_cache_hit = any_cache_hit or hit
+            total_in += task_usage.get("input_tokens", 0)
+            total_out += task_usage.get("output_tokens", 0)
+            total_cost += task_usage.get("cost", 0.0)
+            total_saved += task_usage.get("saved_cost", 0.0)
             completed[task["id"]] = task
 
-            done_payload: dict = {"id": task["id"], "model": task["selected_model"],
-                                  "duration": task["duration"], "cost": task["cost"],
-                                  "tokens": 0, "cache_hit": bool(task_hit),
-                                  "cache_sim": task.get("cache_sim")}
+            done_payload: dict = {
+                "id": task["id"], "model": task["selected_model"],
+                "duration": task["duration"],
+                "cost": task_usage.get("cost", 0.0),
+                "input_tokens": task_usage.get("input_tokens", 0),
+                "output_tokens": task_usage.get("output_tokens", 0),
+                "saved_cost": task_usage.get("saved_cost", 0.0),
+                "cache_hit": hit,
+                "cache_sim": sim,
+            }
             if task.get("status") == "failed":
                 done_payload["error"] = task.get("error") or "执行失败"
             yield _sse("task_done", done_payload)
 
-        # Aggregate —— 流式输出最终回答（轻量模式：仅展示子任务进度，最终答案逐 token 下发）
+        # Aggregate —— 流式输出最终回答
         failed_tasks = [t for t in sub_tasks if t.get("status") == "failed"]
         agg_model = None
         for pref in ["qwen-plus", "qwen3.6-flash", "deepseek-v3", "qwen2.5-local"]:
@@ -954,8 +1608,6 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
         if agg_model is None:
             agg_model = req.models[0] if req.models else ModelSpec(name="qwen-plus", litellm_model="qwen-plus")
 
-        # 如果有子任务失败，直接拼接结果，避免汇总模型对失败内容编造/美化。
-        # 同时把真实错误信息保留在最终回答里，让用户知道哪一步出了问题。
         if failed_tasks:
             final = "## 部分子任务执行失败\n\n" + "\n\n".join(
                 f"**子任务 {t['id']}**（{t['selected_model']}）: {t['description']}\n\n执行失败：{t.get('error', '未知错误')}"
@@ -965,22 +1617,31 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             for chunk in [final[i:i+30] for i in range(0, len(final), 30)]:
                 yield _sse("token", {"id": 0, "model": agg_model.name, "delta": chunk})
             agg_duration = 0.0
+            agg_usage: dict = {}
         else:
             summary_parts = [f"## 子任务 {t['id']}: {t['description']}\n\n{t['result']}" for t in sub_tasks]
             yield _sse("task_start", {"id": 0, "description": "汇总最终回答", "model": agg_model.name})
             start = time.time()
             agg_parts: list[str] = []
+            agg_usage: dict = {}
             try:
                 for delta in _call_llm_stream(
                     agg_model,
                     messages=[
                         {"role": "system", "content": AGGREGATE_SYSTEM_PROMPT},
-                        *req.history[-6:],
+                        *kept_history[-6:],
                         {"role": "user", "content": f"原始任务：{req.query}\n\n子任务执行结果：\n\n{chr(10).join(summary_parts)}\n\n请汇总以上结果，生成最终回答。"},
                     ],
                     max_tokens=4096,
                     temperature=0.3,
                     timeout=120,
+                    exact=exact,
+                    sem=sem,
+                    cache_query=req.query,
+                    conv_id=req.conversation_id,
+                    fingerprint=fingerprint,
+                    context_free=context_free,
+                    usage_ref=agg_usage,
                 ):
                     agg_parts.append(delta)
                     yield _sse("token", {"id": 0, "model": agg_model.name, "delta": delta})
@@ -989,21 +1650,32 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 final = "\n\n---\n\n".join(f"**子任务 {t['id']}**: {t['result']}" for t in sub_tasks)
             agg_duration = time.time() - start
 
-        yield _sse("task_done", {"id": 0, "model": agg_model.name,
-                                 "duration": agg_duration, "cost": 0.0, "tokens": 0,
-                                 "cache_hit": False})
+        total_in += agg_usage.get("input_tokens", 0)
+        total_out += agg_usage.get("output_tokens", 0)
+        total_cost += agg_usage.get("cost", 0.0)
+        total_saved += agg_usage.get("saved_cost", 0.0)
 
-        total_cost = sum(t["cost"] for t in sub_tasks)
+        yield _sse("task_done", {"id": 0, "model": agg_model.name,
+                                 "duration": agg_duration,
+                                 "cost": agg_usage.get("cost", 0.0),
+                                 "input_tokens": agg_usage.get("input_tokens", 0),
+                                 "output_tokens": agg_usage.get("output_tokens", 0),
+                                 "saved_cost": agg_usage.get("saved_cost", 0.0),
+                                 "cache_hit": agg_usage.get("cache_hit", False)})
+
         models_used = sorted({t["selected_model"] for t in sub_tasks} | {agg_model.name})
         yield _sse("result", {
             "response": final,
-            "total_cost": total_cost,
-            "total_tokens": 0,
+            "model": agg_model.name,
+            "cost": total_cost,
+            "input_tokens": total_in,
+            "output_tokens": total_out,
+            "saved_cost": total_saved,
             "total_duration": 0,
             "models_used": models_used,
             "aggregator": agg_model.name,
             "cache_hit": any_cache_hit,
-            "cache_sim": max((t.get("cache_sim") or 0.0) for t in sub_tasks),
+            "cache_sim": max((t.get("cache_sim") or 0.0) for t in sub_tasks) if sub_tasks else 0.0,
             "sr_info": f"SR域分类: {req.sr_domain}" if req.sr_domain else "",
         })
 
