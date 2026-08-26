@@ -1,8 +1,8 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-08-26** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：`50ec431`（"P0.f: eliminate Python model-name truth source (Rust single decision)"）
-> 工作区状态：干净。本日新增 commit：`b09d229`（定价/探针/信号）→ `09480fa`（P0.a 断言）→ `8dddc59`（P0.b/c/d 路由重构）→ `50ec431`（P0.f 消除 Python 真源）。
+> 最新已提交：`d6912b9`（"P0.e/g: auto-tag new models + configurable signal layer"）
+> 工作区状态：干净。本日新增 commit：`b09d229`（定价/探针/信号）→ `09480fa`（P0.a 断言）→ `8dddc59`（P0.b/c/d 路由重构）→ `50ec431`（P0.f 消除 Python 真源）→ `f333784`（文档）→ `d6912b9`（P0.e/g）→ 待提交（P0 阶段审查文档）。
 
 ---
 
@@ -37,9 +37,10 @@
 - `processes.rs` — 子进程管理（AI 服务 / Ollama）
 - `conversations.rs` — 对话 CRUD（JSON 文件，原子写 + 追加端点）
 - `models.rs` / `config.rs` / `error.rs` — 类型 / 配置 / 错误
-- **`pricing.rs`**（新增，未提交）— 定价引擎：PriceSpec / TierBand / ZoneRule / UsageDetail / ZoneResolver + actual_cost / est_cost / effective_input_cost
-- **`probe.rs`**（新增，未提交）— 常开探针：ProbeBudget 预算状态机 + 探针循环
-- **`signals.rs`**（新增，未提交）— 信号层：`prefix_stability` 等启发式信号
+- **`pricing.rs`**（b09d229 已提交）— 定价引擎：PriceSpec / TierBand / ZoneRule / UsageDetail / ZoneResolver + actual_cost / est_cost / effective_input_cost
+- **`probe.rs`**（b09d229 已提交）— 常开探针：ProbeBudget 预算状态机 + 探针循环
+- **`signals.rs`**（b09d229 起步，d6912b9 补全 P0.g）— 信号层：`prefix_stability` + `SignalSet`（困难度/难度带/reask/LLM 判定）
+- **`metadata.rs`**（d6912b9 已提交）— P0.e 模型元数据五级打标：`resolve_and_fill`（overlay > 启发式，供 `insert_model` 自动回填）
 
 ---
 
@@ -65,7 +66,7 @@
 |---|---|---|---|---|
 | [`CONTEXT-PLAN.md`](./CONTEXT-PLAN.md) | 2026-08-24 | **已提交**（a2b8bb5）| 上下文优化：SQLite 对话存储、预算上下文、两层缓存、原子写、两阶段落盘 | Phase 1 + 部分 Phase 4 已落地（追加端点存在于 server.rs）|
 | [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **未提交**（工作区 M）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（未提交）；PR-5/PR-8 待办；WebUI 定价页/探针视图待做 |
-| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/P0.b/P0.c/P0.d/P0.f 已落地**（09480fa、8dddc59、50ec431）；P0.g/P1+ 待办 |
+| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4/v5 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/b/c/d/e/f/g 全部落地**（09480fa、8dddc59、50ec431、d6912b9）；P1+ 待办 |
 
 > 三份计划文档是详细设计与落地顺序的权威来源。本进度文档只做索引与高层同步，不重复其细节。
 
@@ -74,6 +75,7 @@
 ## 四、已落地功能进展（commit / 工作区视角）
 
 **已提交 commit 主线**（最新在前）：
+- `d6912b9` ROUTING P0.e/g：新增模型自动打标（metadata.rs 五级兜底）+ signals.rs 信号层正规化（难度带/reask/LLM 判定，阈值可配置）
 - `50ec431` ROUTING P0.f：消除 Python 模型真源（Rust 单一决策，orchestrate assignments 下发）
 - `8dddc59` ROUTING P0.b/c/d：models 元数据列+迁移回填、routing_policy/model_task_score/routing_decisions 三表、plan() 评分路由替换全部硬编码（chat 路径）
 - `09480fa` ROUTING P0.a：models 表单价写入断言 [1e-9,1e-3] + 单测
@@ -83,13 +85,15 @@
 - `091dc31` Semantic cache optimization
 - `433362e` Security fixes, graceful shutdown, cache pre-init, rename & markdown
 
-**2026-08-26 落地（ROUTING-PLAN P0.a/b/c/d，均已提交并冒烟验证）**：
+**2026-08-26 落地（ROUTING-PLAN P0.a/b/c/d/f，均已提交并冒烟验证）**：
 - P0.a（09480fa）：`db.rs` `validate_cost` 断言进 `insert_model`/`update_model`（单价 0 或 [1e-9,1e-3] USD/token）
 - P0.b（8dddc59）：models 表 +11 元数据列（capability_tier/quality_score/context_window/supports_stream/health_state/needs_calibration 等），幂等迁移 + 一次性名称启发式回填（settings 标记 `migration_routing_meta_v1`；备份 `data/lloom.db.pre-routing-migration.bak`）
 - P0.c（8dddc59）：routing_policy（7 条种子策略）/model_task_score（EWMA α=0.15 回填函数）/routing_decisions（审计+outcome 回填）/routing_calibration 四表 + CRUD
 - P0.d（8dddc59）：**删 `TASK_MODEL_MAP`/`INFERENCE_MODELS`/`select_model`/`task_model_preference` 全部硬编码**；`plan()` 门槛（tier/ctx/health/cost-cap/pinned）+ 加权评分（成本走 pricing.rs est_cost，质量 ewma≥5 样本覆盖冷启动分，needs_calibration 罚 0.3）；`chat_stream` 删伪造空 spec（direct 未注册→明确 SSE 报错）；`pick_classifier` 注册表驱动；审计落库；router 11 单测全过
 - 冒烟：simple_qa→qwen2.5-local（cost 0）+fallback 链；coding→deepseek-v3(tier3,stream)；routing_decisions 2 条 outcome=success
 - **P0.f（50ec431，2026-08-26）**：`router.rs` 新增 `plan_decision()`；`server.rs` 构造 assignments（general/decompose/aggregate）；`ai_client.rs` 写入请求体；`ai_service.py` 删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/`_select_model`，新增 `_assigned_model()`（优先 assignments、兜底 models[0]）。**「无字面量」验收**：`ai_service.py` 无模型名常量/偏好表，模型名仅来自 Rust assignments 或 models 全池。冒烟：轻量 + 复杂（分解→4 子任务→汇总）+ easy 路径全过，Python 无错误
+- **P0.e（d6912b9，2026-08-26）**：新增 `metadata.rs::resolve_and_fill`，`db::insert_model` 落库前五级打标（overlay 显式 > 启发式；不覆盖用户/overlay 显式值）：`flash/mini/1b 等`→轻量档、`max/r1 等`→旗舰档、本地端点置零成本+标 `is_local`、未显式上下文回填 32K、一律标 `needs_calibration` 进保守期。6 单测 + `insert_model` 注册冒烟过
+- **P0.g（d6912b9，2026-08-26）**：`signals.rs` 补 `SignalSet`/`extract`/`band_from`/`reask_decision`/`llm_classify_needed`，困难度=structure/complexity/context 加权，难度带 easy/medium/hard，权重与阈值走 settings KV 可调；顺带修复 CJK `\b` 词边界致 `工具` 不命中 tools 信号的 bug。7 单测过。**P0 阶段至此全部勾选完成**
 
 **过往已实现并验证**（见 memory / 历史 commit）：
 - 编辑对话名称（`rename_conversation`，PUT `/api/conversations/{id}`）
@@ -121,14 +125,14 @@
 - [ ] 🔶 **PR-7 探针视图**：`GET /api/probe/stats` 后端已就绪，用量页探针视图未做
 - [ ] ⏳ **PR-8 峰谷调度**：可延迟任务挪谷时（依赖 ROUTING-PLAN P4）
 
-### 来自 ROUTING-PLAN.md（v3，P0.a/b/c/d/f 已于 2026-08-26 完成）
+### 来自 ROUTING-PLAN.md（v3，P0 阶段已于 2026-08-26 全部完成）
 - [x] ✅ **P0.a 量纲写入断言**（09480fa）
 - [x] ✅ **P0.b/c 元数据列 + 策略/审计表**（8dddc59）
 - [x] ✅ **P0.d 路由重构**：`plan()` 评分路由已替换全部硬编码（chat 路径），11 单测 + 冒烟过（8dddc59）
+- [x] ✅ **P0.e 增删模型自动打标**：`metadata.rs` 五级兜底已在 `insert_model` 自动回填并标需校准（d6912b9）
 - [x] ✅ **P0.f 消除 Python 真源**：`plan_decision` + assignments 下发，`ai_service.py` 无模型名字面量（50ec431）
+- [x] ✅ **P0.g 信号层正规化**：`SignalSet`/难度带/reask/LLM 判定，阈值走 settings KV，有单测（d6912b9）
 - [ ] 🔥 **P1.a 用量落库完善**：chat 路径已落库，orchestrate 的 `task_type`/`latency`/`request_id` 补全
-- [ ] ⚡ **P0.e 增删模型自动打标**（metadata.rs 新模块，尚未创建）
-- [ ] ⚡ **P0.g 信号层正规化**：signals.rs 已落地 `prefix_stability`，其余信号待补
 - [ ] 🔧 **P3 健康感知与故障转移**、**P4 编排升级**、**P5 预算联动**
 
 ### 来自 CONTEXT-PLAN.md
@@ -203,7 +207,7 @@
 | `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）| 已补新模块/新路由（本次）|
 | `CONTEXT-PLAN.md` | 上下文优化方案（已落地部分）| 已提交，与 a2b8bb5 一致 |
 | `PRICING-PLAN.md` | 定价表系统详细设计与落地 | 未提交（工作区 M），内容新且准 |
-| `ROUTING-PLAN.md` | 路由重构方案（v3+v4 注记）| 已提交，P0.a/b/c/d 落地状态已更新 |
+| `ROUTING-PLAN.md` | 路由重构方案（v3 + v4/v5 注记）| 已提交，P0 阶段全部落地状态已更新 |
 | `ROUTING-PLAN.md` 引用的外部研究 | Switchyard / vLLM Semantic Router / Router-R1 等 | 设计借鉴，不引入依赖 |
 
-> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② 从 ROUTING-PLAN P0.f（Python 真源消除）、P0.e（新增模型自动打标）或 PRICING-PLAN PR-6（定价页）任一未做项切入。
+> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② P0 阶段已全部完成，下一优先项为 **P1.a 用量落库补全**（orchestrate 的 `task_type`/`latency`/`request_id`）或 PRICING-PLAN **PR-6 WebUI 定价页**。每次 `cargo build`/`cargo test` 全绿再提交。

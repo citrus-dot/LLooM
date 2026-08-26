@@ -759,8 +759,8 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 | 2 | P0.a 修量纲 + 写入断言 | qwen 单价降为 1/10；越界单价写入被 422 拒 | ✅ 2026-08-26（09480fa）量纲迁移此前已落；models 表 insert/update 断言 + 单测 |
 | 3 | P0.b/c 建表迁移（幂等） | 重跑不报错、旧数据不丢；迁移前已备份 `data/lloom.db` | ✅ 2026-08-26（8dddc59）备份 `lloom.db.pre-routing-migration.bak`；回填经 settings 标记只跑一次 |
 | 4 | P0.d 评分 plan() + router 单测 | 删任一模型自动改选；不再返回未注册名；空候选集明确报错；阶梯价交叉单测过 | ✅ 2026-08-26（8dddc59）11 个单测 + 冒烟；阶梯价交叉单测随 P2 tiered 数据补（现 spec 平价）|
-| 5 | P0.e 五级打标 | 新增未知模型→元数据自动填充、标 needs_calibration、不接复杂任务 | ⏳ 简版已随 P0.b 迁移回填存量；新增模型自动打标待做 |
-| 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；signals 可配置有单测 | ⏳ P0.f ✅ 2026-08-26（50ec431）删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/`_select_model`，Python 读 `assignments` 兜底 `models[0]`，冒烟轻量+复杂通过；P0.g signals 正规化仍 ⏳ |
+| 5 | P0.e 五级打标 | 新增未知模型→元数据自动填充、标 needs_calibration、不接复杂任务 | ✅ 2026-08-26（d6912b9）新增 `metadata.rs::resolve_and_fill`（overlay 显式 > 启发式，不覆盖用户/overlay 显式值），`db::insert_model` 落库前自动打标（能力档/上下文/本地端点置零成本/needs_calibration）；6 单测 + 注册冒烟过 |
+| 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；signals 可配置有单测 | ✅ 2026-08-26 P0.f（50ec431）删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/`_select_model`，Python 读 `assignments` 兜底 `models[0]`；P0.g（d6912b9）`signals.rs` 补 `SignalSet`/`extract`/band/reask/LLM 判定，阈值走 settings KV；7 单测过 |
 | 7 | P1.b/c 成效分 + 推荐分配 | 影子评测下内部分解路径成本降 ≥60%，质量无显著回退 | ⏳ 待办 |
 | 8 | P2 定价刷新 + WebUI 徽标 | 手动刷新更新非 manual 来源；断网静默保持本地值 | ⏳ 待办 |
 | 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms | ⏳ 待办（fallback_chain 已产出，未接重试）|
@@ -768,9 +768,12 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 | 11 | P5 预算联动 | 预算近耗尽→逐档降级至只走本地 | ⏳ 待办 |
 | 12 | P1.d AIQ 重放 | 离线重放输出成本—质量曲线；调参有数据依据 | ⏳ 待办 |
 
-**测试基建**：`router.rs` 已有 11 个单测（空候选/门槛/评分/回填链/pin/覆盖/band，2026-08-26）；`signals.rs`/`metadata.rs` 纯函数待补。
+**测试基建**：`router.rs` 已有 11 个单测（空候选/门槛/评分/回填链/pin/覆盖/band，2026-08-26）；`signals.rs`/`metadata.rs` 纯函数单测已补（2026-08-26，P0.g 7 个 + P0.e 6 个）。
 覆盖：空候选集、单模型、删主选后降级、阶梯价交叉点、预算各档、band 边界、reask 判定、保守期解除、
-健康状态机迁移、price drift 阈值。
+健康状态机迁移、price drift 阈值。测试共 52 项全绿（2026-08-26）。
+> **v5 注记（2026-08-26，commit d6912b9）**：P0.e/g 落地后 **P0 阶段全部勾选完成**——
+> 新增模型由 `metadata::resolve_and_fill` 自动打标入保守期，不再需要人工填元数据；
+> 信号层 `extract` 读 settings KV 输出难度带/reask/LLM 判定，路由决策（plan）与信号规范均已就绪。
 
 ---
 
