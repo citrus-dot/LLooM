@@ -1,8 +1,8 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-08-26** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：`8dddc59`（"P0.b/c/d: registry-driven plan() scoring router"）
-> 工作区状态：干净。本日新增 commit：`b09d229`（定价/探针/信号）→ `09480fa`（P0.a 断言）→ `8dddc59`（P0.b/c/d 路由重构）。
+> 最新已提交：`50ec431`（"P0.f: eliminate Python model-name truth source (Rust single decision)"）
+> 工作区状态：干净。本日新增 commit：`b09d229`（定价/探针/信号）→ `09480fa`（P0.a 断言）→ `8dddc59`（P0.b/c/d 路由重构）→ `50ec431`（P0.f 消除 Python 真源）。
 
 ---
 
@@ -65,7 +65,7 @@
 |---|---|---|---|---|
 | [`CONTEXT-PLAN.md`](./CONTEXT-PLAN.md) | 2026-08-24 | **已提交**（a2b8bb5）| 上下文优化：SQLite 对话存储、预算上下文、两层缓存、原子写、两阶段落盘 | Phase 1 + 部分 Phase 4 已落地（追加端点存在于 server.rs）|
 | [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **未提交**（工作区 M）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（未提交）；PR-5/PR-8 待办；WebUI 定价页/探针视图待做 |
-| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/P0.b/P0.c/P0.d 已落地**（09480fa + 8dddc59）；P0.f（Python 真源）、P1+ 待办 |
+| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/P0.b/P0.c/P0.d/P0.f 已落地**（09480fa、8dddc59、50ec431）；P0.g/P1+ 待办 |
 
 > 三份计划文档是详细设计与落地顺序的权威来源。本进度文档只做索引与高层同步，不重复其细节。
 
@@ -74,6 +74,7 @@
 ## 四、已落地功能进展（commit / 工作区视角）
 
 **已提交 commit 主线**（最新在前）：
+- `50ec431` ROUTING P0.f：消除 Python 模型真源（Rust 单一决策，orchestrate assignments 下发）
 - `8dddc59` ROUTING P0.b/c/d：models 元数据列+迁移回填、routing_policy/model_task_score/routing_decisions 三表、plan() 评分路由替换全部硬编码（chat 路径）
 - `09480fa` ROUTING P0.a：models 表单价写入断言 [1e-9,1e-3] + 单测
 - `b09d229` Pricing engine, usage telemetry, probes（PRICING-PLAN PR-1~7）
@@ -88,6 +89,7 @@
 - P0.c（8dddc59）：routing_policy（7 条种子策略）/model_task_score（EWMA α=0.15 回填函数）/routing_decisions（审计+outcome 回填）/routing_calibration 四表 + CRUD
 - P0.d（8dddc59）：**删 `TASK_MODEL_MAP`/`INFERENCE_MODELS`/`select_model`/`task_model_preference` 全部硬编码**；`plan()` 门槛（tier/ctx/health/cost-cap/pinned）+ 加权评分（成本走 pricing.rs est_cost，质量 ewma≥5 样本覆盖冷启动分，needs_calibration 罚 0.3）；`chat_stream` 删伪造空 spec（direct 未注册→明确 SSE 报错）；`pick_classifier` 注册表驱动；审计落库；router 11 单测全过
 - 冒烟：simple_qa→qwen2.5-local（cost 0）+fallback 链；coding→deepseek-v3(tier3,stream)；routing_decisions 2 条 outcome=success
+- **P0.f（50ec431，2026-08-26）**：`router.rs` 新增 `plan_decision()`；`server.rs` 构造 assignments（general/decompose/aggregate）；`ai_client.rs` 写入请求体；`ai_service.py` 删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/`_select_model`，新增 `_assigned_model()`（优先 assignments、兜底 models[0]）。**「无字面量」验收**：`ai_service.py` 无模型名常量/偏好表，模型名仅来自 Rust assignments 或 models 全池。冒烟：轻量 + 复杂（分解→4 子任务→汇总）+ easy 路径全过，Python 无错误
 
 **过往已实现并验证**（见 memory / 历史 commit）：
 - 编辑对话名称（`rename_conversation`，PUT `/api/conversations/{id}`）
@@ -119,12 +121,12 @@
 - [ ] 🔶 **PR-7 探针视图**：`GET /api/probe/stats` 后端已就绪，用量页探针视图未做
 - [ ] ⏳ **PR-8 峰谷调度**：可延迟任务挪谷时（依赖 ROUTING-PLAN P4）
 
-### 来自 ROUTING-PLAN.md（v3，P0.a/b/c/d 已于 2026-08-26 完成）
+### 来自 ROUTING-PLAN.md（v3，P0.a/b/c/d/f 已于 2026-08-26 完成）
 - [x] ✅ **P0.a 量纲写入断言**（09480fa）
 - [x] ✅ **P0.b/c 元数据列 + 策略/审计表**（8dddc59）
 - [x] ✅ **P0.d 路由重构**：`plan()` 评分路由已替换全部硬编码（chat 路径），11 单测 + 冒烟过（8dddc59）
-- [ ] 🔥 **P0.f 消除 Python 真源**：orchestrate 路径仍走 `ai_service.py` 的 `TASK_MODEL_PREFERENCE`（双真源剩一半）
-- [ ] ⚡ **P1.a 用量落库完善**：chat 路径已落库，orchestrate 的 `task_type`/`latency`/`request_id` 补全
+- [x] ✅ **P0.f 消除 Python 真源**：`plan_decision` + assignments 下发，`ai_service.py` 无模型名字面量（50ec431）
+- [ ] 🔥 **P1.a 用量落库完善**：chat 路径已落库，orchestrate 的 `task_type`/`latency`/`request_id` 补全
 - [ ] ⚡ **P0.e 增删模型自动打标**（metadata.rs 新模块，尚未创建）
 - [ ] ⚡ **P0.g 信号层正规化**：signals.rs 已落地 `prefix_stability`，其余信号待补
 - [ ] 🔧 **P3 健康感知与故障转移**、**P4 编排升级**、**P5 预算联动**
@@ -162,9 +164,9 @@
 - 子任务失败时若仍把「执行失败: …」喂给汇总模型，模型会编造「子任务X因API错误中断」甚至生成不存在的测试脚本。
 - **解决**：`task_done` 带 `error` 字段；只要有失败子任务就直接拼接失败信息作答，**不再调用汇总模型**；`AGGREGATE_SYSTEM_PROMPT` 加硬约束禁编造。
 
-### 5. 路由双真源（当前最大技术债）
-- 现状：Rust 侧 `TASK_MODEL_MAP` 硬编码 + Python 侧 `TASK_MODEL_PREFERENCE` 另一份硬编码，两份互不相通且都不读 DB、不看 is_active。删模型后路由名找不到会伪造空 spec 直接失败。
-- **进展**：`plan()` 评分路由已落地（P0.d），Rust chat 路径单一决策；仅剩 orchestrate 路径的 Python `TASK_MODEL_PREFERENCE`（P0.f 待办）。
+### 5. 路由双真源（2026-08-26 已闭合）
+- 现状（已消除）：Rust 侧 `TASK_MODEL_MAP` 硬编码 + Python 侧 `TASK_MODEL_PREFERENCE` 另一份硬编码，两份互不相通且都不读 DB、不看 is_active。删模型后路由名找不到会伪造空 spec 直接失败。
+- **进展**：`plan()` 评分路由已落地（P0.d），Rust chat 路径单一决策。**P0.f（50ec431）已消除 orchestrate 路径的 Python 真源**：`plan_decision` 构造 assignments（general/decompose/aggregate）下发，`ai_service.py` 删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/`_select_model`，改读 `_assigned_model()`（assignments 优先、`models[0]` 兜底），Python 无模型名字面量。仅剩 P4.a 子任务级分配（当前复用 general 决策）。
 
 ---
 

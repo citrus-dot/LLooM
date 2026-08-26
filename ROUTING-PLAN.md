@@ -45,8 +45,9 @@ POST /api/chat/stream  (server.rs:chat_stream @ 327)
 > **v4 注记（2026-08-26，commit 8dddc59）**：上图为 v3 时点快照。P0.d 落地后 **chat 路径已切换**：
 > `router::route` → `classify`（仅分类，无模型映射）→ `band_for` → `plan()`（注册表门槛+评分，
 > 成本走 `price_specs`/`pricing.rs`）→ primary + fallback_chain；`pick_classifier` 改注册表驱动；
-> direct 未注册模型明确报错（SSE error）。**orchestrate 路径仍走 Python `TASK_MODEL_PREFERENCE`**（P0.f 待办），
-> 双真源还剩一半。
+> direct 未注册模型明确报错（SSE error）。**orchestrate 路径也已由 `router::plan_decision` 下发
+> assignments（general/decompose/aggregate），Python 读 assignments 兜底 `models[0]`，无模型名字面量**（P0.f 已修）。
+> 双真源已合一到 Rust，仅剩 P4.a 子任务级分配未落。
 
 ---
 
@@ -129,11 +130,12 @@ v3 复核发现编排路径已部分修复，但 chat 路径仍坏：
 | qwen3-max | 2.5 | 10.0 | **22.5** | 4.7× |
 | qwen3.6-plus | 2.0 | 12.0 | **26.0** | 5.4× |
 
-两处误配：
-- **qwen3.6-flash 比 qwen-plus 贵 3.3×**，但 `TASK_MODEL_PREFERENCE` 的 `simple_qa`（ai_service.py:889）
-  与 `DECOMPOSER_PREFERENCE`（ai_service.py:886）都把 flash 排在 plus 前。名字 flash 只代表快不代表便宜。
+两处误配（P0.f 已从根上消除：`assignments` 由 `plan()` 按 `price_specs` 真源成本评分给出，
+Python 不再有 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE` 静态首选字面量）：
+- **qwen3.6-flash 比 qwen-plus 贵 3.3×**，历史 `simple_qa`/分解静态首选把 flash 排在 plus 前。
+  名字 flash 只代表快不代表便宜。现由 `plan()` 成本评分自动规避。
   **内部分解/分类换 qwen-plus 直接省约 69%。**
-- **qwen3.6-plus 被 qwen3-max 全面支配**（max 更便宜且更强），但 `complex_reasoning` 首选 3.6-plus。
+- **qwen3.6-plus 被 qwen3-max 全面支配**（max 更便宜且更强），历史 `complex_reasoning` 首选 3.6-plus。
   例外：qwen3-max 阶梯定价（32K–128K→4/16，128K–252K→7/28），3.6-plus 支持 1M 窗口 →
   长上下文才该用 3.6-plus。**正解：路由感知阶梯价 + 上下文长度，而非换静态首选。**
 
@@ -475,6 +477,14 @@ fn fill_heuristic(m: &mut Model) -> bool {
 
 #### P0.f　消除双真源（Python 契约细化）
 
+> **✅ 已落地 2026-08-26（50ec431）**。下方契约按此实现：`router.rs` 新增 `plan_decision()` 按固定
+> 编排角色（general/decompose/aggregate）复用 `plan()` 评分；`server.rs` 构造 `assignments`，
+> `ai_client.rs` 写入请求体；`ai_service.py` 删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/
+> `_select_model`，新增 `_assigned_model()`（优先 `assignments[role]`，缺则回落 `models[0]`），
+> 摘要/轻量/分解器/汇总兜底全部改读 assignments。**「无字面量」验收 = `ai_service.py` 不再含任何
+> 模型名常量/硬编码偏好表，模型名只来自 Rust 下发的 `assignments` 或 `models` 全池**（子任务级
+> 分配属 P4.a，当前统一复用 general 决策）。
+
 `ai_service.py` 删 `TASK_MODEL_PREFERENCE`（888）、`DECOMPOSER_PREFERENCE`（886/1453）、`_select_model`（966）。
 **关键约束**：Python 的 `_make_summary`（1295，摘要生成遍历 `DECOMPOSER_PREFERENCE`）与复杂路径分解器选择（1451）
 仍需「全模型池」做兜底/摘要。故 Rust→Python 契约为**双字段**：
@@ -750,7 +760,7 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 | 3 | P0.b/c 建表迁移（幂等） | 重跑不报错、旧数据不丢；迁移前已备份 `data/lloom.db` | ✅ 2026-08-26（8dddc59）备份 `lloom.db.pre-routing-migration.bak`；回填经 settings 标记只跑一次 |
 | 4 | P0.d 评分 plan() + router 单测 | 删任一模型自动改选；不再返回未注册名；空候选集明确报错；阶梯价交叉单测过 | ✅ 2026-08-26（8dddc59）11 个单测 + 冒烟；阶梯价交叉单测随 P2 tiered 数据补（现 spec 平价）|
 | 5 | P0.e 五级打标 | 新增未知模型→元数据自动填充、标 needs_calibration、不接复杂任务 | ⏳ 简版已随 P0.b 迁移回填存量；新增模型自动打标待做 |
-| 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；signals 可配置有单测 | ⏳ 待办（orchestrate 路径仍走 Python `TASK_MODEL_PREFERENCE`）|
+| 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；signals 可配置有单测 | ⏳ P0.f ✅ 2026-08-26（50ec431）删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/`_select_model`，Python 读 `assignments` 兜底 `models[0]`，冒烟轻量+复杂通过；P0.g signals 正规化仍 ⏳ |
 | 7 | P1.b/c 成效分 + 推荐分配 | 影子评测下内部分解路径成本降 ≥60%，质量无显著回退 | ⏳ 待办 |
 | 8 | P2 定价刷新 + WebUI 徽标 | 手动刷新更新非 manual 来源；断网静默保持本地值 | ⏳ 待办 |
 | 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms | ⏳ 待办（fallback_chain 已产出，未接重试）|
