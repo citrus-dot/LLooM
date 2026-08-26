@@ -538,6 +538,21 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
         None => (req.history.clone(), None, None, 0),
     };
 
+    // P0.f: Rust 统一决策，Python 无模型真源。每个编排角色各做一次 plan()；
+    // 失败回落 models 首模型（无硬编码字面量），交由 Python 兜底。
+    let role_model = |role: &str| -> String {
+        router::plan_decision(role, &models)
+            .ok()
+            .map(|o| o.primary)
+            .or_else(|| specs.first().map(|s| s.name.clone()))
+            .unwrap_or_default()
+    };
+    let assignments = json!({
+        "general": role_model("general"),
+        "decompose": role_model("decompose"),
+        "aggregate": role_model("aggregate"),
+    });
+
     let events = match ai_client::orchestrate_stream(
         &req.query,
         &history,
@@ -547,6 +562,7 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
         conversation_id.as_deref(),
         summary.as_deref(),
         summary_upto,
+        &assignments,
     )
     .await
     {

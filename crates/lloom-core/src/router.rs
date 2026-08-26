@@ -439,6 +439,60 @@ pub async fn route(model: &str, user_text: &str, classifier: Option<&ModelSpec>)
     }
 }
 
+// ── plan_decision(): 编排角色决策（P0.f Rust 统一决策） ──
+//
+// 与 `route()` 共用同一套 plan() 评分逻辑，但跳过「分类」步骤：
+// 编排角色（general/decompose/aggregate）的任务类型是固定的，
+// 只按注册表 + 策略直接评分选主模型。结果以 assignments 下发给 Python，
+// Python 侧删除了 TASK_MODEL_PREFERENCE/DECOMPOSER_PREFERENCE 等硬编码真源，
+// 优先用本决策，仅在全池兜底时回落 models[0]。
+
+/// 按固定编排角色做一次 plan() 决策，返回主模型名所在 PlanOutcome。
+/// 失败时由调用方兜底（回落 models 首模型），不抛业务中断。
+pub fn plan_decision(task_type: &str, models: &[Model]) -> Result<PlanOutcome, PlanError> {
+    let policy = db::get_routing_policy(task_type)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    let mut spec_map: HashMap<(String, String), PriceSpec> = HashMap::new();
+    for spec in db::list_price_specs().unwrap_or_default() {
+        spec_map.insert((spec.provider.clone(), spec.model.clone()), spec);
+    }
+    let zr = ZoneResolver::new();
+    zr.load(db::list_provider_zones().unwrap_or_default());
+
+    let mut quality_override = HashMap::new();
+    for m in models {
+        if let Some(sc) = db::get_model_task_score(&m.name, task_type).ok().flatten() {
+            if sc.sample_count >= 5 {
+                quality_override.insert(m.name.clone(), sc.ewma_quality.clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    let band = match task_type {
+        "simple_qa" => "easy",
+        "complex_reasoning" => "hard",
+        _ => "medium",
+    };
+
+    let input = PlanInput {
+        task_type,
+        band,
+        policy: &policy,
+        models,
+        price_specs: &spec_map,
+        zones: &zr,
+        t_epoch_secs: now_epoch(),
+        est_in_tokens: 500,
+        est_out_tokens: 1000,
+        quality_override: &quality_override,
+        budget_tier: "normal",
+    };
+    plan(&input)
+}
+
 // ── Domain enhancement ──
 
 pub fn enhance_with_domain(task_type: &str, sr_domain: &str) -> (String, bool) {

@@ -150,6 +150,7 @@ pub async fn orchestrate_stream(
     conversation_id: Option<&str>,
     summary: Option<&str>,
     summary_upto: i64,
+    assignments: &Value,
 ) -> Result<impl Stream<Item = SseEvent> + Send> {
     let url = format!("{}/v1/orchestrate/stream", base_url());
     let mut body = json!({
@@ -160,6 +161,7 @@ pub async fn orchestrate_stream(
         "cache_dir": cache_dir,
         "similarity_threshold": config::cache_threshold(),
         "summary_upto": summary_upto,
+        "assignments": assignments,
     });
     if let Some(cid) = conversation_id {
         body["conversation_id"] = json!(cid);

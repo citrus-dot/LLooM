@@ -153,6 +153,9 @@ class OrchestrateRequest(BaseModel):
     conversation_id: str = ""
     summary: str = ""
     summary_upto: int = 0
+    # P0.f: Rust 统一决策结果（role -> model name）。Python 优先用，缺则回落 models[0]，
+    # 从而彻底移除 TASK_MODEL_PREFERENCE / DECOMPOSER_PREFERENCE 硬编码真源。
+    assignments: dict = field(default_factory=dict)
 
 
 # ── Helpers ──
@@ -908,16 +911,8 @@ COMPLEXITY_INDICATORS = [
     r"(权衡|优缺点|利弊|方案).{2,}(对比|比较|选择)",
 ]
 
-# 分解阶段需要一个「便宜 + 快」的模型做结构化抽取，不占用重型推理模型。
-DECOMPOSER_PREFERENCE = ["qwen3.6-flash", "qwen-plus", "deepseek-v3", "qwen2.5-local"]
-
-TASK_MODEL_PREFERENCE = {
-    "simple_qa": ["qwen2.5-local", "qwen3.6-flash", "qwen-plus"],
-    "general": ["qwen-plus", "qwen3.6-flash", "qwen2.5-local"],
-    "coding": ["deepseek-v3", "qwen-plus", "qwen2.5-local"],
-    "math_logic": ["deepseek-v3", "qwen-plus", "qwen3.6-plus"],
-    "complex_reasoning": ["qwen3.6-plus", "deepseek-v3", "qwen-plus"],
-}
+# 分解阶段需要一个「便宜 + 快」的模型做结构化抽取。P0.f 起模型由 Rust 决策
+# （assignments.decompose）下发，不再在 Python 侧硬编码模型真源。
 
 DECOMPOSE_SYSTEM_PROMPT = """你是一个任务分解专家。将用户的复杂任务分解为2-5个子任务。
 
@@ -989,12 +984,18 @@ def _is_complex(query: str) -> bool:
     return False
 
 
-def _select_model(task_type: str, models: list[ModelSpec]) -> str:
-    available = {m.name for m in models}
-    for model in TASK_MODEL_PREFERENCE.get(task_type, ["qwen-plus"]):
-        if not available or model in available:
-            return model
-    return "qwen2.5-local"
+def _assigned_model(models: list[ModelSpec], assignments: dict, role: str) -> ModelSpec | None:
+    """Resolve a Rust-assigned role to a ModelSpec from the pool.
+
+    P0.f 双字段契约：优先 `assignments[role]`（Rust 决策的模型名），
+    缺则回落 `models[0]` 首个存活模型——绝不依赖 Python 侧硬编码模型名。
+    """
+    name = (assignments or {}).get(role) or ""
+    if name:
+        spec = _model_by_name(models, name)
+        if spec is not None:
+            return spec
+    return models[0] if models else None
 
 
 def _system_id(messages: list[dict]) -> str:
@@ -1349,17 +1350,11 @@ def _make_summary(
     models: list[ModelSpec],
     prev_summary: str,
     uncovered: list[dict],
+    assignments: dict,
 ) -> str | None:
     """Generate/extend the rolling summary of older turns via a cheap model.
     Returns None on failure (caller keeps the old summary / falls back)."""
-    spec = None
-    for pref in DECOMPOSER_PREFERENCE:
-        s = _model_by_name(models, pref)
-        if s:
-            spec = s
-            break
-    if spec is None:
-        spec = models[0] if models else None
+    spec = _assigned_model(models, assignments, "decompose")
     if spec is None:
         return None
     transcript = "\n".join(
@@ -1418,7 +1413,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
         # uncovered messages — keep the prefix stable a little longer.
         if ctx_stats["needs_summary"]:
             uncovered = history[upto: len(history) - ctx_stats["kept"]]
-            new_summary = _make_summary(req.models, summary, uncovered)
+            new_summary = _make_summary(req.models, summary, uncovered, req.assignments)
             if new_summary:
                 summary = new_summary
                 upto = len(history) - ctx_stats["kept"]
@@ -1434,10 +1429,11 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
         if not _is_complex(req.query):
             # 轻量默认路径：单模型直接流式回答（最快，边生成边下发 token）
-            model_name = _select_model("general", req.models)
-            model_spec = _model_by_name(req.models, model_name) or ModelSpec(
-                name=model_name, litellm_model=model_name
-            )
+            model_spec = _assigned_model(req.models, req.assignments, "general")
+            if model_spec is None:
+                yield _sse("error", {"message": "无可用模型"})
+                return
+            model_name = model_spec.name
             yield _sse("decompose", {
                 "sub_tasks": [{"id": 1, "description": req.query,
                                "selected_model": model_name, "cost": 0.0001}],
@@ -1501,15 +1497,14 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             })
             return
 
-        # Complex: decompose —— 优先用便宜快速的分解模型，避免占用重型推理模型
-        model_spec = None
-        for pref in DECOMPOSER_PREFERENCE:
-            spec = _model_by_name(req.models, pref)
-            if spec:
-                model_spec = spec
-                break
+        # Complex: decompose —— Rust 决策的分解模型（便宜 + 快），避免占用重型推理模型
+        model_spec = _assigned_model(req.models, req.assignments, "decompose")
         if model_spec is None:
-            model_spec = req.models[0] if req.models else ModelSpec(name="auto", litellm_model="auto")
+            yield _sse("error", {"message": "无可用分解模型"})
+            return
+        # P0.f: 子任务级分配属 P4.a 待办；当前统一复用 Rust 的 general 决策，
+        # 保证每个子任务同样由注册表驱动，Python 无模型字面量。
+        default_sub_model = _assigned_model(req.models, req.assignments, "general") or model_spec
         tasks_data: list[dict] = []
         try:
             content = _call_llm(
@@ -1553,7 +1548,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 "task_type": td.get("task_type", "general"),
                 "depends_on": td.get("depends_on", []),
                 "estimated_output_tokens": td.get("estimated_output_tokens", 1024),
-                "selected_model": _select_model(td.get("task_type", "general"), req.models),
+                "selected_model": default_sub_model.name,
             })
         for t in sub_tasks:
             spec = _model_by_name(req.models, t["selected_model"])
@@ -1652,14 +1647,10 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
         # Aggregate —— 流式输出最终回答
         failed_tasks = [t for t in sub_tasks if t.get("status") == "failed"]
-        agg_model = None
-        for pref in ["qwen-plus", "qwen3.6-flash", "deepseek-v3", "qwen2.5-local"]:
-            spec = _model_by_name(req.models, pref)
-            if spec:
-                agg_model = spec
-                break
+        agg_model = _assigned_model(req.models, req.assignments, "aggregate")
         if agg_model is None:
-            agg_model = req.models[0] if req.models else ModelSpec(name="qwen-plus", litellm_model="qwen-plus")
+            yield _sse("error", {"message": "无可用汇总模型"})
+            return
 
         if failed_tasks:
             final = "## 部分子任务执行失败\n\n" + "\n\n".join(
