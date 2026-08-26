@@ -410,7 +410,11 @@ fn validate_cost(in_cost: f64, out_cost: f64) -> Result<()> {
 }
 
 pub fn insert_model(m: &Model) -> Result<i64> {
-    validate_cost(m.input_cost_per_token, m.output_cost_per_token)?;
+    // P0.e: 新增模型自动打标（overlay 显式 > 启发式兜底；未显式档位按名字定档，
+    // 本地端点置零成本，标 needs_calibration 进入保守期）。
+    let mut filled = m.clone();
+    let _report = crate::metadata::resolve_and_fill(&mut filled);
+    validate_cost(filled.input_cost_per_token, filled.output_cost_per_token)?;
     let conn = open()?;
     let res = conn.execute(
         "INSERT INTO models (name, provider, litellm_model, api_base, api_key_env, task_type,
@@ -421,25 +425,25 @@ pub fn insert_model(m: &Model) -> Result<i64> {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                  ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
-            m.name,
-            m.provider,
-            m.litellm_model,
-            m.api_base,
-            m.api_key_env,
-            m.task_type,
-            m.input_cost_per_token,
-            m.output_cost_per_token,
-            m.rpm,
-            m.is_active,
-            m.capability_tier,
-            m.quality_score,
-            m.context_window,
-            m.supports_tools,
-            m.supports_vision,
-            m.supports_stream,
-            m.is_local,
-            m.priority,
-            m.needs_calibration,
+            filled.name,
+            filled.provider,
+            filled.litellm_model,
+            filled.api_base,
+            filled.api_key_env,
+            filled.task_type,
+            filled.input_cost_per_token,
+            filled.output_cost_per_token,
+            filled.rpm,
+            filled.is_active,
+            filled.capability_tier,
+            filled.quality_score,
+            filled.context_window,
+            filled.supports_tools,
+            filled.supports_vision,
+            filled.supports_stream,
+            filled.is_local,
+            filled.priority,
+            filled.needs_calibration,
         ],
     );
     match res {
@@ -1462,6 +1466,46 @@ mod migration_tests {
             .unwrap();
         assert!((in_cost2 - 1.11e-7).abs() < 1e-15, "double-divide: {in_cost2}");
         drop(conn2);
+
+        // P0.e 自动打标冒烟：insert_model 走 resolve_and_fill，注册的新模型按名字+本地端点
+        // 回填能力档/上下文/is_local/needs_calibration，并落库验证。
+        let smoke = crate::models::Model {
+            id: 0,
+            name: "smoke-flash-1b".into(),
+            provider: "dashscope".into(),
+            litellm_model: "dashscope/smoke-flash-1b".into(),
+            api_base: String::new(),
+            api_key_env: String::new(),
+            task_type: "general".into(),
+            input_cost_per_token: 0.0,
+            output_cost_per_token: 0.0,
+            rpm: 60,
+            is_active: 1,
+            capability_tier: 2,      // 默认档 → 应按名字启发式降档为轻量
+            quality_score: 0.6,
+            context_window: 0,       // 0 → 启发式回填默认 32K
+            supports_tools: 0,
+            supports_vision: 0,
+            supports_stream: 0,
+            is_local: 0,
+            priority: 0,
+            health_state: "unknown".into(),
+            needs_calibration: 0,
+        };
+        insert_model(&smoke).unwrap();
+        let conn3 = open().unwrap();
+        let (tier, ctx, calib): (i64, i64, i64) = conn3
+            .query_row(
+                "SELECT capability_tier, context_window, needs_calibration
+                 FROM models WHERE name = 'smoke-flash-1b'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(tier, 1, "flash/1b 应按名字归轻量档");
+        assert_eq!(ctx, 32768, "未显式上下文应回填 32K");
+        assert_eq!(calib, 1, "新模型应进入保守期");
+        drop(conn3);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

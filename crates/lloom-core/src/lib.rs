@@ -16,6 +16,7 @@ pub mod config;
 pub mod conversations;
 pub mod db;
 pub mod error;
+pub mod metadata;
 pub mod models;
 pub mod pricing;
 pub mod probe;
