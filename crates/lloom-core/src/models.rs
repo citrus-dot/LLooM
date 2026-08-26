@@ -28,6 +28,35 @@ pub struct Model {
     pub rpm: i64,
     #[serde(default = "default_active")]
     pub is_active: i64,
+    // ── P0.b 路由元数据（成本真源在 price_specs，models 不再加价格列）──
+    /// 能力档 1/2/3（light/general/flagship），plan() 门槛用
+    #[serde(default = "default_tier")]
+    pub capability_tier: i64,
+    /// 冷启动质量分 0..1（P1.c 的 ewma_quality 接线前的兜底）
+    #[serde(default = "default_quality")]
+    pub quality_score: f64,
+    /// 上下文窗口（token），门槛过滤用
+    #[serde(default = "default_ctx")]
+    pub context_window: i64,
+    #[serde(default)]
+    pub supports_tools: i64,
+    #[serde(default)]
+    pub supports_vision: i64,
+    /// 须流式调用（推理系模型，非流式易超时）；0=非流式可用
+    #[serde(default)]
+    pub supports_stream: i64,
+    /// 本地模型（Ollama 等，零成本兜底）
+    #[serde(default)]
+    pub is_local: i64,
+    /// 人工偏好加权（评分 +0.05/级）
+    #[serde(default)]
+    pub priority: i64,
+    /// unknown/up/degraded/down（P3 健康状态机维护，系统写）
+    #[serde(default = "default_health")]
+    pub health_state: String,
+    /// 保守期标记：sample_count<20 的模型在复杂任务上扣分
+    #[serde(default = "default_needs_cal")]
+    pub needs_calibration: i64,
 }
 
 fn default_rpm() -> i64 {
@@ -35,6 +64,26 @@ fn default_rpm() -> i64 {
 }
 
 fn default_active() -> i64 {
+    1
+}
+
+fn default_tier() -> i64 {
+    2
+}
+
+fn default_quality() -> f64 {
+    0.6
+}
+
+fn default_ctx() -> i64 {
+    32768
+}
+
+fn default_health() -> String {
+    "unknown".to_string()
+}
+
+fn default_needs_cal() -> i64 {
     1
 }
 
@@ -148,6 +197,58 @@ pub struct RoutingDecision {
     pub task_type: String,
     pub method: String,
     pub stream: bool,
+    /// 难度带 easy/medium/hard（投影层输出，P0.d 简版来自 task_type 映射）
+    #[serde(default)]
+    pub band: String,
+    /// 候补链（P3 故障转移按序重试；本阶段仅审计透传）
+    #[serde(default)]
+    pub fallback_chain: Vec<String>,
+}
+
+/// P0.c 任务级路由策略（routing_policy 表行）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingPolicy {
+    pub task_type: String,
+    pub min_capability_tier: i64,
+    pub cost_weight: f64,
+    pub quality_weight: f64,
+    pub latency_weight: f64,
+    #[serde(default)]
+    pub max_cost_per_request: Option<f64>,
+    #[serde(default)]
+    pub pinned_model: Option<String>,
+    pub fallback_depth: i64,
+    pub escalation_enabled: i64,
+}
+
+impl Default for RoutingPolicy {
+    fn default() -> Self {
+        Self {
+            task_type: "general".to_string(),
+            min_capability_tier: 2,
+            cost_weight: 0.5,
+            quality_weight: 0.4,
+            latency_weight: 0.1,
+            max_cost_per_request: None,
+            pinned_model: None,
+            fallback_depth: 2,
+            escalation_enabled: 0,
+        }
+    }
+}
+
+/// P0.c 模型×任务成效分（model_task_score 表行），ewma_quality 由信号回填
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelTaskScore {
+    pub model_name: String,
+    pub task_type: String,
+    pub success_count: i64,
+    pub fail_count: i64,
+    pub escalation_count: i64,
+    pub avg_cost: f64,
+    pub avg_latency_ms: f64,
+    pub ewma_quality: f64,
+    pub sample_count: i64,
 }
 
 // ── Env / Config ──

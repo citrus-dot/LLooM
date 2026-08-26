@@ -20,6 +20,17 @@ CREATE TABLE IF NOT EXISTS models (
     output_cost_per_token REAL DEFAULT 0,
     rpm INTEGER DEFAULT 60,
     is_active INTEGER DEFAULT 1,
+    capability_tier INTEGER DEFAULT 2,
+    quality_score REAL DEFAULT 0.6,
+    context_window INTEGER DEFAULT 32768,
+    supports_tools INTEGER DEFAULT 0,
+    supports_vision INTEGER DEFAULT 0,
+    supports_stream INTEGER DEFAULT 0,
+    is_local INTEGER DEFAULT 0,
+    priority INTEGER DEFAULT 0,
+    health_state TEXT DEFAULT 'unknown',
+    health_checked_at TIMESTAMP,
+    needs_calibration INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -131,6 +142,49 @@ CREATE TABLE IF NOT EXISTS price_calibration (
     field_missing_count INTEGER DEFAULT 0,
     PRIMARY KEY (provider, model, as_of)
 );
+
+CREATE TABLE IF NOT EXISTS routing_policy (
+    task_type            TEXT PRIMARY KEY,
+    min_capability_tier  INTEGER DEFAULT 1,
+    cost_weight          REAL    DEFAULT 0.4,
+    quality_weight       REAL    DEFAULT 0.5,
+    latency_weight       REAL    DEFAULT 0.1,
+    max_cost_per_request REAL,
+    pinned_model         TEXT,
+    fallback_depth       INTEGER DEFAULT 2,
+    escalation_enabled   INTEGER DEFAULT 0,
+    updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS model_task_score (
+    model_name TEXT, task_type TEXT,
+    success_count INTEGER DEFAULT 0, fail_count INTEGER DEFAULT 0,
+    escalation_count INTEGER DEFAULT 0,
+    avg_cost REAL DEFAULT 0, avg_latency_ms REAL DEFAULT 0,
+    ewma_quality REAL DEFAULT 0.6, sample_count INTEGER DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (model_name, task_type)
+);
+
+CREATE TABLE IF NOT EXISTS routing_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    task_type TEXT, band TEXT,
+    signals_json TEXT, candidates_json TEXT,
+    selected TEXT, fallback_chain TEXT,
+    routing_ms REAL, outcome TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rd_created ON routing_decisions(created_at);
+CREATE INDEX IF NOT EXISTS idx_rd_task ON routing_decisions(task_type);
+
+CREATE TABLE IF NOT EXISTS routing_calibration (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    task_type TEXT, query_hash TEXT,
+    routed_model TEXT, baseline_model TEXT,
+    routed_cost REAL, baseline_cost REAL,
+    routed_quality REAL, baseline_quality REAL, label INTEGER, source TEXT
+);
 "#;
 
 pub fn init_db() -> Result<()> {
@@ -141,11 +195,13 @@ pub fn init_db() -> Result<()> {
     Ok(())
 }
 
-/// 增量迁移（PRICING-PLAN §九，幂等可重跑）：
+/// 增量迁移（PRICING-PLAN §九 + ROUTING-PLAN P0.b/c，幂等可重跑）：
 /// 1. usage_records 追加 7 列（PRAGMA 检查防重复 ALTER）
 /// 2. DashScope 系单价除以 10 修正量纲（一次性，settings 标记）
 /// 3. models → price_specs 投影（INSERT OR IGNORE）
 /// 4. 预置 deepseek 峰谷规则与 2026 节假日表（仅当缺失）
+/// 5. models 追加路由元数据列（P0.b）+ 一次性名称启发式回填（settings 标记）
+/// 6. routing_policy 种子策略（INSERT OR IGNORE 幂等，用户改过后不覆盖）
 fn migrate_db(conn: &Connection) -> Result<()> {
     // 1. usage_records 追加列
     let cols = table_columns(conn, "usage_records")?;
@@ -211,6 +267,103 @@ fn migrate_db(conn: &Connection) -> Result<()> {
         )",
     )?;
 
+    // 5. P0.b：models 追加路由元数据列（旧库；新库 SCHEMA 已含）
+    let mcols = table_columns(conn, "models")?;
+    let model_cols: &[(&str, &str)] = &[
+        ("capability_tier", "ALTER TABLE models ADD COLUMN capability_tier INTEGER DEFAULT 2"),
+        ("quality_score", "ALTER TABLE models ADD COLUMN quality_score REAL DEFAULT 0.6"),
+        ("context_window", "ALTER TABLE models ADD COLUMN context_window INTEGER DEFAULT 32768"),
+        ("supports_tools", "ALTER TABLE models ADD COLUMN supports_tools INTEGER DEFAULT 0"),
+        ("supports_vision", "ALTER TABLE models ADD COLUMN supports_vision INTEGER DEFAULT 0"),
+        ("supports_stream", "ALTER TABLE models ADD COLUMN supports_stream INTEGER DEFAULT 0"),
+        ("is_local", "ALTER TABLE models ADD COLUMN is_local INTEGER DEFAULT 0"),
+        ("priority", "ALTER TABLE models ADD COLUMN priority INTEGER DEFAULT 0"),
+        ("health_state", "ALTER TABLE models ADD COLUMN health_state TEXT DEFAULT 'unknown'"),
+        ("health_checked_at", "ALTER TABLE models ADD COLUMN health_checked_at TIMESTAMP"),
+        ("needs_calibration", "ALTER TABLE models ADD COLUMN needs_calibration INTEGER DEFAULT 1"),
+    ];
+    for (col, ddl) in model_cols {
+        if !mcols.iter().any(|c| c == col) {
+            conn.execute_batch(ddl)?;
+        }
+    }
+
+    // 5b. 一次性名称启发式回填（P0.e fill_heuristic 简版；settings 标记防重跑，
+    //     用户后续可经 update_model 白名单改 capability_tier 等）
+    let meta_migrated: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM settings WHERE key = 'migration_routing_meta_v1'",
+        [],
+        |r| r.get(0),
+    )?;
+    if meta_migrated == 0 {
+        conn.execute_batch(
+            // 能力档：现有 7 模型精确映射优先，未见名称走 LIKE 启发式
+            "UPDATE models SET capability_tier = CASE
+                WHEN name IN ('qwen3.6-plus','qwen3-max','deepseek-v3') THEN 3
+                WHEN name IN ('qwen-plus','gpt-4o') THEN 2
+                WHEN name IN ('qwen2.5-local','qwen3.6-flash') THEN 1
+                WHEN name LIKE '%flash%' OR name LIKE '%mini%' OR name LIKE '%turbo%'
+                  OR name LIKE '%small%' OR name LIKE '%lite%'  OR name LIKE '%air%'
+                  OR name LIKE '%local%' OR name LIKE '%8b%'   OR name LIKE '%4b%' THEN 1
+                WHEN name LIKE '%max%'   OR name LIKE '%opus%'  OR name LIKE '%ultra%'
+                  OR name LIKE '%pro%'   OR name LIKE '%reasoner%' OR name LIKE '%thinking%'
+                  OR name LIKE '%r1%'    OR name LIKE '%o1%'    OR name LIKE '%o3%' THEN 3
+                ELSE 2 END",
+        )?;
+        // 上下文窗口：已知模型精确值，其余保持默认 32768
+        conn.execute_batch(
+            "UPDATE models SET context_window = CASE
+                WHEN name = 'qwen3.6-plus' THEN 1048576
+                WHEN name = 'qwen3-max'    THEN 262144
+                WHEN name = 'qwen3.6-flash' THEN 262144
+                WHEN name = 'qwen-plus'    THEN 131072
+                WHEN name = 'gpt-4o'       THEN 128000
+                WHEN name = 'deepseek-v3'  THEN 65536
+                WHEN name = 'qwen2.5-local' THEN 32768
+                ELSE context_window END",
+        )?;
+        // 本地模型判定（Ollama 或本机端点，零成本）
+        conn.execute_batch(
+            "UPDATE models SET is_local = CASE
+                WHEN provider = 'ollama' OR api_base LIKE '%127.0.0.1%' OR api_base LIKE '%localhost%'
+                THEN 1 ELSE 0 END",
+        )?;
+        // 须流式调用：推理系（沿用旧 INFERENCE_MODELS 名单 + 思考系名称启发式）
+        conn.execute_batch(
+            "UPDATE models SET supports_stream = CASE
+                WHEN name IN ('qwen3.6-flash','qwen3.6-plus','qwen3-max','deepseek-v3') THEN 1
+                WHEN name LIKE '%thinking%' OR name LIKE '%reasoner%' OR name LIKE '%r1%' THEN 1
+                ELSE 0 END",
+        )?;
+        // 冷启动质量分：按能力档粗分（P1.c ewma 接线前的兜底）
+        conn.execute_batch(
+            "UPDATE models SET quality_score = CASE
+                WHEN capability_tier = 3 THEN 0.85
+                WHEN capability_tier = 2 THEN 0.70
+                WHEN is_local = 1 THEN 0.45
+                ELSE 0.50 END",
+        )?;
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('migration_routing_meta_v1', 'done')",
+            [],
+        )?;
+    }
+
+    // 6. P0.c 种子路由策略（INSERT OR IGNORE：仅补缺，不覆盖用户改动）
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO routing_policy
+            (task_type, min_capability_tier, cost_weight, quality_weight, latency_weight,
+             max_cost_per_request, pinned_model, fallback_depth, escalation_enabled)
+         VALUES
+            ('simple_qa',       1, 0.7, 0.2, 0.1, NULL, NULL, 2, 0),
+            ('general',         2, 0.5, 0.4, 0.1, NULL, NULL, 2, 0),
+            ('coding',          3, 0.3, 0.6, 0.1, NULL, NULL, 2, 0),
+            ('math_logic',      3, 0.3, 0.6, 0.1, NULL, NULL, 2, 0),
+            ('complex_reasoning', 3, 0.2, 0.7, 0.1, NULL, NULL, 2, 0),
+            ('decompose',       1, 0.6, 0.3, 0.1, NULL, NULL, 1, 1),
+            ('aggregate',       2, 0.4, 0.5, 0.1, NULL, NULL, 2, 0)",
+    )?;
+
     Ok(())
 }
 
@@ -261,8 +414,12 @@ pub fn insert_model(m: &Model) -> Result<i64> {
     let conn = open()?;
     let res = conn.execute(
         "INSERT INTO models (name, provider, litellm_model, api_base, api_key_env, task_type,
-                             input_cost_per_token, output_cost_per_token, rpm, is_active)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                             input_cost_per_token, output_cost_per_token, rpm, is_active,
+                             capability_tier, quality_score, context_window,
+                             supports_tools, supports_vision, supports_stream,
+                             is_local, priority, needs_calibration)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             m.name,
             m.provider,
@@ -274,6 +431,15 @@ pub fn insert_model(m: &Model) -> Result<i64> {
             m.output_cost_per_token,
             m.rpm,
             m.is_active,
+            m.capability_tier,
+            m.quality_score,
+            m.context_window,
+            m.supports_tools,
+            m.supports_vision,
+            m.supports_stream,
+            m.is_local,
+            m.priority,
+            m.needs_calibration,
         ],
     );
     match res {
@@ -332,6 +498,16 @@ pub fn update_model(name: &str, updates: &serde_json::Map<String, serde_json::Va
         "output_cost_per_token",
         "rpm",
         "is_active",
+        // P0.b 路由元数据（用户可在 UI 调档）
+        "capability_tier",
+        "quality_score",
+        "context_window",
+        "supports_tools",
+        "supports_vision",
+        "supports_stream",
+        "is_local",
+        "priority",
+        // health_state / needs_calibration 由系统写，不放白名单（防手改破坏自适应）
     ];
     for k in updates.keys() {
         if !ALLOWED.contains(&k.as_str()) {
@@ -389,6 +565,18 @@ fn model_from_row(row: &rusqlite::Row) -> rusqlite::Result<Model> {
         output_cost_per_token: row.get("output_cost_per_token")?,
         rpm: row.get("rpm")?,
         is_active: row.get("is_active")?,
+        capability_tier: row.get("capability_tier")?,
+        quality_score: row.get("quality_score")?,
+        context_window: row.get("context_window")?,
+        supports_tools: row.get("supports_tools")?,
+        supports_vision: row.get("supports_vision")?,
+        supports_stream: row.get("supports_stream")?,
+        is_local: row.get("is_local")?,
+        priority: row.get("priority")?,
+        health_state: row
+            .get::<_, Option<String>>("health_state")?
+            .unwrap_or_else(|| "unknown".to_string()),
+        needs_calibration: row.get("needs_calibration")?,
     })
 }
 
@@ -750,6 +938,160 @@ pub fn upsert_price_spec(
             zone_ref,
             cny_list_price_json,
         ],
+    )?;
+    Ok(())
+}
+
+// ── Routing policy / score / audit (ROUTING-PLAN P0.c) ──
+
+use crate::models::{ModelTaskScore, RoutingPolicy};
+
+fn routing_policy_from_row(row: &rusqlite::Row) -> rusqlite::Result<RoutingPolicy> {
+    Ok(RoutingPolicy {
+        task_type: row.get("task_type")?,
+        min_capability_tier: row.get("min_capability_tier")?,
+        cost_weight: row.get("cost_weight")?,
+        quality_weight: row.get("quality_weight")?,
+        latency_weight: row.get("latency_weight")?,
+        max_cost_per_request: row.get("max_cost_per_request")?,
+        pinned_model: row.get("pinned_model")?,
+        fallback_depth: row.get("fallback_depth")?,
+        escalation_enabled: row.get("escalation_enabled")?,
+    })
+}
+
+pub fn get_routing_policy(task_type: &str) -> Result<Option<RoutingPolicy>> {
+    let conn = open()?;
+    let mut stmt =
+        conn.prepare("SELECT * FROM routing_policy WHERE task_type = ?1")?;
+    let mut rows = stmt.query(params![task_type])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(routing_policy_from_row(row)?)),
+        None => Ok(None),
+    }
+}
+
+pub fn list_routing_policy() -> Result<Vec<RoutingPolicy>> {
+    let conn = open()?;
+    let mut stmt = conn.prepare("SELECT * FROM routing_policy ORDER BY task_type")?;
+    let rows = stmt.query_map([], routing_policy_from_row)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+pub fn upsert_routing_policy(p: &RoutingPolicy) -> Result<()> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO routing_policy (task_type, min_capability_tier, cost_weight, quality_weight,
+                                     latency_weight, max_cost_per_request, pinned_model,
+                                     fallback_depth, escalation_enabled, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
+         ON CONFLICT(task_type) DO UPDATE SET
+            min_capability_tier = excluded.min_capability_tier,
+            cost_weight = excluded.cost_weight,
+            quality_weight = excluded.quality_weight,
+            latency_weight = excluded.latency_weight,
+            max_cost_per_request = excluded.max_cost_per_request,
+            pinned_model = excluded.pinned_model,
+            fallback_depth = excluded.fallback_depth,
+            escalation_enabled = excluded.escalation_enabled,
+            updated_at = CURRENT_TIMESTAMP",
+        params![
+            p.task_type,
+            p.min_capability_tier,
+            p.cost_weight,
+            p.quality_weight,
+            p.latency_weight,
+            p.max_cost_per_request,
+            p.pinned_model,
+            p.fallback_depth,
+            p.escalation_enabled,
+        ],
+    )?;
+    Ok(())
+}
+
+/// 审计落库：plan() 的决策快照。返回行 id 供调用方回填 outcome。
+#[allow(clippy::too_many_arguments)]
+pub fn insert_routing_decision(
+    request_id: &str,
+    task_type: &str,
+    band: &str,
+    signals_json: &str,
+    candidates_json: &str,
+    selected: &str,
+    fallback_chain: &str,
+    routing_ms: f64,
+) -> Result<i64> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO routing_decisions (request_id, task_type, band, signals_json,
+                                        candidates_json, selected, fallback_chain, routing_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            request_id,
+            task_type,
+            band,
+            signals_json,
+            candidates_json,
+            selected,
+            fallback_chain,
+            routing_ms,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_routing_decision_outcome(id: i64, outcome: &str) -> Result<()> {
+    let conn = open()?;
+    conn.execute(
+        "UPDATE routing_decisions SET outcome = ?2 WHERE id = ?1",
+        params![id, outcome],
+    )?;
+    Ok(())
+}
+
+pub fn get_model_task_score(model_name: &str, task_type: &str) -> Result<Option<ModelTaskScore>> {
+    let conn = open()?;
+    let mut stmt = conn.prepare(
+        "SELECT * FROM model_task_score WHERE model_name = ?1 AND task_type = ?2",
+    )?;
+    let mut rows = stmt.query(params![model_name, task_type])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(ModelTaskScore {
+            model_name: row.get("model_name")?,
+            task_type: row.get("task_type")?,
+            success_count: row.get("success_count")?,
+            fail_count: row.get("fail_count")?,
+            escalation_count: row.get("escalation_count")?,
+            avg_cost: row.get("avg_cost")?,
+            avg_latency_ms: row.get("avg_latency_ms")?,
+            ewma_quality: row.get("ewma_quality")?,
+            sample_count: row.get("sample_count")?,
+        })),
+        None => Ok(None),
+    }
+}
+
+/// 信号回填：ewma_quality ← (1-α)·ewma + α·σ，α=0.15；首样本直接写 σ。
+/// 供 P1.c 信号层接线（成功/失败/升级）调用，P0.d 阶段不接线。
+pub fn upsert_model_task_score_signal(
+    model_name: &str,
+    task_type: &str,
+    signal: f64,
+) -> Result<()> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO model_task_score (model_name, task_type, ewma_quality, sample_count, updated_at)
+         VALUES (?1, ?2, ?3, 1, CURRENT_TIMESTAMP)
+         ON CONFLICT(model_name, task_type) DO UPDATE SET
+            ewma_quality = ewma_quality * 0.85 + ?3 * 0.15,
+            sample_count = sample_count + 1,
+            updated_at = CURRENT_TIMESTAMP",
+        params![model_name, task_type, signal.clamp(0.0, 1.0)],
     )?;
     Ok(())
 }

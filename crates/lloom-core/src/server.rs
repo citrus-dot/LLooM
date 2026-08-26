@@ -380,13 +380,14 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
         req.messages.clone()
     };
 
-    // Routing: regex tier + domain enhancement
+    // Routing: regex tier + domain enhancement + plan() scoring (P0.d)
     let models = match db::list_models(true) {
         Ok(m) => m,
         Err(e) => return err_response(e),
     };
     let classifier = pick_classifier(&models);
     let sr_domain = req.sr_domain.clone().unwrap_or_default();
+    let route_start = std::time::Instant::now();
     let mut routing = router::route(
         req.model.as_deref().unwrap_or("auto"),
         &user_text,
@@ -400,19 +401,46 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
         }
     }
 
-    // Resolve the routed model's AI spec
+    // P0.d：路由结果必须落在注册表内；direct 未注册 / plan 无候选 → 明确报错，
+    // 不再伪造空 spec 继续调用。
     let routed_model: Option<&Model> = models.iter().find(|m| m.name == routing.model);
-    let provider = routed_model.map(|m| m.provider.as_str()).unwrap_or("unknown");
-    let spec: ModelSpec = routed_model
-        .map(ModelSpec::from)
-        .unwrap_or_else(|| ModelSpec {
-            name: routing.model.clone(),
-            litellm_model: routing.model.clone(),
-            api_base: String::new(),
-            api_key: String::new(),
-            input_cost_per_token: 0.0,
-            output_cost_per_token: 0.0,
-        });
+    let (provider, spec): (&str, ModelSpec) = match routed_model {
+        Some(m) => (m.provider.as_str(), ModelSpec::from(m)),
+        None => {
+            let detail = if let Some(d) = routing.method.strip_prefix("plan_error:") {
+                format!("路由失败：{d}")
+            } else {
+                format!("模型 '{}' 未注册或未启用，请先在模型页添加", routing.model)
+            };
+            return sse_error(&detail);
+        }
+    };
+
+    // 审计落库（P0.c/P0.d）：决策快照 + 耗时；outcome 在调用完成后回填
+    let routing_ms = route_start.elapsed().as_secs_f64() * 1000.0;
+    let request_id = format!(
+        "chat-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let decision_id = if routing.method != "direct" {
+        db::insert_routing_decision(
+            &request_id,
+            &routing.task_type,
+            &routing.band,
+            &serde_json::to_string(&json!({ "method": routing.method, "sr_domain": sr_domain }))
+                .unwrap_or_default(),
+            &serde_json::to_string(&routing.fallback_chain).unwrap_or_default(),
+            &routing.model,
+            &routing.fallback_chain.join(","),
+            routing_ms,
+        )
+        .unwrap_or(0)
+    } else {
+        0
+    };
 
     // routing 会在 head 的 json! 中被 move，先取出落库需要的字段
     let routing_task_type = routing.task_type.clone();
@@ -428,6 +456,9 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
     // Direct async AI call (reqwest is async; safe on the tokio executor)
     let tail = match ai_client::chat(&spec, &processed_messages, 500, 0.3).await {
         Ok(res) => {
+            if decision_id > 0 {
+                let _ = db::update_routing_decision_outcome(decision_id, "success");
+            }
             // PRICING-PLAN §4.2/§6.1：Rust 单一计价真源，按真实 usage 分项计算并落库。
             // （PR-5 落地前 est_cost 传 0；task_type 用路由分类结果）
             let (act_cost, zm) = priced_usage(provider, &res.model, &res.usage);
@@ -462,7 +493,12 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
                 })
             )
         }
-        Err(e) => format!("data: {}\n\n", json!({ "error": true, "detail": e.to_string() })),
+        Err(e) => {
+            if decision_id > 0 {
+                let _ = db::update_routing_decision_outcome(decision_id, "failed");
+            }
+            format!("data: {}\n\n", json!({ "error": true, "detail": e.to_string() }))
+        }
     };
 
     Response::builder()
@@ -1159,13 +1195,17 @@ async fn cache_autotune_set(Json(req): Json<Value>) -> Json<Value> {
 
 // ── Private helpers ──
 
+/// 分类器选择：注册表驱动（P0.d，去名称硬编码）——
+/// 分类是 easy 任务，取能力档最低、价最便宜的 active 模型；并列取名序稳定。
 fn pick_classifier(models: &[Model]) -> Option<ModelSpec> {
-    for name in ["qwen3.6-flash", "qwen3-max", "qwen-plus"] {
-        if let Some(m) = models.iter().find(|m| &m.name == name) {
-            return Some(m.into());
-        }
-    }
-    models.first().map(ModelSpec::from)
+    let mut pool: Vec<&Model> = models.iter().collect();
+    pool.sort_by(|a, b| {
+        a.capability_tier
+            .cmp(&b.capability_tier)
+            .then(a.input_cost_per_token.partial_cmp(&b.input_cost_per_token).unwrap_or(std::cmp::Ordering::Equal))
+            .then(a.name.cmp(&b.name))
+    });
+    pool.first().map(|m| ModelSpec::from(*m))
 }
 
 fn blocked_response(sec: &SecurityReport) -> Response {
@@ -1174,6 +1214,15 @@ fn blocked_response(sec: &SecurityReport) -> Response {
         "block_reason": sec.block_reason,
         "detail": sec.pii,
     });
+    Response::builder()
+        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .body(Body::from(format!("data: {}\n\n", body.to_string())))
+        .unwrap()
+}
+
+/// SSE 格式的单事件错误响应（保持前端 chat 流的错误解析一致）
+fn sse_error(detail: &str) -> Response {
+    let body = json!({ "error": true, "detail": detail });
     Response::builder()
         .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
         .body(Body::from(format!("data: {}\n\n", body.to_string())))
