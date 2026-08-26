@@ -42,11 +42,17 @@ POST /api/chat/stream  (server.rs:chat_stream @ 327)
 
 **即：路由策略有两份互不相通的真源，且两份都是硬编码。**
 
+> **v4 注记（2026-08-26，commit 8dddc59）**：上图为 v3 时点快照。P0.d 落地后 **chat 路径已切换**：
+> `router::route` → `classify`（仅分类，无模型映射）→ `band_for` → `plan()`（注册表门槛+评分，
+> 成本走 `price_specs`/`pricing.rs`）→ primary + fallback_chain；`pick_classifier` 改注册表驱动；
+> direct 未注册模型明确报错（SSE error）。**orchestrate 路径仍走 Python `TASK_MODEL_PREFERENCE`**（P0.f 待办），
+> 双真源还剩一半。
+
 ---
 
 ## 二、九个核心问题（v3 复核，状态更新）
 
-### P0-1　`select_model` 是死代码，生效路径不检查可用性　【仍成立】
+### P0-1　`select_model` 是死代码，生效路径不检查可用性　【已修 2026-08-26：select_model/TASK_MODEL_MAP 已删，plan() 全程查注册表】
 
 `router.rs` 的 `select_model()`（131）、`task_model_preference()`（119）、`is_complex()`（101）
 在全 workspace 无外部调用点。生效的是 `default_model_for_task()` → `TASK_MODEL_MAP`（router.rs:14），
@@ -61,12 +67,12 @@ DB `models.task_type` 全仓只有写入点（`db::insert_model`/`update_model` 
 `_select_model(task_type, models)`（ai_service.py:966）遍历的是 `TASK_MODEL_PREFERENCE` 常量，不读 DB 字段。
 用户在 UI 改 `task_type` 毫无效果。
 
-### P0-3　成本字段不参与决策　【仍成立】
+### P0-3　成本字段不参与决策　【已修 2026-08-26：plan() 评分含 est_cost（price_specs 真源）+ max_cost_per_request 门槛】
 
 `select_model` 注释 "Pick the cheapest available model"，实现只遍历写死顺序表，从不读
 `input_cost_per_token`/`output_cost_per_token`。
 
-### P0-4　成本数据存在 10 倍量纲错误　【仍成立，未修】
+### P0-4　成本数据存在 10 倍量纲错误　【已修：÷10 迁移（PRICING-PLAN）+ models 写入断言 [1e-9,1e-3]（09480fa）】
 
 `DB值 = 官方元每百万token × 1.3889e-06`（= 10÷7.2÷1e6），六模型逐位吻合：
 
@@ -106,11 +112,11 @@ v3 复核发现编排路径已部分修复，但 chat 路径仍坏：
 
 `legacy` 的「5 级 failover」未移植。单点失败即整体失败，无重试/降级/熔断/健康记录。
 
-### P1-8　`stream` 标志硬编码　【仍成立】
+### P1-8　`stream` 标志硬编码　【已修 2026-08-26：读 models.supports_stream（须流式=推理系），随迁移回填】
 
 `INFERENCE_MODELS`（router.rs:22）= 4 个写死名字。新增模型 `stream` 永远 false。
 
-### P2-9　任务分配经济次优　【仍成立，未修】
+### P2-9　任务分配经济次优　【部分已修 2026-08-26：chat 路径 plan() 评分已成本感知；orchestrate 路径待 P0.f/P4】
 
 反推真实价重算（混合成本 = 输入 + 2×输出，元/百万）：
 
@@ -737,22 +743,22 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 
 ## 六、落地顺序与验收（v3）
 
-| 序 | 内容 | 验收标准 |
-|---|---|---|
-| 1 | P1.a 修用量落库 | chat 一次对话后 `usage_records` 有正确 model/tokens/cost/task_type/latency；编排 task_type 非 None |
-| 2 | P0.a 修量纲 + 写入断言 | qwen 单价降为 1/10；越界单价写入被 422 拒 |
-| 3 | P0.b/c 建表迁移（幂等） | 重跑不报错、旧数据不丢；迁移前已备份 `data/lloom.db` |
-| 4 | P0.d 评分 plan() + router 单测 | 删任一模型自动改选；不再返回未注册名；空候选集明确报错；阶梯价交叉单测过 |
-| 5 | P0.e 五级打标 | 新增未知模型→元数据自动填充、标 needs_calibration、不接复杂任务 |
-| 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；signals 可配置有单测 |
-| 7 | P1.b/c 成效分 + 推荐分配 | 影子评测下内部分解路径成本降 ≥60%，质量无显著回退 |
-| 8 | P2 定价刷新 + WebUI 徽标 | 手动刷新更新非 manual 来源；断网静默保持本地值 |
-| 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms |
-| 10 | P4 编排升级 | 子任务失败自动降级重试成功；escalation 任务成本再降 ≥30%（相对序 7） |
-| 11 | P5 预算联动 | 预算近耗尽→逐档降级至只走本地 |
-| 12 | P1.d AIQ 重放 | 离线重放输出成本—质量曲线；调参有数据依据 |
+| 序 | 内容 | 验收标准 | 状态 |
+|---|---|---|---|
+| 1 | P1.a 修用量落库 | chat 一次对话后 `usage_records` 有正确 model/tokens/cost/task_type/latency；编排 task_type 非 None | ⏳ 待办 |
+| 2 | P0.a 修量纲 + 写入断言 | qwen 单价降为 1/10；越界单价写入被 422 拒 | ✅ 2026-08-26（09480fa）量纲迁移此前已落；models 表 insert/update 断言 + 单测 |
+| 3 | P0.b/c 建表迁移（幂等） | 重跑不报错、旧数据不丢；迁移前已备份 `data/lloom.db` | ✅ 2026-08-26（8dddc59）备份 `lloom.db.pre-routing-migration.bak`；回填经 settings 标记只跑一次 |
+| 4 | P0.d 评分 plan() + router 单测 | 删任一模型自动改选；不再返回未注册名；空候选集明确报错；阶梯价交叉单测过 | ✅ 2026-08-26（8dddc59）11 个单测 + 冒烟；阶梯价交叉单测随 P2 tiered 数据补（现 spec 平价）|
+| 5 | P0.e 五级打标 | 新增未知模型→元数据自动填充、标 needs_calibration、不接复杂任务 | ⏳ 简版已随 P0.b 迁移回填存量；新增模型自动打标待做 |
+| 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；signals 可配置有单测 | ⏳ 待办（orchestrate 路径仍走 Python `TASK_MODEL_PREFERENCE`）|
+| 7 | P1.b/c 成效分 + 推荐分配 | 影子评测下内部分解路径成本降 ≥60%，质量无显著回退 | ⏳ 待办 |
+| 8 | P2 定价刷新 + WebUI 徽标 | 手动刷新更新非 manual 来源；断网静默保持本地值 | ⏳ 待办 |
+| 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms | ⏳ 待办（fallback_chain 已产出，未接重试）|
+| 10 | P4 编排升级 | 子任务失败自动降级重试成功；escalation 任务成本再降 ≥30%（相对序 7） | ⏳ 待办 |
+| 11 | P5 预算联动 | 预算近耗尽→逐档降级至只走本地 | ⏳ 待办 |
+| 12 | P1.d AIQ 重放 | 离线重放输出成本—质量曲线；调参有数据依据 | ⏳ 待办 |
 
-**测试基建**：Rust 侧零单测，`router.rs`/`signals.rs`/`metadata.rs` 纯函数为主最适合先补。
+**测试基建**：`router.rs` 已有 11 个单测（空候选/门槛/评分/回填链/pin/覆盖/band，2026-08-26）；`signals.rs`/`metadata.rs` 纯函数待补。
 覆盖：空候选集、单模型、删主选后降级、阶梯价交叉点、预算各档、band 边界、reask 判定、保守期解除、
 健康状态机迁移、price drift 阈值。
 

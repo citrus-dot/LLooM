@@ -1,8 +1,8 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-08-26** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：`a2b8bb5`（"Context optimization: SQLite conversation store, budgeted context, two-layer cache"）
-> ⚠️ **当前工作区有未提交改动**（见 §四），包含定价/探针/信号三大新模块，提交前需 `cargo build` 验证。
+> 最新已提交：`8dddc59`（"P0.b/c/d: registry-driven plan() scoring router"）
+> 工作区状态：干净。本日新增 commit：`b09d229`（定价/探针/信号）→ `09480fa`（P0.a 断言）→ `8dddc59`（P0.b/c/d 路由重构）。
 
 ---
 
@@ -31,7 +31,7 @@
 **Rust 核心模块（`crates/lloom-core/src/`）**：
 - `server.rs` — axum REST 服务器（全部端点 + SSE）
 - `db.rs` — SQLite 层（`Model`/`Budget`/`UsageStats`/`PriceSpec`，含幂等迁移 `migrate_db`）
-- `router.rs` — 任务分类（正则层）→ 注：完整评分路由 `plan()` 尚未实现，见 ROUTING-PLAN
+- `router.rs` — 分类（正则+LLM）+ band 投影 + **`plan()` 评分路由**（P0.d 已落地：注册表门槛+评分，成本走 price_specs）
 - `security.rs` — PII 检测 / 越狱拦截 / 领域分类
 - `ai_client.rs` — Python AI 微服务 async HTTP 客户端（已支持 `UsageDetail` 透传）
 - `processes.rs` — 子进程管理（AI 服务 / Ollama）
@@ -65,7 +65,7 @@
 |---|---|---|---|---|
 | [`CONTEXT-PLAN.md`](./CONTEXT-PLAN.md) | 2026-08-24 | **已提交**（a2b8bb5）| 上下文优化：SQLite 对话存储、预算上下文、两层缓存、原子写、两阶段落盘 | Phase 1 + 部分 Phase 4 已落地（追加端点存在于 server.rs）|
 | [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **未提交**（工作区 M）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（未提交）；PR-5/PR-8 待办；WebUI 定价页/探针视图待做 |
-| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24，基于 a2b8bb5）| **未提交**（工作区 M）| 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | 大部分为**计划**，仅 `signals.rs`（PR-4 部分）落地；`plan()` 路由重构（P0.d）未实施 |
+| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/P0.b/P0.c/P0.d 已落地**（09480fa + 8dddc59）；P0.f（Python 真源）、P1+ 待办 |
 
 > 三份计划文档是详细设计与落地顺序的权威来源。本进度文档只做索引与高层同步，不重复其细节。
 
@@ -74,17 +74,20 @@
 ## 四、已落地功能进展（commit / 工作区视角）
 
 **已提交 commit 主线**（最新在前）：
+- `8dddc59` ROUTING P0.b/c/d：models 元数据列+迁移回填、routing_policy/model_task_score/routing_decisions 三表、plan() 评分路由替换全部硬编码（chat 路径）
+- `09480fa` ROUTING P0.a：models 表单价写入断言 [1e-9,1e-3] + 单测
+- `b09d229` Pricing engine, usage telemetry, probes（PRICING-PLAN PR-1~7）
 - `a2b8bb5` Context optimization：SQLite conversation store、budgeted context、two-layer cache
 - `dc534f0` Sync CLI/TUI with WebUI streaming, fix minor bugs, consolidate docs
 - `091dc31` Semantic cache optimization
 - `433362e` Security fixes, graceful shutdown, cache pre-init, rename & markdown
 
-**工作区未提交改动**（自 `a2b8bb5` 起累积，尚未 commit）：
-- 新增模块 `pricing.rs`(620 行) / `probe.rs`(361 行) / `signals.rs`(124 行)
-- `db.rs`(+607)：price_specs / provider_zones / price_calibration 表、usage_records 7 列扩展、`migrate_db()` 幂等迁移（量纲修正 ÷10、DeepSeek 峰谷预置）
-- `server.rs`(+336)：`/api/pricing/specs`(`GET`)、`/api/pricing/specs/{provider}/{model}`(`PUT`)、`/api/pricing/calibration`(`GET`)、`/api/probe/stats`(`GET`)、`/api/probe/budget`(`PUT`)、对话追加/回填端点、Rust 侧 `actual_cost` 计价回填
-- `ai_service.py`(+79)：`_usage_detail` 透传分项 usage（不再裸乘估价）、`priced_usage` 由 Rust 计算
-- `ai_client.rs`(+6) / `lib.rs`(+3) / `main.rs`(+5)：UsageDetail 结构、模块声明、job 启动钩子
+**2026-08-26 落地（ROUTING-PLAN P0.a/b/c/d，均已提交并冒烟验证）**：
+- P0.a（09480fa）：`db.rs` `validate_cost` 断言进 `insert_model`/`update_model`（单价 0 或 [1e-9,1e-3] USD/token）
+- P0.b（8dddc59）：models 表 +11 元数据列（capability_tier/quality_score/context_window/supports_stream/health_state/needs_calibration 等），幂等迁移 + 一次性名称启发式回填（settings 标记 `migration_routing_meta_v1`；备份 `data/lloom.db.pre-routing-migration.bak`）
+- P0.c（8dddc59）：routing_policy（7 条种子策略）/model_task_score（EWMA α=0.15 回填函数）/routing_decisions（审计+outcome 回填）/routing_calibration 四表 + CRUD
+- P0.d（8dddc59）：**删 `TASK_MODEL_MAP`/`INFERENCE_MODELS`/`select_model`/`task_model_preference` 全部硬编码**；`plan()` 门槛（tier/ctx/health/cost-cap/pinned）+ 加权评分（成本走 pricing.rs est_cost，质量 ewma≥5 样本覆盖冷启动分，needs_calibration 罚 0.3）；`chat_stream` 删伪造空 spec（direct 未注册→明确 SSE 报错）；`pick_classifier` 注册表驱动；审计落库；router 11 单测全过
+- 冒烟：simple_qa→qwen2.5-local（cost 0）+fallback 链；coding→deepseek-v3(tier3,stream)；routing_decisions 2 条 outcome=success
 
 **过往已实现并验证**（见 memory / 历史 commit）：
 - 编辑对话名称（`rename_conversation`，PUT `/api/conversations/{id}`）
@@ -116,9 +119,11 @@
 - [ ] 🔶 **PR-7 探针视图**：`GET /api/probe/stats` 后端已就绪，用量页探针视图未做
 - [ ] ⏳ **PR-8 峰谷调度**：可延迟任务挪谷时（依赖 ROUTING-PLAN P4）
 
-### 来自 ROUTING-PLAN.md（v3）
-- [ ] 🔥 **P0.d 路由重构**：删 `TASK_MODEL_MAP`/`INFERENCE_MODELS` 硬编码，实现 `plan()` 评分路由（当前路由仍硬编码，成本/可用性不参与决策）
-- [ ] 🔥 **P0.a 量纲写入断言**：PRICING-PLAN 已做迁移修正，但 `db::insert_model`/`update_model` 的写入断言需确认已并入
+### 来自 ROUTING-PLAN.md（v3，P0.a/b/c/d 已于 2026-08-26 完成）
+- [x] ✅ **P0.a 量纲写入断言**（09480fa）
+- [x] ✅ **P0.b/c 元数据列 + 策略/审计表**（8dddc59）
+- [x] ✅ **P0.d 路由重构**：`plan()` 评分路由已替换全部硬编码（chat 路径），11 单测 + 冒烟过（8dddc59）
+- [ ] 🔥 **P0.f 消除 Python 真源**：orchestrate 路径仍走 `ai_service.py` 的 `TASK_MODEL_PREFERENCE`（双真源剩一半）
 - [ ] ⚡ **P1.a 用量落库完善**：chat 路径已落库，orchestrate 的 `task_type`/`latency`/`request_id` 补全
 - [ ] ⚡ **P0.e 增删模型自动打标**（metadata.rs 新模块，尚未创建）
 - [ ] ⚡ **P0.g 信号层正规化**：signals.rs 已落地 `prefix_stability`，其余信号待补
@@ -159,7 +164,7 @@
 
 ### 5. 路由双真源（当前最大技术债）
 - 现状：Rust 侧 `TASK_MODEL_MAP` 硬编码 + Python 侧 `TASK_MODEL_PREFERENCE` 另一份硬编码，两份互不相通且都不读 DB、不看 is_active。删模型后路由名找不到会伪造空 spec 直接失败。
-- **目标**：ROUTING-PLAN 的 `plan()` 评分路由（注册表驱动 + 描述符评分），Rust 单一决策、Python 纯执行。尚未实施。
+- **进展**：`plan()` 评分路由已落地（P0.d），Rust chat 路径单一决策；仅剩 orchestrate 路径的 Python `TASK_MODEL_PREFERENCE`（P0.f 待办）。
 
 ---
 
@@ -196,7 +201,7 @@
 | `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）| 已补新模块/新路由（本次）|
 | `CONTEXT-PLAN.md` | 上下文优化方案（已落地部分）| 已提交，与 a2b8bb5 一致 |
 | `PRICING-PLAN.md` | 定价表系统详细设计与落地 | 未提交（工作区 M），内容新且准 |
-| `ROUTING-PLAN.md` | 路由重构方案（v3，多为计划）| 未提交（工作区 M），内容新 |
+| `ROUTING-PLAN.md` | 路由重构方案（v3+v4 注记）| 已提交，P0.a/b/c/d 落地状态已更新 |
 | `ROUTING-PLAN.md` 引用的外部研究 | Switchyard / vLLM Semantic Router / Router-R1 等 | 设计借鉴，不引入依赖 |
 
-> **接手检查清单**：① 先 `git status` 看清未提交改动；② 读 CONTEXT/PRICING/ROUTING-PLAN 三份；③ `cargo build` 验证未提交代码可编译；④ 从 ROUTING-PLAN P0.d（路由重构）或 PRICING-PLAN PR-6（定价页）任一未做项切入。
+> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② 从 ROUTING-PLAN P0.f（Python 真源消除）、P0.e（新增模型自动打标）或 PRICING-PLAN PR-6（定价页）任一未做项切入。
