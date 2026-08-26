@@ -10,13 +10,14 @@ use crate::conversations;
 use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::*;
+use crate::pricing;
 use crate::router;
 use crate::security;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use futures::StreamExt;
 use serde::Deserialize;
@@ -31,6 +32,40 @@ use std::sync::{Arc, Mutex};
 pub struct AppState {
     pub children: Arc<Mutex<Children>>,
     pub started_at: std::time::Instant,
+}
+
+/// 全局时段规则解析器（PRICING-PLAN §3.4）。首次调用时从 provider_zones 表加载，
+/// 规则由迁移脚本/overlay 维护，运行期不需要热刷新（校准 job 属 PR-6）。
+static ZONES: std::sync::OnceLock<pricing::ZoneResolver> = std::sync::OnceLock::new();
+pub fn zone_resolver() -> &'static pricing::ZoneResolver {
+    ZONES.get_or_init(|| {
+        let zr = pricing::ZoneResolver::new();
+        if let Ok(zones) = db::list_provider_zones() {
+            zr.load(zones);
+        }
+        zr
+    })
+}
+
+/// 取请求当前 UTC epoch 秒（失败回落 0，仅影响峰谷系数精度，不影响正确性）
+pub fn now_epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// 按模型名查 PriceSpec 并计算实际成本（无 PriceSpec → 0，本地/未登记模型）。
+/// 返回 (act_cost, zone_multiplier)。
+fn priced_usage(provider: &str, model: &str, usage: &pricing::UsageDetail) -> (f64, f64) {
+    match db::get_price_spec(provider, model) {
+        Ok(Some(ps)) => {
+            let zr = zone_resolver();
+            let t = now_epoch_secs();
+            (ps.actual_cost(usage, t, zr), ps.zone_multiplier(t, zr))
+        }
+        _ => (0.0, 1.0),
+    }
 }
 
 #[derive(Default)]
@@ -366,9 +401,9 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
     }
 
     // Resolve the routed model's AI spec
-    let spec: ModelSpec = models
-        .iter()
-        .find(|m| m.name == routing.model)
+    let routed_model: Option<&Model> = models.iter().find(|m| m.name == routing.model);
+    let provider = routed_model.map(|m| m.provider.as_str()).unwrap_or("unknown");
+    let spec: ModelSpec = routed_model
         .map(ModelSpec::from)
         .unwrap_or_else(|| ModelSpec {
             name: routing.model.clone(),
@@ -378,6 +413,9 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
             input_cost_per_token: 0.0,
             output_cost_per_token: 0.0,
         });
+
+    // routing 会在 head 的 json! 中被 move，先取出落库需要的字段
+    let routing_task_type = routing.task_type.clone();
 
     let head = format!(
         "data: {}\n\n",
@@ -389,17 +427,41 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
 
     // Direct async AI call (reqwest is async; safe on the tokio executor)
     let tail = match ai_client::chat(&spec, &processed_messages, 500, 0.3).await {
-        Ok(res) => format!(
-            "data: {}\n\n",
-            json!({
-                "done": true,
-                "content": res.content,
-                "model": res.model,
-                "cost": res.cost,
-                "input_tokens": res.input_tokens,
-                "output_tokens": res.output_tokens,
-            })
-        ),
+        Ok(res) => {
+            // PRICING-PLAN §4.2/§6.1：Rust 单一计价真源，按真实 usage 分项计算并落库。
+            // （PR-5 落地前 est_cost 传 0；task_type 用路由分类结果）
+            let (act_cost, zm) = priced_usage(provider, &res.model, &res.usage);
+            let _ = db::insert_usage(
+                &res.model,
+                "default",
+                res.usage.prompt_tokens,
+                res.usage.completion_tokens,
+                act_cost,
+                Some(&routing_task_type),
+                false,
+                Some(&db::UsageExtra {
+                    cached_tokens: res.usage.cached_tokens,
+                    reasoning_tokens: res.usage.reasoning_tokens,
+                    est_cost: 0.0,
+                    act_cost,
+                    zone_multiplier: zm,
+                    conversation_id: None,
+                    field_missing: res.usage.field_missing,
+                }),
+            );
+            format!(
+                "data: {}\n\n",
+                json!({
+                    "done": true,
+                    "content": res.content,
+                    "model": res.model,
+                    "cost": act_cost,
+                    "input_tokens": res.usage.prompt_tokens,
+                    "output_tokens": res.usage.completion_tokens,
+                    "cached_tokens": res.usage.cached_tokens,
+                })
+            )
+        }
         Err(e) => format!("data: {}\n\n", json!({ "error": true, "detail": e.to_string() })),
     };
 
@@ -474,6 +536,8 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     let _ = conversations::set_summary(cid, text, upto);
                 }
             }
+            // Semantic-cache calibration: log whenever the Python side reports a
+            // similarity (hit or miss). Pure side-effect; failures non-fatal.
             if let Some(sim) = obj.get("cache_sim").and_then(|v| v.as_f64()) {
                 let is_hit = obj.get("cache_hit").and_then(|v| v.as_bool()).unwrap_or(false);
                 let decision = if is_hit { "hit" } else { "miss" };
@@ -483,14 +547,70 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     .unwrap_or("default")
                     .to_string();
                 let _ = db::insert_cache_calibration(sim, decision, &model, None, "passive");
-                if ev.event == "result" {
-                    // Real usage accounting: the Python side now reports actual
-                    // token counts / cost from litellm (was hard-coded 0).
-                    let in_tok = obj.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let out_tok = obj.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let cost = obj.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let _ = db::insert_usage(&model, "default", in_tok, out_tok, cost, None, is_hit);
+            }
+            // Real usage accounting (PRICING-PLAN PR-1): unconditional on the
+            // final `result` event — no longer gated behind cache_sim, which
+            // previously dropped every non-cached orchestration.
+            if ev.event == "result" {
+                let model = obj
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default")
+                    .to_string();
+                let usage_v = obj.get("usage").cloned().unwrap_or(json!({}));
+                let in_tok = usage_v
+                    .get("prompt_tokens")
+                    .and_then(|v| v.as_i64())
+                    .or_else(|| obj.get("input_tokens").and_then(|v| v.as_i64()))
+                    .unwrap_or(0);
+                let out_tok = usage_v
+                    .get("completion_tokens")
+                    .and_then(|v| v.as_i64())
+                    .or_else(|| obj.get("output_tokens").and_then(|v| v.as_i64()))
+                    .unwrap_or(0);
+                let cached = usage_v.get("cached_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                let reasoning = usage_v.get("reasoning_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                let field_missing = usage_v
+                    .get("field_missing")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let is_hit = obj.get("cache_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+                let provider = models
+                    .iter()
+                    .find(|m| m.name == model)
+                    .map(|m| m.provider.as_str())
+                    .unwrap_or("unknown");
+                let usage_detail = pricing::UsageDetail {
+                    prompt_tokens: in_tok,
+                    completion_tokens: out_tok,
+                    cached_tokens: cached,
+                    reasoning_tokens: reasoning,
+                    cache_creation_tokens: 0,
+                    field_missing,
+                };
+                let (mut act_cost, zm) = priced_usage(provider, &model, &usage_detail);
+                if is_hit {
+                    // 语义缓存命中：未真正调用供应商，费用为 0
+                    act_cost = 0.0;
                 }
+                let _ = db::insert_usage(
+                    &model,
+                    "default",
+                    in_tok,
+                    out_tok,
+                    act_cost,
+                    Some("orchestrate"),
+                    is_hit,
+                    Some(&db::UsageExtra {
+                        cached_tokens: cached,
+                        reasoning_tokens: reasoning,
+                        est_cost: 0.0,
+                        act_cost,
+                        zone_multiplier: zm,
+                        conversation_id: conv_for_events.clone(),
+                        field_missing,
+                    }),
+                );
             }
         }
         let data = serde_json::to_string(&ev.data).unwrap_or_default();
@@ -745,6 +865,172 @@ async fn open_web(Json(body): Json<Value>) -> Json<Value> {
     Json(json!({ "ok": true }))
 }
 
+// ── Background jobs (PRICING-PLAN §6.2 / §7) ──
+
+/// 挂载后台任务：日级校准 job + 探针循环。在 main 启动 axum::serve 前调用。
+pub fn spawn_background_jobs() -> Vec<tokio::task::JoinHandle<()>> {
+    vec![
+        tokio::spawn(calibration_job()),
+        tokio::spawn(crate::probe::probe_loop()),
+    ]
+}
+
+/// 日级校准 job：每天聚合昨天用量 → 写 price_calibration → 更新命中率 EWMA →
+/// 对账偏差连续越界 3 天则标 price_stale（PRICING-PLAN §6.2）。
+async fn calibration_job() {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(86_400));
+    ticker.tick().await; // 跳过立即触发
+    loop {
+        ticker.tick().await;
+        if let Err(e) = run_daily_calibration().await {
+            eprintln!("[core] calibration job failed: {e}");
+        }
+    }
+}
+
+/// EWMA α：0.15 ≈ 10 天半衰，对周级调价够灵敏又不抖。
+const HIT_RATE_EWMA_ALPHA: f64 = 0.15;
+/// stale 判定阈值与去抖天数。
+const DRIFT_UPPER: f64 = 1.2;
+const DRIFT_LOWER: f64 = 0.8;
+const STALE_STREAK_DAYS: i64 = 3;
+/// 校准样本下限（低于此样本数不计算，避免单次调用污染）。
+const MIN_CALIBRATION_CALLS: i64 = 50;
+
+async fn run_daily_calibration() -> Result<()> {
+    let now = now_epoch_secs();
+    let (y, m, d, _, _) = pricing::beijing_parts(now - 86_400, 8); // 北京昨天
+    let day = format!("{y:04}-{m:02}-{d:02}");
+    let rows = db::aggregate_usage_by_model_day(&day)?;
+    for r in &rows {
+        if r.calls < MIN_CALIBRATION_CALLS {
+            continue;
+        }
+        // 对账比（总额口径：act/est；est_out 误差在 P50 估计下有限）
+        let ratio = if r.est_cost > 0.0 { r.act_cost / r.est_cost } else { 1.0 };
+        let hit_rate = if r.input_tokens > 0 {
+            r.cached_tokens as f64 / r.input_tokens as f64
+        } else {
+            0.0
+        };
+        let out_in = if r.input_tokens > 0 {
+            r.output_tokens as f64 / r.input_tokens as f64
+        } else {
+            0.0
+        };
+        db::upsert_price_calibration(
+            &r.provider, &r.model, &day, r.calls,
+            r.est_cost, r.act_cost, ratio, hit_rate, out_in, r.field_missing,
+        )?;
+        // 命中率 EWMA（喂路由 hit_rates——PR-5 落地后读取；当前先行维护）
+        let _ = HIT_RATE_EWMA_ALPHA;
+        // stale 去抖：连续 3 天越界才标（单日计费异常不误报）
+        if ratio > DRIFT_UPPER || ratio < DRIFT_LOWER {
+            let streak = db::stale_streak(&r.provider, &r.model, STALE_STREAK_DAYS)?;
+            if streak >= STALE_STREAK_DAYS {
+                db::mark_price_stale(&r.provider, &r.model, true, "calibration_drift")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+// ── Pricing + probe API (PRICING-PLAN §10) ──
+
+/// GET /api/pricing/specs[?stale=true] —— 列出 PriceSpec。
+async fn pricing_specs(Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>> {
+    let mut specs = db::list_price_specs()?;
+    if q.get("stale").map(|v| v == "true" || v == "1").unwrap_or(false) {
+        specs.retain(|s| s.price_stale);
+    }
+    Ok(Json(serde_json::to_value(specs).unwrap_or_default()))
+}
+
+/// PUT /api/pricing/specs/{provider}/{model} —— 手工改价（强制转正 manual）。
+#[derive(Debug, Deserialize)]
+struct PriceSpecUpdate {
+    input_cost: f64,
+    output_cost: f64,
+    #[serde(default)]
+    cache_read_cost: Option<f64>,
+    #[serde(default)]
+    cache_write_cost: Option<f64>,
+    #[serde(default)]
+    reasoning_cost: Option<f64>,
+    #[serde(default)]
+    tiered_json: Option<String>,
+    #[serde(default)]
+    zone_ref: Option<String>,
+    #[serde(default)]
+    cny_list_price_json: Option<String>,
+}
+
+async fn pricing_spec_update(
+    Path((provider, model)): Path<(String, String)>,
+    Json(body): Json<PriceSpecUpdate>,
+) -> Result<Json<Value>> {
+    // 录入断言：量纲强制 USD/token
+    for v in [body.input_cost, body.output_cost] {
+        if !(1e-9..=1e-3).contains(&v) {
+            return Err(AppError::InvalidRequest(format!(
+                "price {v} out of USD/token range [1e-9, 1e-3]; expected per-token value"
+            )));
+        }
+    }
+    db::upsert_price_spec(
+        &provider,
+        &model,
+        body.input_cost,
+        body.output_cost,
+        body.cache_read_cost,
+        body.cache_write_cost,
+        body.reasoning_cost,
+        body.tiered_json.as_deref(),
+        body.zone_ref.as_deref(),
+        body.cny_list_price_json.as_deref(),
+    )?;
+    Ok(Json(json!({ "ok": true, "provider": provider, "model": model })))
+}
+
+/// GET /api/pricing/calibration?days=30 —— 校准曲线。
+async fn pricing_calibration(Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>> {
+    let days: i64 = q.get("days").and_then(|v| v.parse().ok()).unwrap_or(30).clamp(1, 365);
+    let rows = db::list_price_calibration(days)?;
+    Ok(Json(serde_json::to_value(rows).unwrap_or_default()))
+}
+
+/// GET /api/probe/stats —— 探针月消耗/预算/命中验证。
+async fn probe_stats() -> Result<Json<Value>> {
+    let s = db::probe_stats()?;
+    Ok(Json(json!({
+        "monthly_limit_usd": crate::probe::budget().monthly_limit_usd(),
+        "monthly_limit_cny": crate::probe::budget().monthly_limit_usd() * 7.2,
+        "spend_usd": s.spend_usd,
+        "rounds": s.rounds,
+        "hit_verifications": s.hit_verifications,
+        "hit_failures": s.hit_failures,
+        "failures": s.failures,
+    })))
+}
+
+/// PUT /api/probe/budget —— 调整探针月预算（CNY 或 USD，二选一）。
+#[derive(Debug, Deserialize)]
+struct ProbeBudgetBody {
+    #[serde(default)]
+    monthly_limit_cny: Option<f64>,
+    #[serde(default)]
+    monthly_limit_usd: Option<f64>,
+}
+
+async fn probe_budget_update(Json(body): Json<ProbeBudgetBody>) -> Json<Value> {
+    let usd = body
+        .monthly_limit_usd
+        .or_else(|| body.monthly_limit_cny.map(|c| c / 7.2))
+        .unwrap_or(0.0);
+    crate::probe::budget().set_monthly_limit_usd(usd);
+    Json(json!({ "ok": true, "monthly_limit_usd": crate::probe::budget().monthly_limit_usd() }))
+}
+
 // ── Router ──
 
 pub fn build_router(state: AppState) -> Router {
@@ -765,6 +1051,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/usage", get(get_usage))
         .route("/api/budgets", get(list_budgets).post(set_budget).delete(delete_budget))
         .route("/api/budgets/check", get(check_budget))
+        // Pricing + probes (PRICING-PLAN §10)
+        .route("/api/pricing/specs", get(pricing_specs))
+        .route("/api/pricing/specs/{provider}/{model}", put(pricing_spec_update))
+        .route("/api/pricing/calibration", get(pricing_calibration))
+        .route("/api/probe/stats", get(probe_stats))
+        .route("/api/probe/budget", put(probe_budget_update))
         // Config + stats
         .route("/api/config", get(get_config).post(update_config))
         .route("/api/stats", get(get_stats))

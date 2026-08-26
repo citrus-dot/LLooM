@@ -76,6 +76,8 @@
 | `/api/stats` | GET | 仪表盘统计 |
 | `/api/conversations` | GET/POST | 对话列表/保存 |
 | `/api/conversations/:id` | GET/DELETE | 对话加载/删除 |
+| `/api/conversations/:id/messages` | POST | 追加单条消息（原子写，修复并发覆盖）|
+| `/api/conversations/:id/messages/:seq` | PATCH | 回填某条消息内容与元数据（两阶段落盘）|
 | `/api/chat/stream` | POST | 聊天（SSE） |
 | `/api/orchestrate/stream` | POST | 任务编排（SSE） |
 | `/api/services/status` | GET | 服务健康状态 |
@@ -87,11 +89,19 @@
 | `/api/system/open-folder` | POST | 打开目录 |
 | `/api/system/open-web` | POST | 打开网页 |
 | `/api/system/cli` | POST | 运行 CLI |
+| `/api/pricing/specs` | GET | 列出所有 PriceSpec（定价分项规格，含 stale 标记）|
+| `/api/pricing/specs/:provider/:model` | PUT | 手工改价（强制转正 manual）|
+| `/api/pricing/calibration` | GET | 校准曲线（对账偏差、缓存命中率）|
+| `/api/probe/stats` | GET | 探针月消耗/预算/命中验证 |
+| `/api/probe/budget` | PUT | 调整探针月预算 |
 
 ### 业务核心（core）
 
 - **db.rs** — rusqlite SQLite 层，强类型（`Model`/`Budget`/`UsageStats`）
-- **router.rs** — 任务分类（正则层）+ 成本最优模型选择
+- **router.rs** — 任务分类（正则层）+ 成本最优模型选择（评分路由 `plan()` 重构见 ROUTING-PLAN.md，尚未实施）
+- **pricing.rs** — 定价引擎（`PriceSpec`/`TierBand`/`ZoneRule`/`UsageDetail`/`ZoneResolver` + actual_cost/est_cost/effective_input_cost）
+- **probe.rs** — 常开探针（预算状态机 `ProbeBudget` + 探测循环，监控响应性与校准燃料）
+- **signals.rs** — 信号层（`prefix_stability` 等启发式信号，为路由评分提供特征）
 - **security.rs** — PII 检测 / 越狱拦截 / 领域分类（正则零成本层，fancy-regex 支持 lookaround）
 - **ai_client.rs** — Python AI 微服务的 async HTTP 客户端
 - **processes.rs** — 子进程管理（API 服务器 / Ollama / AI 服务）
@@ -215,15 +225,18 @@ bash scripts/smoke_test.sh
 LLooM/
 ├── Cargo.toml                    # Rust workspace 根
 ├── crates/lloom-core/            # 业务核心 lib（UI 无关）
-│   └── src/                      # 11 个模块
+│   └── src/                      # 14 个模块
 │       ├── lib.rs                # 模块声明
 │       ├── server.rs             # axum REST 服务器
-│       ├── db.rs                 # SQLite 层
-│       ├── router.rs             # 任务分类 + 模型选择
+│       ├── db.rs                 # SQLite 层（含价格/校准幂等迁移）
+│       ├── router.rs             # 任务分类 + 模型选择（路由重构见 ROUTING-PLAN.md）
 │       ├── security.rs           # 正则安全层
 │       ├── ai_client.rs          # AI 微服务客户端
 │       ├── processes.rs          # 子进程管理
-│       ├── conversations.rs      # 对话 CRUD
+│       ├── conversations.rs      # 对话 CRUD（原子写 + 追加端点）
+│       ├── pricing.rs            # 定价引擎（PriceSpec / 校准）
+│       ├── probe.rs              # 常开探针（预算状态机）
+│       ├── signals.rs            # 信号层（prefix_stability 等）
 │       ├── models.rs             # 类型定义
 │       ├── config.rs             # 路径/端口配置
 │       └── error.rs              # 统一错误

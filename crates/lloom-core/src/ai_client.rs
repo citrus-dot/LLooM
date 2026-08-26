@@ -38,9 +38,9 @@ impl From<&Model> for ModelSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResult {
     pub content: String,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cost: f64,
+    #[serde(default)]
+    pub usage: crate::pricing::UsageDetail,
+    #[serde(default)]
     pub model: String,
 }
 

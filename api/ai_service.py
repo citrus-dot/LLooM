@@ -175,6 +175,35 @@ def _estimate_cost(model: ModelSpec, input_tokens: int, output_tokens: int) -> f
     )
 
 
+def _usage_detail(usage) -> dict:
+    """Extract full usage breakdown from a litellm response. Never raises.
+
+    PRICING-PLAN §4.3 — the Rust side prices from these components; Python no
+    longer computes cost itself. `field_missing` records providers that do not
+    report cached_tokens (calibration input, not an error).
+    """
+    if usage is None:
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cached_tokens": 0,
+            "reasoning_tokens": 0,
+            "cache_creation_tokens": 0,
+            "field_missing": True,
+        }
+    ptd = getattr(usage, "prompt_tokens_details", None)
+    ctd = getattr(usage, "completion_tokens_details", None)
+    cached = getattr(ptd, "cached_tokens", None)
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        "cached_tokens": cached or 0,
+        "reasoning_tokens": getattr(ctd, "reasoning_tokens", 0) or 0,
+        "cache_creation_tokens": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        "field_missing": cached is None,
+    }
+
+
 def _model_by_name(models: list[ModelSpec], name: str) -> ModelSpec | None:
     for m in models:
         if m.name == name:
@@ -813,14 +842,12 @@ def chat(req: ChatRequest) -> dict:
     )
     response = litellm.completion(**kwargs)
     content = response.choices[0].message.content or ""
-    usage = getattr(response, "usage", None)
-    input_tokens = getattr(usage, "prompt_tokens", 0) or 0
-    output_tokens = getattr(usage, "completion_tokens", 0) or 0
+    u = _usage_detail(getattr(response, "usage", None))
     return {
         "content": content,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "cost": _estimate_cost(req.model, input_tokens, output_tokens),
+        "input_tokens": u["prompt_tokens"],
+        "output_tokens": u["completion_tokens"],
+        "usage": u,
         "model": req.model.name,
     }
 
@@ -849,13 +876,12 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
                 u = getattr(chunk, "usage", None)
                 if u is not None:
                     usage = u
-            input_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
-            output_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+            u = _usage_detail(usage)
             yield _plain_sse({
                 "done": True,
-                "cost": _estimate_cost(req.model, input_tokens, output_tokens),
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
+                "usage": u,
+                "input_tokens": u["prompt_tokens"],
+                "output_tokens": u["completion_tokens"],
             })
         except Exception as e:
             yield _plain_sse({"error": True, "detail": str(e)})
@@ -1066,6 +1092,14 @@ def _call_llm(
                 usage_ref.update({
                     "input_tokens": in_est,
                     "output_tokens": out_est,
+                    "usage": {
+                        "prompt_tokens": in_est,
+                        "completion_tokens": out_est,
+                        "cached_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "cache_creation_tokens": 0,
+                        "field_missing": True,
+                    },
                     "cost": 0.0,
                     "saved_cost": _estimate_cost(model_spec, in_est, out_est),
                     "cache_hit": True,
@@ -1090,10 +1124,12 @@ def _call_llm(
         raise RuntimeError(f"LLM call failed: {e}")
 
     if usage_ref is not None:
+        u = _usage_detail(getattr(response, "usage", None))
         usage_ref.update({
             "input_tokens": in_tok,
             "output_tokens": out_tok,
-            "cost": _estimate_cost(model_spec, in_tok, out_tok),
+            "usage": u,
+            "cost": 0.0,  # Rust 按分项计价；保留 0 兼容旧读端
             "saved_cost": 0.0,
             "cache_hit": False,
         })
@@ -1149,6 +1185,14 @@ def _call_llm_stream(
                 usage_ref.update({
                     "input_tokens": in_est,
                     "output_tokens": out_est,
+                    "usage": {
+                        "prompt_tokens": in_est,
+                        "completion_tokens": out_est,
+                        "cached_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "cache_creation_tokens": 0,
+                        "field_missing": True,
+                    },
                     "cost": 0.0,
                     "saved_cost": _estimate_cost(model_spec, in_est, out_est),
                     "cache_hit": True,
@@ -1183,10 +1227,12 @@ def _call_llm_stream(
         raise RuntimeError(f"LLM stream failed: {e}")
 
     if usage_ref is not None:
+        u = _usage_detail(usage)
         usage_ref.update({
             "input_tokens": in_tok,
             "output_tokens": out_tok,
-            "cost": _estimate_cost(model_spec, in_tok, out_tok),
+            "usage": u,
+            "cost": 0.0,  # Rust 按分项计价；保留 0 兼容旧读端
             "saved_cost": 0.0,
             "cache_hit": False,
         })
@@ -1233,6 +1279,13 @@ def build_context(
     budget: int = CONTEXT_BUDGET,
 ) -> tuple[list[dict], str, int, dict]:
     """Assemble a token-budgeted prompt: [system][?summary][kept history][query].
+
+    PRICING-PLAN §5.3 (prefix stability): the system prompt, summary and kept
+    history form a **byte-stable prefix**; only the trailing `query` changes
+    between turns. Provider-side prefix caches (DashScope implicit cache etc.)
+    hit on this prefix — do NOT insert timestamps/random ids into the system
+    prompt or reorder tools between turns, or the cache is invalidated every
+    turn (billed at full input price).
 
     Returns (messages, new_summary, new_upto, stats). When the kept window
     drops messages not yet covered by the summary and at least

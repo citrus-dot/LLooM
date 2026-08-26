@@ -1,122 +1,118 @@
-# 智能路由：现状分析与优化计划 v2
+# 智能路由：现状分析与优化计划 v3
 
-> 分析对象：`v2` 分支 @ `091dc31`
-> 关注文件：`crates/lloom-core/src/router.rs`、`server.rs`、`db.rs`、`api/ai_service.py`
+> 分析对象：`v2` 分支 @ `a2b8bb5`（"Context optimization: SQLite conversation store, budgeted context, two-layer cache"）
+> 关注文件：`crates/lloom-core/src/{router,db,models,ai_client,server,config}.rs`、`api/ai_service.py`
 > 目标：让路由自适应用户任意模型集（含增删）、按「成本 × 成效」分配任务、为预算动态调整留出接口
 >
-> **v2 修订（2026-08-24）**：在 v1 基础上融合四路外部输入——
-> ① NeMo Switchyard（NVIDIA 开源路由库）的决策信号模型、算法族与可观测性设计；
-> ② vLLM Semantic Router 的「信号—投影—决策」三层控制面架构；
-> ③ 定价表系统设计（静态四级解析 + 动态更新机制，已实测 litellm / models.dev / OpenRouter 三个数据源）；
-> ④ Router-R1 / R2-Router / AutoMix / BEST-Route / RouterBench 等路由研究的新证据。
-> v1 的「现状分析」「九个核心问题」「P0–P3 骨架」经复核仍然成立，本版保留并扩充。
+> **行号约定**：本文行号基于 `a2b8bb5`，会随版本变动——实施时以**函数名**为锚点定位，行号仅作辅助。
+>
+> **版本演进**：
+> - v1（@ 091dc31）：现状分析 + 九问题 + P0–P3 骨架。
+> - v2（2026-08-24）：融合 NeMo Switchyard、vLLM Semantic Router、定价系统、Router-R1/R2-Router/AutoMix/BEST-Route/RouterBench。
+> - **v3（本次）**：核对当前代码（行号/签名/已变化点）+ 把每个阶段落实到**可执行技术细节**（结构体改动、函数签名、幂等迁移脚本、评分公式、EWMA 更新、价格刷新 job 骨架、stage 路由伪代码、SSE 事件契约、WebUI 字段）。
 
 ---
 
-## 一、现状：真实生效的决策链
+## 一、现状：真实生效的决策链（v3 复核 @ a2b8bb5）
 
 代码里存在的路由逻辑比实际生效的多。实测调用链只有这一条：
 
 ```
-POST /api/chat/stream  (server.rs:267)
+POST /api/chat/stream  (server.rs:chat_stream @ 327)
   │
-  ├─ security::check                      PII / 越狱拦截
-  ├─ db::list_models(true)                取出 is_active=1 的模型
-  ├─ pick_classifier(&models)             硬编码顺序 ["qwen3.6-flash","qwen3-max","qwen-plus"]
+  ├─ security::check(&user_text, true, true)          PII / 越狱拦截
+  ├─ db::list_models(true)                             取 is_active=1 模型
+  ├─ pick_classifier(&models)  (server.rs:870)        硬编码 ["qwen3.6-flash","qwen3-max","qwen-plus"]
   │
-  └─ router::route(model="auto", text)    router.rs:178
-       └─ classify(text)                  router.rs:163
-            ├─ rule_classify(text)        4 组正则，命中即返回
-            │    └─ default_model_for_task(task)  ← TASK_MODEL_MAP 硬编码单模型
-            └─ (未命中) ai_client::classify  LLM 兜底 → 同样走 TASK_MODEL_MAP
-       └─ stream = INFERENCE_MODELS.contains(selected)   ← 硬编码 4 个名字
+  └─ router::route(model, user_text, classifier)      (router.rs:178)
+       └─ classify(text, classifier)                   (router.rs:163)
+            ├─ rule_classify(text)                      4 组正则，命中即返回
+            │    └─ default_model_for_task(task)       ← TASK_MODEL_MAP 硬编码单模型 (router.rs:74)
+            └─ (未命中) ai_client::classify            LLM 兜底 → 同样走 TASK_MODEL_MAP
+       └─ stream = INFERENCE_MODELS.contains(selected)  ← 硬编码 4 名 (router.rs:22)
+  └─ spec = models.find(name) ?? 伪造空 spec           (server.rs:369-380) ← 删模型后直接失败
+  └─ ai_client::chat(&spec, msgs, 500, 0.3)            (server.rs:391) → 返回 ChatResult{content,cost,tokens}
+       └─ ⚠️ 拿到 res.cost/tokens 却【从不落库】       ← P0-5 未修一半
 ```
 
-`orchestrate_stream` 走另一套：Rust 把全部 `ModelSpec` 打包丢给 Python，由 `ai_service.py` 的
-`_select_model()`（`ai_service.py:629`）用自己那份 `TASK_MODEL_PREFERENCE` 再决策一次。
+`orchestrate_stream`（`server.rs:412`）走另一套：Rust 把全部 `ModelSpec` 打包（`server.rs:422`）丢给 Python
+`ai_client::orchestrate_stream`（`ai_client.rs:144`），由 `ai_service.py` 的 `_select_model()`
+（`ai_service.py:966`）用自己那份 `TASK_MODEL_PREFERENCE`（`ai_service.py:888`）再决策一次；
+复杂路径的分解器选择遍历 `DECOMPOSER_PREFERENCE`（`ai_service.py:886` 与 `1453`）。
 
 **即：路由策略有两份互不相通的真源，且两份都是硬编码。**
 
 ---
 
-## 二、九个核心问题（v1 复核，全部仍成立）
+## 二、九个核心问题（v3 复核，状态更新）
 
-### P0-1　`select_model` 是死代码，生效路径不检查可用性
+### P0-1　`select_model` 是死代码，生效路径不检查可用性　【仍成立】
 
-`router.rs` 里的 `select_model()`、`task_model_preference()`、`is_complex()` **在整个 Rust
-workspace 中没有任何外部调用点**（已 grep 全仓确认）。真正生效的是
-`default_model_for_task()` → `TASK_MODEL_MAP`，它是一个 `task → 单个模型名` 的静态映射，
-**完全不看模型是否已注册、是否 is_active**。
+`router.rs` 的 `select_model()`（131）、`task_model_preference()`（119）、`is_complex()`（101）
+在全 workspace 无外部调用点。生效的是 `default_model_for_task()` → `TASK_MODEL_MAP`（router.rs:14），
+**完全不看 is_active**。
 
-后果（`server.rs:309-320`）：路由选出的名字若在注册表里找不到，会**伪造一个空 spec**——
-`api_base` 空、`api_key` 空、cost 记 0——然后照常发请求。用户删掉 `deepseek-v3` 之后，
-所有 coding/math 请求都会走进这个空 spec 分支直接失败，而不是降级。
+后果（`server.rs:369-380`）：路由名在注册表找不到时 `unwrap_or_else` 伪造空 `ModelSpec`
+（`api_base`/`api_key` 空、cost 0）照常发请求 → 删 `deepseek-v3` 后 coding/math 直接失败而非降级。
 
-### P0-2　`models.task_type` 是死字段
+### P0-2　`models.task_type` 是死字段　【仍成立】
 
-DB 里每个模型都标了 `task_type`，但 router 从不读它（全仓只有写入点，无读取点）。
-用户在 WebUI / TUI / CLI 里改这个字段**毫无效果**。
-实测数据里 `qwen3.6-flash` 标的是 `classification`，这个值甚至不在 `VALID_TASK_TYPES` 五类之内。
+DB `models.task_type` 全仓只有写入点（`db::insert_model`/`update_model` 白名单），无读取点。
+`_select_model(task_type, models)`（ai_service.py:966）遍历的是 `TASK_MODEL_PREFERENCE` 常量，不读 DB 字段。
+用户在 UI 改 `task_type` 毫无效果。
 
-### P0-3　成本字段不参与决策
+### P0-3　成本字段不参与决策　【仍成立】
 
-`select_model` 的文档注释写着 "Pick the cheapest available model"，实现却只是遍历一个
-写死的顺序表，**从未读取 `input_cost_per_token` / `output_cost_per_token`**。
-成本数据存在、但对路由零影响。
+`select_model` 注释 "Pick the cheapest available model"，实现只遍历写死顺序表，从不读
+`input_cost_per_token`/`output_cost_per_token`。
 
-### P0-4　成本数据存在 10 倍量纲错误（实测反推确认）
+### P0-4　成本数据存在 10 倍量纲错误　【仍成立，未修】
 
-把 DB 现值反推回官方价，六个模型全部命中同一个换算式
-`DB值 = 官方元每百万token × 1.3889e-06`：
+`DB值 = 官方元每百万token × 1.3889e-06`（= 10÷7.2÷1e6），六模型逐位吻合：
 
 | 模型 | DB in | DB out | 反推官方价（元/百万） | 交叉验证 |
 |---|---|---|---|---|
-| qwen-plus | 1.11e-06 | 2.78e-06 | 0.8 / 2.0 | ✅ 与官方 qwen-plus 0–128K 档一致 |
-| qwen3.6-flash | 1.67e-06 | 1.0e-05 | 1.2 / 7.2 | ✅ 与百炼定价页 Qwen3.6-Flash 一致 |
+| qwen-plus | 1.11e-06 | 2.78e-06 | 0.8 / 2.0 | ✅ 官方 0–128K 档 |
+| qwen3.6-flash | 1.67e-06 | 1.0e-05 | 1.2 / 7.2 | ✅ 百炼定价页 |
 | qwen3.6-plus | 2.78e-06 | 1.667e-05 | 2.0 / 12.0 | — |
-| qwen3-max | 3.47e-06 | 1.389e-05 | 2.5 / 10.0 | ✅ 与官方 qwen3-max 0–32K 档一致 |
+| qwen3-max | 3.47e-06 | 1.389e-05 | 2.5 / 10.0 | ✅ 官方 0–32K 档 |
 | deepseek-v3 | 1.39e-06 | 1.111e-05 | 1.0 / 8.0 | — |
-| gpt-4o | 2.5e-06 | 1.0e-05 | 2.5 / 10.0 **USD** | ✅ 与 litellm 内置价目表逐位一致 |
+| gpt-4o | 2.5e-06 | 1.0e-05 | 2.5 / 10.0 **USD** | ✅ litellm 内置表逐位一致 |
 
-`1.3889e-06 = 10 ÷ 7.2 ÷ 1e6`。也就是说：**DashScope 系列的意图是「按 7.2 汇率折算的
-USD/token」，但整体放大了 10 倍**；而 gpt-4o 的值是正确的 USD/token。
+即 DashScope 系列意图是「7.2 汇率 USD/token」但放大 10 倍；gpt-4o 是正确 USD/token。
+后果：①qwen 成本/预算虚高 10 倍；②跨供应商比价倒置（DB 现值 gpt-4o 看着比 qwen3-max 便宜，真实相反，差约 7 倍）。
 
-两个后果：
-1. 所有面向用户的成本 / 预算数字，在 qwen 系列上**虚高 10 倍**。
-2. **跨供应商比价完全反了**。按 DB 现值，gpt-4o（2.5e-06）看起来比 qwen3-max（3.47e-06）便宜；
-   真实情况是 qwen3-max ≈ 0.347 USD/M，比 gpt-4o 便宜约 7 倍。
+### P0-5　用量记录链路　【v3 状态：半修，仍需补】　⚠️
 
-### P0-5　用量记录链路是坏的 → 自适应没有燃料
+v3 复核发现编排路径已部分修复，但 chat 路径仍坏：
 
-全仓只有一个 `insert_usage` 调用点，在 `server.rs:398`：
+- **`chat_stream`（server.rs:391-404）**：拿到 `ChatResult{cost, input_tokens, output_tokens, model}`
+  却**从不调用 `insert_usage`** → 简单问答零用量记录。
+- **`orchestrate_stream`（server.rs:486-493）**：已在 `result` 事件里调用
+  `db::insert_usage(&model, "default", in_tok, out_tok, cost, None, is_hit)` ——
+  token/cost 已是真实值（从 Python `usage_ref` 读，非写死 0），**但 `task_type` 仍传 `None`、
+  `model` 取不到时回落 `"default"`、且无 `latency_ms`/`request_id`**。
+- `usage_records` 表（`db.rs:24`）**无 `latency_ms`/`request_id`/`task_type` 已有列**——`task_type` 列存在但未被填充。
 
-```rust
-let _ = db::insert_usage(&model, "default", 0, 0, 0.0, None, is_hit);
-```
+结论：自适应燃料缺口缩小到「chat 路径零记录 + 编排路径 task_type 缺失 + 无延迟维度」。P1.a 范围相应收窄。
 
-tokens 和 cost 写死 0、`task_type` 传 None、`model` 取不到时回落成字符串 `"default"`，
-而且只在语义缓存事件里触发。`chat_stream` 明明拿到了
-`res.cost / res.input_tokens / res.output_tokens`（`server.rs:331-341`）却**从不落库**。
+### P1-6　预算未接入决策链　【仍成立】
 
-**没有真实用量数据，任何「自适应」「预算动态调整」都无从谈起。这是所有后续工作的前置。**
+`check_budget`（server.rs:195-211）实现完整（`get_budget`+`get_total_spend`→`within_budget`），
+路由注册于 `server.rs:767`。但 `chat_stream`/`orchestrate_stream` **从不调用它**——
+预算纯展示（`UsagePage.tsx` 进度条），不构成约束。
 
-### P1-6　预算未接入决策链
+### P1-7　无 fallback、无健康感知　【仍成立】
 
-`/api/budgets/check`（`server.rs:174`）实现完整，但 `chat_stream` / `orchestrate_stream`
-**从未调用它**。预算目前纯展示（`UsagePage.tsx` 画个进度条），不构成任何约束。
+`legacy` 的「5 级 failover」未移植。单点失败即整体失败，无重试/降级/熔断/健康记录。
 
-### P1-7　无 fallback、无健康感知
+### P1-8　`stream` 标志硬编码　【仍成立】
 
-README 宣称「5 级故障转移」，那是 `legacy` 分支的遗产，v2 没有移植。
-当前单点失败即整体失败，没有重试、降级、熔断，也没有任何模型健康状态记录。
+`INFERENCE_MODELS`（router.rs:22）= 4 个写死名字。新增模型 `stream` 永远 false。
 
-### P1-8　`stream` 标志硬编码
+### P2-9　任务分配经济次优　【仍成立，未修】
 
-`INFERENCE_MODELS` 是 4 个写死的名字。用户新增的任何模型，`stream` 永远是 `false`。
-
-### P2-9　任务分配本身在经济上是次优的
-
-用**反推出的真实价格**重算（混合成本 = 输入 + 2×输出，近似 1:2 的 chat 收发比）：
+反推真实价重算（混合成本 = 输入 + 2×输出，元/百万）：
 
 | 模型 | 输入 | 输出 | 混合成本 | 相对 |
 |---|---|---|---|---|
@@ -127,580 +123,657 @@ README 宣称「5 级故障转移」，那是 `legacy` 分支的遗产，v2 没�
 | qwen3-max | 2.5 | 10.0 | **22.5** | 4.7× |
 | qwen3.6-plus | 2.0 | 12.0 | **26.0** | 5.4× |
 
-由此暴露两处明确的误配：
-
-- **`qwen3.6-flash` 比 `qwen-plus` 贵 3.3 倍**，但当前 `simple_qa` 偏好表和
-  `DECOMPOSER_PREFERENCE`（`ai_service.py:549`）都把 flash 排在 plus 之前。
-  名字里的 "flash" 只代表快，不代表便宜。**内部分解/分类路径换用 qwen-plus 可直接省约 69%。**
-- **`qwen3.6-plus` 被 `qwen3-max` 全面支配**：max 更便宜（22.5 vs 26.0）且能力更强，
-  但 `complex_reasoning` 当前首选 `qwen3.6-plus`。唯一例外是长上下文——qwen3-max
-  是阶梯定价（32K–128K 涨到 4/16，128K–252K 涨到 7/28），而 3.6-plus 支持 1M 窗口。
-  **所以正确做法不是换个静态首选，而是让路由感知阶梯定价 + 上下文长度。**
+两处误配：
+- **qwen3.6-flash 比 qwen-plus 贵 3.3×**，但 `TASK_MODEL_PREFERENCE` 的 `simple_qa`（ai_service.py:889）
+  与 `DECOMPOSER_PREFERENCE`（ai_service.py:886）都把 flash 排在 plus 前。名字 flash 只代表快不代表便宜。
+  **内部分解/分类换 qwen-plus 直接省约 69%。**
+- **qwen3.6-plus 被 qwen3-max 全面支配**（max 更便宜且更强），但 `complex_reasoning` 首选 3.6-plus。
+  例外：qwen3-max 阶梯定价（32K–128K→4/16，128K–252K→7/28），3.6-plus 支持 1M 窗口 →
+  长上下文才该用 3.6-plus。**正解：路由感知阶梯价 + 上下文长度，而非换静态首选。**
 
 ---
 
-## 三、外部依据（v2 大幅扩充）
+## 三、外部依据（v2 引入，v3 保留）
 
-### 3.1 路由范式与收益（业界实测，含诚实口径）
+### 3.1 路由范式与收益（诚实口径）
 
-| 范式 | 机制 | 实测收益 | 代价 |
-|---|---|---|---|
-| Classifier 分类路由 | 轻量分类器一次性判难度 | RouteLLM（ICLR 2025）：MT-Bench 省 85%、MMLU 省 45%、GSM8K 省 35%，均保 95% GPT-4 质量 | 需标注数据；判错直接损质 |
-| Cascade / 级联 | 先便宜跑，质量不足再升级 | FrugalGPT：HEADLINES 省 80% 且精度 +1.5%（最好情形 98%）；AutoMix（NeurIPS 2024）：自验证决定升级，省 >50%；BEST-Route（ICML 2025，微软）：联合路由「模型 × 采样次数」，省 60% 且性能降 <1% | 困难样例延迟翻倍；开放式生成需质量裁判而非置信度 |
-| Stage / 执行期路由 | 用对话内信号（工具结果、错误、进度）路由，不额外调模型 | Switchyard 合作伙伴 Cognition：FrontierCode Main 距 Opus 5 精度差 2.8 点，成本降 28% | 需要执行事件流（LLooM 已有 `task_done.error`） |
-| Escalation 升级 | 每轮先跑弱层，裁判读答案再决定升级 | Switchyard 合作伙伴 LangChain：145 个多轮 Deep Agents 任务，成本降 74%（仅 7% 调用走前沿模型），精度损失约 6 点 | 每请求多一次裁判调用 |
-| Semantic 语义路由 | 向量比对意图样例 | 适合固定领域分流；LLooM 语义缓存实测同义改写聚 0.81、异话题 ≤0.53 | 需维护意图库 |
-| 编排路由 | 分解 → 子任务级分配 → 聚合 | R2-Router：查询分解为子任务、跨异构 LLM 分配；Switchyard 内部基准：成本降到单独用 Opus 4.8 的约 1/3 | 系统复杂度最高 |
-
-**重要修正（诚实口径）**：路由收益不是常数而是区间（RouteLLM 35–85%），**完全由负载难度分布决定**——
-开放式 chat 大多简单（仅 14–26% 需强模型），知识考试型负载大多困难（54% 需强模型）。
-Amazon Bedrock 智能路由官方口径：平均省 30%，按模型族分 16%（Llama）~56%（Anthropic），
-路由开销约 85ms。任何验收目标都应写成「随负载难度可变」的形式，而不是固定百分比。
-
-可直接采纳的六条经验：
-1. **按任务类型分别设阈值/权重**。全局单一策略在异构负载下明显欠优。
-2. **上线前影子评测**：双跑廉价/强模型，只返回路由结果、两者都记日志，抽样人评确认后再切流。
-3. 分类器可跨模型对迁移，训练样本 ~1500 条即有效；路由本身开销目标 <100ms。
-4. **级联/升级只用于非实时路径**（编排、批处理），`chat/stream` 保持一次性分类路由。
-5. **先规则路由兜底、后学习路由**：在没建立夜间评测回路之前，把「确定简单」的任务
-   （抽取、分类、格式化）固定给轻量档，其余走强模型；有评测回路后再放开。
-6. **RouterBench 的 AIQ 指标**思路可借用：以「全弱基线」为下界、「全强基线」为上界，
-   衡量路由器填补差距的比例（0..1），综合所有预算水平打分，而非单点。
-
-### 3.2 NeMo Switchyard：决策信号、算法族与可观测性
-
-NVIDIA 2026-08-11 发布的 Rust 路由库（pre-alpha，v0.2.0）。**定位与 LLooM 高度同构**
-——Rust 代理/库、多后端、按策略路由、协议翻译——但**不直接引入依赖**（pre-alpha，API 会破坏性变更），
-只借鉴三个层面的设计：
-
-**（a）决策信号的三分类**（这是它对 LLooM 最有价值的贡献）：
-
-| 信号类别 | Switchyard 信号源 | LLooM 对应物 |
+| 范式 | 实测收益 | 代价 |
 |---|---|---|
-| 模型能力（能否做对） | logprobs、agentic trace、分类器 | `capability_tier` + `quality_score`/`ewma_quality`（v1 已设计） |
-| 模型成本画像 | 延迟、成本、冗余度 | `price_tiers_json` + `avg_latency_ms` + `avg_cost`（v1 已设计） |
-| 基础设施状态 | 负载、错误、定价 | `health_state` + 预算水位 + 定价表新鲜度（v2 新增） |
+| Classifier 分类路由 | RouteLLM（ICLR 2025）：MT-Bench 省 85%、MMLU 45%、GSM8K 35%，保 95% GPT-4 质量 | 需标注；判错损质 |
+| Cascade/级联 | FrugalGPT 最好情形 98%；AutoMix（NeurIPS 2024）>50%；BEST-Route（ICML 2025）60%/<1%降 | 困难样例延迟翻倍；开放式需 judge |
+| Stage 路由 | Cognition：距 Opus 5 差 2.8 点，成本降 28% | 需执行事件流（LLooM 已有 `task_done.error`） |
+| Escalation 升级 | LangChain：145 任务成本降 74%（仅 7% 走前沿），精度损约 6 点 | 每请求多一次裁判 |
+| 编排路由 | R2-Router：子任务级分配；Switchyard 内部基准：成本降到 Opus 4.8 独跑的约 1/3 | 系统复杂度最高 |
 
-**（b）四种路由算法与 LLooM 的映射**：
+**诚实口径**：收益 35–85% 取决于负载难度分布（chat 简单 14–26% 需强模型，知识考试 54% 需强模型）；
+Bedrock 官方 16–56%、开销约 85ms。验收写「随难度可变」的 AIQ 式指标，不承诺固定百分比。
 
-| Switchyard 算法 | 机制 | LLooM 落点 |
-|---|---|---|
-| Random | 加权分流，A/B 与成本实验 | P5 影子评测的对照分流（做基线对比用） |
-| LLM classifier（capability） | 分类器判请求走弱/强层 | 现有 `ai_client::classify` 兜底的正规化（低置信才触发） |
-| LLM classifier（escalation） | 先跑高效层，裁判读答案决定是否送强层 | **P4 新增**：编排路径的升级重试 |
-| Stage router | 用对话内信号（工具结果、错误、进度）选模型，不额外调模型 | **P4 新增**：`task_done.error` / 子任务失败即现成的 stage 信号 |
+六条经验：①按任务类型分别设权重；②上线前影子评测；③分类器 ~1500 样本即有效、开销 <100ms；
+④级联只用于非实时路径；⑤先规则兜底后学习路由；⑥RouterBench 的 AIQ 思路（全弱下界/全强上界/填补比例）。
 
-**（c）可观测性设计**（直接抄）：
-- 每次路由记录五元组：**所选模型、决策依据、token 用量、延迟、调用结果** → 本计划新增
-  `routing_decisions` 审计表（P1）。
-- 暴露 **routing overhead（路由开销）** 为一等指标 → 路由自身耗时（信号提取 + 决策）
-  必须与模型调用耗时分开统计，并设预算（<100ms，启发式快路径 <10ms）。
-- libsy 的 **Step 流**心智模型（库只产决策流、宿主自己执行调用）= 本计划 P0.f
-  「Rust 决策 / Python 执行」分离的同款设计，验证了该路线可行。
+### 3.2 NeMo Switchyard（借鉴设计，不引入依赖，pre-alpha v0.2.0）
 
-### 3.3 vLLM Semantic Router：信号—投影—决策三层控制面
+- 决策信号三分类 → LLooM：能力（`quality_score`/`ewma_quality`）、成本画像（`price_tiers_json`+`avg_latency`）、
+  基础设施（`health_state`+预算水位+定价新鲜度）。
+- 四算法映射：Random（影子评测基线）/ LLM classifier capability（`ai_client::classify` 正规化）/
+  escalation（P4 编排升级）/ stage_router（`task_done.error` 即现成 stage 信号）。
+- 可观测：每次路由记五元组（所选模型/决策依据/token/延迟/结果）→ `routing_decisions` 表；
+  routing overhead 为一等指标（与模型调用耗时分开，预算 <100ms）。
+- libsy Step 流 = P0.f「Rust 决策 / Python 执行」分离的同款设计。
 
-vLLM 社区把路由做成 Envoy ext_proc 控制平面。**不引入 Envoy**（对单机 LLooM 过重），
-但它的三层架构正是把 LLooM 现在「散落在 security.rs / router.rs / ai_service.py 里的
-检测逻辑」组织起来的正确方式：
+### 3.3 vLLM Semantic Router（信号—投影—决策三层，不引入 Envoy）
 
 ```
-信号 Signal（检测，只回答"看到了什么"）
-  ├─ 启发式：authz / conversation / context / keyword / language / structure / event / metadata
-  └─ 学习型：classifier / complexity / domain / embedding / modality / fact-check / jailbreak / pii / preference / reask / kb / user-feedback
-
-投影 Projection（协调竞争的信号，产出中间事实）
-  ├─ partitions：独占域分区（多信号竞争时选出唯一意图）
-  ├─ scores：加权聚合分（如 request_difficulty = Σ wᵢ·signalᵢ）
-  └─ mappings：阈值分带（score → easy/medium/hard 档位名）
-
-决策 Decision（策略规则，回答"该做什么"）
-  └─ 对信号/投影的 AND/OR 规则 → 活动路由 + 模型候选集
+信号 Signal（检测，只答"看到了什么"）
+  启发式：authz/conversation/context/keyword/language/structure/event/metadata
+  学习型：classifier/complexity/domain/embedding/modality/fact-check/jailbreak/pii/preference/reask/kb/user-feedback
+投影 Projection（协调）：partitions（独占域）/ scores（weighted_sum）/ mappings（threshold_bands → easy/medium/hard）
+决策 Decision（规则）：对信号/投影的 AND/OR → 候选集
 ```
 
-它的 YAML 契约示例（值得抄结构）：
+LLooM 现有组件映射（收敛现状，非重写）：
 
-```yaml
-routing:
-  signals:
-    keywords:  [{name: urgent_keywords, operator: OR, keywords: [urgent, asap]}]
-    embeddings: [{name: technical_support, threshold: 0.75, candidates: [...]}]
-  projections:
-    scores:    [{name: request_difficulty, method: weighted_sum,
-                 inputs: [{type: embedding, name: technical_support, weight: 0.18}]}]
-    mappings:  [{name: request_band, source: request_difficulty, method: threshold_bands,
-                 outputs: [{name: escalated, gte: 0.25}]}]
-```
-
-**LLooM 现有组件 → 信号层的映射**（这张表说明三层架构不是推倒重来，而是收敛现状）：
-
-| LLooM 现有组件 | 语义路由概念 | 类型 |
+| 现有组件 | → 信号 | 类型 |
 |---|---|---|
-| `security::check`（PII/越狱拦截） | 信号 `pii` / `jailbreak` | 学习型（已有） |
-| `rule_classify` 4 组正则 | 信号 `keyword` / `structure` | 启发式（已有，待正规化） |
-| `ai_service.py::_is_complex` / `_is_comparison` | 信号 `complexity` / `structure` | 启发式（已有，在 Python 侧，应上移 Rust） |
-| `ai_client::classify` LLM 兜底 | 信号 `classifier` | 学习型（已有，低置信才触发） |
-| 语义缓存 embedding（all-MiniLM-L6-v2） | 信号 `embedding` + 插件 `response_cache` | 学习型（已有） |
-| `cache_feedback` 点赞点踩 + 灰区问 | 信号 `user-feedback` | 学习型（已有） |
-| 短间隔重问检测 | 信号 `reask`（隐式不满） | **待新增**：同对话内相似度 >阈值 且间隔 <N 分钟 → 负反馈信号 |
-| token 数 / 上下文长度 | 信号 `context` | 启发式（tiktoken 已有） |
-| 预算水位 | 决策策略输入 | 已有（待接入） |
-
-插件链思想（response_cache / jailbreak / pii / system_prompt 在同一条请求处理链上，
-每个可独立开关）也与 LLooM「安全检查 → 缓存 → 路由」的既有顺序吻合，正规化为
-可配置插件即可。
+| `security::check` | `pii`/`jailbreak` | 学习型（已有） |
+| `router::rule_classify` 4 组正则 | `keyword`/`structure` | 启发式（待正规化） |
+| `ai_service.py::_is_complex`/`_is_comparison`（947/935） | `complexity`/`structure` | 启发式（待上移 Rust） |
+| `ai_client::classify` LLM 兜底 | `classifier` | 学习型（低置信才触发） |
+| 语义缓存 embedding | `embedding` + 插件 `response_cache` | 学习型（复用向量） |
+| `cache_feedback` 点赞点踩 | `user-feedback` | 学习型（已有） |
+| 短间隔重问 | `reask`（隐式不满） | 待新增 |
+| tiktoken 上下文计数 | `context` | 启发式 |
 
 ### 3.4 定价与元数据源实测（2026-08-24 复测）
 
-| 数据源 | 覆盖 | 新鲜度 | 本机可达性 | 实测结论 |
-|---|---|---|---|---|
-| litellm 打包表 `litellm.model_cost` | 2982 条 | 随 pip 包版本 | ✅ 本地 | gpt-4o ✅ / deepseek-chat ✅ / **qwen-plus、qwen-max ❌ MISS** |
-| litellm GitHub raw `model_prices_and_context_window.json` | 同上但最新 | 社区 PR，调价后 1–3 天更新 | ⚠️ 远端拉取 SSL 校验失败（既有问题），需镜像 | 同覆盖，作为刷新源 |
-| models.dev `api.json` | 75+ 提供商、2000+ 模型，含 cost/1M、context、cache 价 | 社区 PR | ⚠️ 本机直连被重置，可经镜像/代理 | **实测无 dashscope/aliyun 条目**；七牛托管 qwen3-max 等（context 262144）但**无 cost 字段**；国际模型与 context window 可作补充源 |
-| OpenRouter `GET /api/v1/models` | 400+ 模型 | **实时**（唯一 live 源） | 未启用 OpenRouter 前不适用 | 若未来走 OpenRouter，可用响应内 `usage.cost` 直接对账 |
-| 项目 overlay `model_catalog.json` | 自维护 | 手动 | ✅ | **唯一能覆盖百炼/国产模型的层，必须保留并作为主要维护面** |
+| 源 | 覆盖 | 本机可达 | 结论 |
+|---|---|---|---|
+| litellm 打包表 `litellm.model_cost` | 2982 条 | ✅ 本地 | gpt-4o✅ deepseek-chat✅ **qwen-plus/qwen-max ❌ MISS** |
+| litellm GitHub raw | 同上最新 | ⚠️ SSL 失败→走镜像 | 刷新源 |
+| models.dev `api.json` | 75+ provider/2000+ | ⚠️ 直连被重置→镜像 | **无 dashscope 条目**；七牛托管 qwen 但无 cost；国际模型+context 补充源 |
+| OpenRouter `/api/v1/models` | 400+，实时 | 未启用前不适用 | 未来 `usage.cost` 对账源 |
+| 项目 overlay `model_catalog.json` | 自维护 | ✅ | **唯一覆盖百炼的层** |
 
-结论：
-1. **百炼系模型在所有自动源中均无价格**——overlay 不是可选项而是必需品；
-2. 动态更新的正确形态是「**快照优先 + 定期刷新 + 人工校准覆盖**」，而不是依赖实时 API
-   （唯一实时源 OpenRouter 不在当前供应商组合内）；
-3. 本机网络受限 + SSL 问题 → 刷新走镜像（jsdelivr / ghproxy 类，项目已有 GH_MIRROR 基建），
-   失败静默保持本地值并标陈旧。
+结论：①百炼在所有自动源均无价 → overlay 必需；②正确形态 = 快照+刷新+overlay+人工校准；
+③受限网络走镜像（jsdelivr/ghproxy，复用 `GH_MIRROR`），失败静默保持本地值并标陈旧。
 
-### 3.5 自进化路由研究（新证据）
+### 3.5 自进化路由研究
 
-- **Router-R1（2026）**：用 RL 把路由建模为序列决策，路由器本身是 LLM，交错 think/route 动作，
-  奖励 = 格式正确性 + 结果质量 + 成本。**关键突破：以「模型描述符」（价格、延迟、样本表现）
-  为条件，路由器能泛化到训练时未见过的模型**——用 10 个模型训练，能正确路由第 11 个没见过的。
-  这直接验证了本计划 P0「注册表驱动 + 描述符评分」的路线：**路由决策只看模型属性、不看模型名**。
-- **R2-Router**：把查询分解为子任务、跨异构 LLM 分配——正是 LLooM 编排路径的目标形态，
-  验证「子任务级分配」优于「整请求单点路由」。
-- **BEST-Route（ICML 2025）**：联合优化「选哪个模型 × 采样几次」省 60%——远期可借鉴
-  （对低置信请求并行采样两个轻量档 + 裁决，而不是直接上强模型）。
-
-### 3.6 对本项目的六条结论
-
-1. 三层架构（信号→投影→决策）用来**收敛**现有散落的检测逻辑，不是重写；
-2. Switchyard 的 stage router / escalation 正好补上 LLooM 编排路径缺失的「执行期智能」；
-3. 定价表做成「快照 + 刷新 + overlay + 人工校准」四级体系，百炼模型靠 overlay；
-4. 「描述符条件化」（不看模型名只看属性）是自适应任意模型集的正确路线，已有学界验证；
-5. 收益预期按负载难度写区间，验收用 AIQ 式指标而不是固定百分比；
-6. 一切学习型信号（EWMA、阈值自校准、影子评测）都以 P1.a 真实用量落库为前置。
+- **Router-R1（2026）**：RL 序列决策路由器，**以模型描述符（价格/延迟/样本表现）为条件 → 泛化到未见模型**
+  （10 个训练能路由第 11 个）。验证 P0「注册表驱动 + 描述符评分」路线。
+- **R2-Router**：查询分解为子任务跨异构 LLM 分配 → 编排路径目标形态。
+- **BEST-Route（ICML 2025）**：联合「模型×采样次数」省 60% → 远期对低置信请求并行采样两轻量档+裁决。
 
 ---
 
 ## 四、目标架构：信号—投影—决策管线
 
-### 4.1 总览
-
 ```
-请求（chat/stream 或 orchestrate/stream）
-  │
-  ▼
-┌─────────────────── 信号层（检测，只答"看到了什么"）───────────────────┐
-│ 启发式快路径（<10ms，纯 Rust）：                                      │
-│   keyword/structure 正则 · context token 数 · language · budget 水位  │
-│ 学习型慢路径（按需触发）：                                            │
-│   embedding（复用语义缓存向量）· complexity · pii/jailbreak（已有）    │
-│   classifier（LLM 兜底，仅启发式低置信时触发，预算 <100ms）           │
-└──────────────────────────────────────────────────────────────────────┘
-  │  命名信号集
-  ▼
-┌─────────────────── 投影层（协调，产出中间事实）─────────────────────┐
-│ difficulty = weighted_sum(structure, complexity, context, embedding)  │
-│ band = threshold_bands(difficulty) → {easy | medium | hard}           │
-│ intent/partition = 多信号竞争时选出唯一 task_type                     │
-└──────────────────────────────────────────────────────────────────────┘
-  │  task_type + band + 约束（tools/vision/context/预算档）
-  ▼
-┌─────────────────── 决策层 plan()（门槛 + 加权评分）─────────────────┐
-│ 硬门槛：is_active · capability_tier ≥ 档位 · context_window 够 ·      │
-│         health ≠ down · supports_tools/vision · est_cost ≤ 上限        │
-│ 软评分：q_w·质量 − c_w·阶梯价成本 − l_w·延迟 + 0.05·priority          │
-│ 产出：主选 + 按 score 降序的 fallback 链（depth = fallback_depth）     │
-│ 产出：审计记录（候选集/各项得分/选中理由）→ routing_decisions 表      │
-└──────────────────────────────────────────────────────────────────────┘
-  │
-  ▼
-执行（Python 纯执行器；编排路径见 §4.5）
-  │  SSE: usage(tokens/cost/latency) · cache_hit · error
-  ▼
-┌─────────────────── 反馈闭环 ───────────────────────────────────────┐
-│ usage_records（真实燃料）→ model_task_score.EWMA 更新               │
-│ user-feedback / reask → 质量信号                                    │
-│ 影子评测 + AIQ 式离线重放 → 策略调参                                │
-│ 定价刷新 job → price_source/updated_at/stale 维护                   │
-└────────────────────────────────────────────────────────────────────┘
+请求 → [信号层] 启发式快路径(<10ms) + 学习型慢路径(按需,<100ms)
+      → [投影层] difficulty=Σwᵢ·signal / band=easy|medium|hard / intent=task_type
+      → [决策层 plan()] 硬门槛过滤 + 加权评分 → 主选 + fallback 链 + 审计
+      → [执行] Python 纯执行器 / 编排路径 stage 信号升级
+      → [反馈] usage→EWMA / feedback→质量信号 / 影子评测+AIQ / 定价刷新
 ```
 
-### 4.2 与 v1 计划的关系
+- v1 的 `plan()`（门槛+评分+fallback）保留为决策层；v2 新增信号/投影层把难度从布尔升级为加权分+分带。
+- 信号层配置化：命名注册，决策只引用名字；落地 = `lloom-core/src/signals.rs` + DB `settings` KV 存阈值。
 
-v1 的 `plan()`（门槛 + 评分 + fallback 链）**原样保留为决策层**；v2 新增的是：
-信号层把散落的检测正规化为命名信号（`security::check`、正则、`_is_complex`、
-embedding 复用各归其位），投影层把「难度」从单点布尔（complex/simple）升级为
-加权分 + 分带（easy/medium/hard），使三档能力分层（tier 1/2/3）有了明确对接点。
+### 4.4 执行期 stage 信号与升级（编排路径）
+`task_done.error` 非空 → 子任务按 fallback 链降级重试一次（记 `escalation_count`）；重试仍失败如实汇报；
+连续 ≥2 失败 → 剩余子任务整体升一档；全绿且耗时 <P50 → 同批后续可降一档试探（失败回滚）。
 
-### 4.3 信号层配置化（借语义路由的契约思想）
-
-信号以命名注册，决策只引用名字（不内联检测逻辑）。落地形态：Rust 侧一个
-`signals` 模块 + DB `routing_config` KV 表存阈值（如 reask 判定的相似度/间隔、
-classifier 触发的置信下限、difficulty 各信号权重）。WebUI 暴露为「路由策略」页。
-
-### 4.4 执行期 stage 信号与升级（编排路径，Switchyard 借鉴）
-
-LLooM 编排事件流里已有现成的 stage 信号源：
-- `task_done.error`（子任务失败）→ **升级重试**：失败子任务换 fallback 链下一档
-  （或直接按 `capability_tier+1` 重选）重试一次，重试即记 `escalation_count`；
-- 子任务全部成功且质量信号正常 → 后续同类子任务可降档试探（成本优化）；
-- 连续失败/循环 → 整体升级到强模型并标记本次编排「高难」回写 `model_task_score`。
-
-### 4.5 Escalation 模式（可选开关，仅编排路径）
-
-开关打开时：子任务先跑评分最高的**轻量档**候选，产出后由裁判信号判断质量
-（结构化输出解析成功 / 长度合理 / 无错误标记）——不达标才升级强档。
-裁判优先用**零成本信号**（解析成功、JSON schema 校验），不够时才用 LLM judge。
-对应 LangChain 实测：74% 成本下降、约 6 点精度代价——所以做成**按 task_type 可关**的旋钮。
+### 4.5 Escalation 模式（可选，仅编排路径）
+开关打开时子任务先跑轻量档，裁判信号判质量（结构化解析成功/JSON schema 校验=零成本信号优先，
+不够才用 LLM judge）→ 不达标升级强档。默认只对 `decompose`/`classify`/`simple_qa` 这类
+「解析即判对错」任务开启；开放式不开启（置信度不可靠）。
 
 ---
 
-## 五、优化计划
+## 五、优化计划（v3 落实技术细节）
 
-### 设计原则（v1 保留 + v2 增补）
-
-1. **单一真源**：路由策略下沉到 SQLite + 配置。Rust 是唯一决策者，Python 降级为纯执行器。
-2. **注册表驱动 / 描述符条件化**：路由只在「当前 is_active 的模型」里做选择，代码里不出现
-   任何具体模型名；决策只依赖模型属性（tier/价格/窗口/实测质量），Router-R1 已验证此路线
-   可泛化到未见模型。
-3. **决策可解释**：每次路由输出候选集、各项得分、选中理由（审计落库 + SSE 头部）。
-4. **量纲统一**：全库统一为 **USD per token**，写入前强制归一。
-5. **（v2 新增）路由自身有预算**：启发式快路径 <10ms，含 LLM 分类器 <100ms，
-   routing overhead 与模型调用耗时分开统计。
-6. **（v2 新增）检测与决策分离**：信号只答「看到了什么」，决策只答「该做什么」，
-   两者都可独立增删配置。
+### 设计原则
+1. 单一真源（Rust 决策，Python 纯执行）；2. 注册表驱动/描述符条件化（不看模型名，Router-R1 验证）；
+3. 决策可解释（审计+ SSE 头）；4. 量纲统一 USD/token；5. 路由自身有预算（<10ms/<100ms）；
+6. 检测与决策分离。
 
 ---
 
-### 阶段 P0：拆掉硬编码，让注册表驱动路由
+### 阶段 P0：拆硬编码，注册表驱动路由
 
-**目标：用户增删任何模型，路由立刻自适应，不改一行代码。**
-
-#### P0.a　修数据（先做，否则后面全是错的）
+#### P0.a　修数据 + 写入断言
 
 ```sql
--- DashScope 系列统一除以 10，修正量纲
+-- 幂等：只在量纲仍错（DashScope 且单价 >1e-5）时执行
 UPDATE models SET input_cost_per_token  = input_cost_per_token  / 10.0,
                   output_cost_per_token = output_cost_per_token / 10.0
-WHERE provider = 'dashscope';
+WHERE provider = 'dashscope' AND input_cost_per_token > 1.0e-5;
 ```
-并在 `Model` 写入路径加断言：单价落在 `[1e-9, 1e-3]` USD/token 之外则拒绝并提示。
 
-#### P0.b　扩展模型元数据（v2 增补定价溯源三列）
+写入断言加在 `db::insert_model` 与 `db::update_model`：
+```rust
+fn validate_cost(in: f64, out: f64) -> Result<()> {
+    const LO: f64 = 1e-9; const HI: f64 = 1e-3; // USD/token
+    if !(in == 0.0 || (LO..=HI).contains(&in)) || !(out == 0.0 || (LO..=HI).contains(&out)) {
+        return Err(AppError::InvalidRequest(format!(
+            "单价越界 [1e-9, 1e-3] USD/token: in={in} out={out}；疑似量纲错误（百炼价是否忘了 /10 或汇率）")));
+    }
+    Ok(())
+}
+```
+`insert_model`（db.rs:120）在执行前调 `validate_cost`；`update_model`（db.rs:176）当 updates 含
+`input_cost_per_token`/`output_cost_per_token` 时调。**两者都已校验完才写库**，否则 422 拒绝。
+
+#### P0.b　扩展模型元数据（含 v2 定价溯源三列）
+
+**幂等迁移**（放 `db::init_db` 后或单独 `migrate_v2()`，每条 `ALTER` 先查 `PRAGMA table_info(models)` 去重）：
 
 ```sql
-ALTER TABLE models ADD COLUMN capability_tier   INTEGER DEFAULT 2;  -- 1 轻量 / 2 通用 / 3 强推理
-ALTER TABLE models ADD COLUMN quality_score     REAL    DEFAULT 0.6; -- 0..1 成效基准分
+ALTER TABLE models ADD COLUMN capability_tier   INTEGER DEFAULT 2;
+ALTER TABLE models ADD COLUMN quality_score     REAL    DEFAULT 0.6;
 ALTER TABLE models ADD COLUMN context_window    INTEGER DEFAULT 32768;
 ALTER TABLE models ADD COLUMN supports_tools    INTEGER DEFAULT 0;
 ALTER TABLE models ADD COLUMN supports_vision   INTEGER DEFAULT 0;
-ALTER TABLE models ADD COLUMN supports_stream   INTEGER DEFAULT 1;   -- 取代 INFERENCE_MODELS
+ALTER TABLE models ADD COLUMN supports_stream   INTEGER DEFAULT 1;
 ALTER TABLE models ADD COLUMN is_local          INTEGER DEFAULT 0;
-ALTER TABLE models ADD COLUMN priority          INTEGER DEFAULT 0;   -- 用户手动置顶 / 降权
-ALTER TABLE models ADD COLUMN price_tiers_json  TEXT;                -- 阶梯定价
+ALTER TABLE models ADD COLUMN priority          INTEGER DEFAULT 0;
+ALTER TABLE models ADD COLUMN price_tiers_json  TEXT;
 ALTER TABLE models ADD COLUMN cached_input_cost_per_token REAL DEFAULT 0;
-ALTER TABLE models ADD COLUMN health_state      TEXT    DEFAULT 'unknown';
+ALTER TABLE models ADD COLUMN health_state      TEXT DEFAULT 'unknown';
 ALTER TABLE models ADD COLUMN health_checked_at TIMESTAMP;
 ALTER TABLE models ADD COLUMN needs_calibration INTEGER DEFAULT 1;
--- v2 新增：定价溯源（供 §P2 动态更新使用）
-ALTER TABLE models ADD COLUMN price_source     TEXT DEFAULT 'unknown'; -- manual > overlay > litellm_remote > litellm_packaged > heuristic
+ALTER TABLE models ADD COLUMN price_source     TEXT DEFAULT 'unknown';
 ALTER TABLE models ADD COLUMN price_updated_at TIMESTAMP;
-ALTER TABLE models ADD COLUMN price_stale      INTEGER DEFAULT 0;  -- 刷新发现 >20% 偏差且非 manual 来源时置 1
+ALTER TABLE models ADD COLUMN price_stale      INTEGER DEFAULT 0;
 ```
 
-`price_tiers_json` 形如
-`[{"max_input":32768,"in":3.47e-07,"out":1.39e-06},{"max_input":131072,...}]`。
+`price_tiers_json` 形如 `[{"max_input":32768,"in":3.47e-07,"out":1.39e-06},...]`（USD/token，升序按 max_input）。
+来源优先级：`manual > overlay > litellm_remote > litellm_packaged > heuristic`（manual 永不自动覆盖）。
 
-**价格来源优先级**（写入与刷新都遵守）：`manual`（用户在控制台核对过，最高，刷新不覆盖）
-> `overlay`（项目 catalog）> `litellm_remote`（GitHub raw 刷新）> `litellm_packaged`（本地快照）
-> `heuristic`（名称启发式，标 `needs_calibration=1`）。
+**联动改动清单**（新增列必须同步改这些点，否则读不到/写不进）：
+1. `models.rs::Model` 结构体加全部新字段（带 `#[serde(default)]`）。
+2. `db.rs::model_from_row`（229）加 `row.get("capability_tier")?` 等读取。
+3. `db.rs::insert_model`（120）SQL 列与 `params!` 补新字段（非用户填的给默认/由 P0.e 回填）。
+4. `db.rs::update_model` 的 `ALLOWED` 白名单（184）加：`capability_tier`/`priority`/`quality_score`/
+   `context_window`/`supports_tools`/`supports_vision`/`supports_stream`/`is_local`/`price_tiers_json`/
+   `input_cost_per_token`/`output_cost_per_token`/`price_source`/`is_active`（用户可在 UI 改这些）。
+   ⚠️ `health_state`/`needs_calibration`/`price_stale` 由系统写，**不放白名单**（防用户手改）。
+5. `models.rs::Model::to_ai_spec`（43）：Python 端只需 `name/litellm_model/api_base/api_key/cost`，
+   **新字段是 Rust 决策用，不必全传 Python**（保持 ModelSpec 不变，见 P0.f 契约）。
 
-#### P0.c　新增策略表
+#### P0.c　新增策略表与审计表（幂等建表）
 
 ```sql
-CREATE TABLE routing_policy (
+CREATE TABLE IF NOT EXISTS routing_policy (
     task_type            TEXT PRIMARY KEY,
     min_capability_tier  INTEGER DEFAULT 1,
     cost_weight          REAL    DEFAULT 0.4,
     quality_weight       REAL    DEFAULT 0.5,
     latency_weight       REAL    DEFAULT 0.1,
-    max_cost_per_request REAL,          -- NULL = 不限
-    pinned_model         TEXT,          -- 非空 = 用户强制指定，跳过评分
+    max_cost_per_request REAL,
+    pinned_model         TEXT,
     fallback_depth       INTEGER DEFAULT 2,
-    escalation_enabled   INTEGER DEFAULT 0,  -- v2：编排路径升级开关（§4.5）
+    escalation_enabled   INTEGER DEFAULT 0,
     updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE TABLE model_task_score (         -- 自适应学到的实际成效
-    model_name        TEXT,
-    task_type         TEXT,
-    success_count     INTEGER DEFAULT 0,
-    fail_count        INTEGER DEFAULT 0,
-    escalation_count  INTEGER DEFAULT 0,
-    avg_cost          REAL    DEFAULT 0,
-    avg_latency_ms    REAL    DEFAULT 0,
-    ewma_quality      REAL    DEFAULT 0.6,
-    sample_count      INTEGER DEFAULT 0,   -- v2：保守期解除的样本阈值依据
-    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE IF NOT EXISTS model_task_score (
+    model_name TEXT, task_type TEXT,
+    success_count INTEGER DEFAULT 0, fail_count INTEGER DEFAULT 0,
+    escalation_count INTEGER DEFAULT 0,
+    avg_cost REAL DEFAULT 0, avg_latency_ms REAL DEFAULT 0,
+    ewma_quality REAL DEFAULT 0.6, sample_count INTEGER DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (model_name, task_type)
 );
-
-CREATE TABLE routing_decisions (        -- v2 新增：Switchyard 式决策审计
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id     TEXT,                -- 串联 cascade 多次调用
-    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    task_type      TEXT,
-    band           TEXT,                -- easy/medium/hard
-    signals_json   TEXT,                -- 命名信号快照（难度分、置信度、触发的正则等）
-    candidates_json TEXT,               -- 每个候选的门槛通过情况与各项得分
-    selected       TEXT,
-    fallback_chain TEXT,
-    routing_ms     REAL,                -- 路由自身开销
-    outcome        TEXT                 -- success/fail/escalated/cache_hit（事后回填）
+CREATE TABLE IF NOT EXISTS routing_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    task_type TEXT, band TEXT,
+    signals_json TEXT, candidates_json TEXT,
+    selected TEXT, fallback_chain TEXT,
+    routing_ms REAL, outcome TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rd_created ON routing_decisions(created_at);
+CREATE INDEX IF NOT EXISTS idx_rd_task ON routing_decisions(task_type);
+CREATE TABLE IF NOT EXISTS routing_calibration (   -- 影子评测（复用 cache_calibration 模式）
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    task_type TEXT, query_hash TEXT,
+    routed_model TEXT, baseline_model TEXT,
+    routed_cost REAL, baseline_cost REAL,
+    routed_quality REAL, baseline_quality REAL, label INTEGER, source TEXT
 );
 ```
 
-#### P0.d　替换决策函数
-
-`router.rs` 删掉 `TASK_MODEL_MAP`、`INFERENCE_MODELS`、`task_model_preference`，换成：
-
-```rust
-pub struct Candidate { pub model: Model, pub score: f64, pub reason: String }
-
-pub fn plan(task: &str, band: &str, policy: &RoutingPolicy, models: &[Model],
-            est_in_tokens: u32, est_out_tokens: u32) -> Vec<Candidate>
+**种子策略**（按 §P1.b 推荐分配预填，用户可改）：
+```sql
+INSERT OR IGNORE INTO routing_policy VALUES
+('simple_qa',1,0.7,0.2,0.1,NULL,NULL,2,0,CURRENT_TIMESTAMP),
+('general',2,0.5,0.4,0.1,NULL,NULL,2,0,CURRENT_TIMESTAMP),
+('coding',3,0.3,0.6,0.1,NULL,NULL,2,0,CURRENT_TIMESTAMP),
+('math_logic',3,0.3,0.6,0.1,NULL,NULL,2,0,CURRENT_TIMESTAMP),
+('complex_reasoning',3,0.2,0.7,0.1,NULL,NULL,2,0,CURRENT_TIMESTAMP),
+('decompose',1,0.6,0.3,0.1,NULL,NULL,1,1,CURRENT_TIMESTAMP),
+('aggregate',2,0.4,0.5,0.1,NULL,NULL,2,0,CURRENT_TIMESTAMP);
 ```
 
-硬门槛（gate）：`is_active` / `capability_tier` / `context_window` / `health_state` /
-`supports_*` / `est_cost ≤ max_cost_per_request`。
-软打分：`score = q_w·quality(m,task) − c_w·norm(est_cost) − l_w·norm(latency) + 0.05·priority`。
-`argmax` 为主选，其余按 score 降序取前 `fallback_depth` 个作为降级链。
+新增 CRUD：`db::{get_routing_policy(task)->Option<RoutingPolicy>, list_routing_policy(),
+upsert_routing_policy(..), insert_routing_decision(..), update_routing_decision_outcome(id,outcome),
+get_model_task_score(model,task)->Option<ModelTaskScore>, upsert_model_task_score_signal(model,task,signal:QualitySignal)}`。
+`upsert_model_task_score_signal` 内部做 EWMA（见 P1.c 公式）。
 
-候选集为空时返回明确错误（"当前无可用模型满足 X 任务的约束"），**不再伪造空 spec**。
-`stream` 改读 `supports_stream`。
+#### P0.d　替换决策函数（router.rs 核心）
 
-#### P0.e　增删模型时的自动打标（自适应核心，v2 微调解析链）
+删 `TASK_MODEL_MAP`（14）、`INFERENCE_MODELS`（22）、`task_model_preference`（119）、`select_model`（131）、
+`default_model_for_task`（74）。新增：
 
-`POST /api/models` 之后跑元数据解析，**五级兜底**：
+```rust
+// router.rs
+pub struct Candidate { pub model: Model, pub score: f64, pub reason: String }
 
-1. **litellm 打包表**（本地必有）：单价、cache 价、`max_input_tokens`、`supports_*`。
-2. **litellm 远端刷新**（若 §P2 刷新 job 可用）：GitHub raw / 镜像，覆盖调价。
-3. **models.dev**：国际模型与 context window 补充（实测无 DashScope，仅作补充源）。
-4. **项目 overlay `model_catalog.json`**：百炼/国产模型——**唯一能覆盖它们的层**。
-5. **名称启发式**（最后兜底）：`flash|mini|turbo|small|lite|air|8b|4b|1.5b`→tier 1，
-   `max|opus|ultra|pro|reasoner|thinking|r1|o1|o3`→tier 3，其余 tier 2；
-   `provider=="ollama"` 或 localhost → `is_local=1`、单价 0。命中即标 `needs_calibration=1`。
+pub struct PlanInput<'a> {
+    pub task_type: &'a str,
+    pub band: &'a str,            // easy/medium/hard（来自投影层）
+    pub policy: &'a RoutingPolicy,
+    pub models: &'a [Model],
+    pub scores: &'a ModelTaskScoreMap, // (model,task)->ewma+avg_cost+avg_latency
+    pub est_in_tokens: u32,
+    pub est_out_tokens: u32,
+    pub budget_tier: BudgetTier,  // normal/throttle/tight/protect（来自 P5）
+}
 
-`needs_calibration=1` 的模型进**保守期**：只参与低风险任务且限流，真实结果回填
-`ewma_quality`，`sample_count` 达阈值（默认 20）后解除。
+pub enum PlanError { NoCandidate(String), AllDown }
 
-删除路径：保持软删；若被删模型是 `pinned_model`，置 NULL 并提示恢复自动选择。
+pub fn plan(input: &PlanInput) -> Result<PlanOutcome, PlanError> {
+    let tier_req = band_to_min_tier(input.band); // easy→1, medium→2, hard→3
+    let mut cands: Vec<Candidate> = Vec::new();
+    for m in input.models {
+        // ── 硬门槛 gate ──
+        if m.is_active != 1 { continue; }
+        if m.capability_tier < tier_req.max(input.policy.min_capability_tier) { continue; }
+        if m.context_window < (input.est_in_tokens + input.est_out_tokens) as i64 { continue; }
+        if m.health_state == "down" { continue; }
+        // tools/vision 门槛按输入需求（PlanInput 可加 needs_tools/needs_vision）
+        let est_cost = estimate_cost(m, input.est_in_tokens, input.est_out_tokens);
+        if let Some(maxc) = input.policy.max_cost_per_request { if est_cost > maxc { continue; } }
+        // 预算保护档：tight/protect 只留 is_local 或 cost<阈值
+        if matches!(input.budget_tier, BudgetTier::Protect) && m.is_local != 1 && est_cost > 0.0 { continue; }
+        // ── 软评分 ──
+        let q = quality(m, input.task_type, input.scores); // 融合 quality_score + ewma
+        let c = normalize_cost(est_cost, input.models, input.task_type, input.scores);
+        let l = normalize_latency(m, input.task_type, input.scores);
+        let mut s = input.policy.quality_weight*q - input.policy.cost_weight*c
+                  - input.policy.latency_weight*l + 0.05*m.priority as f64;
+        if m.needs_calibration == 1 && tier_req > 1 { s -= 0.3; } // 保守期不接复杂任务
+        cands.push(Candidate{ model:m.clone(), score:s, reason: format!("q={q:.2} c={c:.2} l={l:.2}") });
+    }
+    if cands.is_empty() { return Err(PlanError::NoCandidate(
+        format!("无可用模型满足 task={} band={} 的约束", input.task_type, input.band))); }
+    cands.sort_by(|a,b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    let depth = input.policy.fallback_depth.max(1) as usize;
+    let primary = cands[0].model.name.clone();
+    let chain: Vec<String> = cands.iter().take(depth).map(|c| c.model.name.clone()).collect();
+    Ok(PlanOutcome{ primary, fallback_chain: chain, candidates: cands })
+}
 
-#### P0.f　消除双真源
+/// 阶梯价：按 est_in_tokens 选 max_input >= tokens 的最低档返回 in/out 单价。
+fn unit_price(m: &Model, est_in_tokens: u32) -> (f64, f64) {
+    if let Some(tiers) = parse_price_tiers(&m.price_tiers_json) {
+        for t in tiers { if t.max_input as u32 >= est_in_tokens { return (t.in_cost, t.out_cost); } }
+    }
+    (m.input_cost_per_token, m.output_cost_per_token)
+}
+fn estimate_cost(m: &Model, est_in: u32, est_out: u32) -> f64 {
+    let (ic, oc) = unit_price(m, est_in);
+    ic*est_in as f64 + oc*est_out as f64
+}
+```
 
-`ai_service.py` 删掉 `TASK_MODEL_PREFERENCE` / `DECOMPOSER_PREFERENCE` / `_select_model`。
-`/v1/orchestrate/stream` 请求体携带 Rust 决策好的 `{subtask_id → model_spec}`；
-分解器模型由 Rust 按 `task_type="decompose"` 走同一套评分选出。
-（对应 Switchyard libsy 的「库产决策、宿主执行」模型，业界已验证。）
+`server.rs:chat_stream`（369-380）的「伪造空 spec」删除，改用 `plan()` 结果；
+`stream` 改读 `m.supports_stream`。`route()`（router.rs:178）改造为返回 `PlanOutcome` 摘要（
+含 primary/task_type/band/method/stream），`RoutingDecision`（models.rs:146）扩字段或新增 `RoutingOutcome`。
 
-#### P0.g　（v2 新增）信号层正规化
+**单测**（`router.rs` `#[cfg(test)]`）：空候选集报错；单模型；删主选后自动改选；阶梯价交叉点
+（est_in=40000 时 qwen3-max 升档 vs 3.6-plus）；保守期模型被复杂任务剔除；预算 protect 档只剩 local。
 
-把 §4.1 的启发式信号收进 `lloom-core/src/signals.rs`：`rule_classify` 正则、
-`_is_complex`/`_is_comparison`（从 Python 上移 Rust）、tiktoken 上下文计数、
-预算水位。学习型信号暂不新增模型调用——embedding 复用语义缓存已算出的向量，
-classifier 沿用现有 LLM 兜底但加「启发式置信度低于阈值才触发」的闸门。
-本阶段**不追求信号齐备**，只求命名、可配置、有单测。
+#### P0.e　增删模型自动打标（五级兜底）
+
+```rust
+// metadata.rs (新模块)
+pub fn resolve_and_fill(m: &mut Model) {
+    // 顺序：命即填并设 price_source，后级不覆盖高级
+    // 1. litellm 打包表（运行时 import litellm.model_cost，字段映射）
+    // 2. litellm 远端刷新结果（若 P2 job 已落库，读 price_source=='litellm_remote' 的值）
+    // 3. models.dev api.json（镜像拉取，补 context_window + 国际模型；实测无 dashscope）
+    // 4. overlay: data/model_catalog.json[{provider}/{name}] → cost/tiers/quality/context/supports
+    // 5. 启发式（最后兜底）
+    fill_from_litellm_packaged(m).or_else(|| fill_from_remote(m))
+        .or_else(|| fill_from_models_dev(m)).or_else(|| fill_from_overlay(m))
+        .or_else(|| fill_heuristic(m));
+}
+fn fill_heuristic(m: &mut Model) -> bool {
+    let n = m.name.to_lowercase();
+    let tier = if regex!("flash|mini|turbo|small|lite|air|8b|4b|1\\.5b").is_match(&n) {1}
+        else if regex!("max|opus|ultra|pro|reasoner|thinking|r1|o1|o3").is_match(&n) {3} else {2};
+    m.capability_tier = tier;
+    if m.provider=="ollama" || m.api_base.contains("127.0.0.1") || m.api_base.contains("localhost") {
+        m.is_local=1; m.input_cost_per_token=0.0; m.output_cost_per_token=0.0;
+    }
+    m.needs_calibration=1; m.price_source="heuristic"; true
+}
+```
+触发点：`db::insert_model` 成功后调 `resolve_and_fill` + `db::update_model` 回填（用内部直写绕开白名单）。
+保守期：`needs_calibration=1` 且 `sample_count<20` 的模型在 `plan()` 门槛 `tier_req>1` 时扣分（见 P0.d），
+真实结果经 `upsert_model_task_score_signal` 回填 `ewma_quality`，`sample_count>=20` 后 `db` 置 `needs_calibration=0`。
+删除路径：保持软删（`db::delete_model`），若被删者是某 `pinned_model` 则 `UPDATE routing_policy SET pinned_model=NULL` + UI 提示。
+
+#### P0.f　消除双真源（Python 契约细化）
+
+`ai_service.py` 删 `TASK_MODEL_PREFERENCE`（888）、`DECOMPOSER_PREFERENCE`（886/1453）、`_select_model`（966）。
+**关键约束**：Python 的 `_make_summary`（1295，摘要生成遍历 `DECOMPOSER_PREFERENCE`）与复杂路径分解器选择（1451）
+仍需「全模型池」做兜底/摘要。故 Rust→Python 契约为**双字段**：
+
+```jsonc
+// /v1/orchestrate/stream 请求体（ai_client::orchestrate_stream body）
+{
+  "query": "...", "history": [...], "sr_domain": "...",
+  "models": [<全 active ModelSpec 池>],          // 供 Python summary/兜底
+  "assignments": {                                // Rust 决策结果，Python 优先用
+     "decompose":  <ModelSpec>,                   // 分解器（Rust 按 task_type="decompose" plan()）
+     "aggregate":  <ModelSpec>,                   // 汇总器（task_type="aggregate"）
+     "subtasks":   [{"id":1,"model":<ModelSpec>,"task_type":"coding"}, ...]  // P4.a 子任务级分配
+  },
+  "cache_dir": "...", "similarity_threshold": 0.80, ...
+}
+```
+Python 端 `_select_model`/分解器选择改为「优先 `assignments`，缺则回落 `models[0]`」；
+`_make_summary` 优先用 `assignments.decompose`。轻量路径（1382）`_select_model("general")` 改读 `assignments` 里
+Rust 已选的模型（或 `models[0]` 兜底）。这样**两份真源合一到 Rust**，Python 无任何模型名字面量。
+
+#### P0.g　信号层正规化（signals.rs 新模块）
+
+```rust
+// lloom-core/src/signals.rs
+pub struct SignalSet { pub task_type: Option<String>, pub difficulty: f64, pub band: String,
+    pub needs_tools: bool, pub needs_vision: bool, pub context_tokens: u32, pub budget_tier: BudgetTier,
+    pub reasons: Vec<(&'static str, f64)> }  // (signal_name, contribution)
+
+pub fn extract(user_text: &str, history: &[Value], conv_id: Option<&str>) -> SignalSet {
+    // 启发式快路径（纯 Rust，<10ms）：
+    //   keyword/structure: router::rule_classify + ai_service::_is_complex/_is_comparison 上移版
+    //   context: tiktoken count（项目已有 tiktoken_cache）
+    //   budget_tier: 读 settings budget_ratio（P5）
+    // 学习型慢路径（按需）：
+    //   embedding: 复用语义缓存已算向量（若缓存未初始化则跳过，不阻塞）
+    //   classifier: 仅启发式 task_type=None 且 difficulty 处于灰区时触发 ai_client::classify
+    // difficulty = weighted_sum(structure, complexity, context, embedding_conf?) → band = threshold_bands
+    ...
+}
+```
+阈值配置走 `settings` KV：`signal.reask.sim_threshold=0.85`、`signal.reask.interval_sec=300`、
+`signal.classifier.confidence_floor=0.5`、`signal.difficulty.weights=structure:0.3,complexity:0.3,context:0.2,embedding:0.2`、
+`signal.band.easy=0.33`、`signal.band.medium=0.66`。WebUI「路由策略」页可读写。
+本阶段不追求信号齐备，只求命名、可配置、有单测（含 reask 判定、band 边界）。
 
 ---
 
-### 阶段 P1：打通用量闭环 + 成本×成效落地
+### 阶段 P1：用量闭环 + 成本×成效
 
-#### P1.a　修用量落库（**最高优先级**，一切学习型功能的前置）
+#### P1.a　修用量落库（v3 范围收窄）
 
-`chat_stream` 成功返回后写真实数据（model/tokens/cost/task_type/latency/cache_hit）；
-`orchestrate_stream` 按子任务逐条记账；清掉「全 0 + model=default」的旧调用与脏数据。
-补 `latency_ms`、`request_id` 字段。
+`usage_records` 加列（幂等）：
+```sql
+ALTER TABLE usage_records ADD COLUMN latency_ms REAL;
+ALTER TABLE usage_records ADD COLUMN request_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_usage_req ON usage_records(request_id);
+```
+`db::insert_usage`（248）签名扩参 `latency_ms: Option<f64>, request_id: Option<&str>`（保持向后兼容：旧调用用 None）。
 
-#### P1.b　基于当前模型集的推荐分配（v1 结论保留）
+- **chat_stream**（server.rs:391-404）：`ai_client::chat` 成功后立即
+  `db::insert_usage(&res.model, "default", res.input_tokens, res.output_tokens, res.cost,
+  Some(&routing.task_type), false, Some(latency), Some(&req_id))`。失败也记一条（fail 信号）。
+- **orchestrate_stream**（server.rs:486-493）：把 `None`（task_type）改为
+  `Some(&routing.task_type)`；`&model` 取不到时不再回落 `"default"`，而是记 `Some("unknown")` 便于排查；
+  补 `latency`（Python `task_done.duration` 已有，从事件取）与 `request_id`（编排会话 id）。
+- 清 3 条旧脏数据（`DELETE FROM usage_records WHERE model_name='default' AND cost=0`，迁移脚本里做，先备份）。
 
-| 任务类型 | 建议主选 | 成本 | 降级链 | 相对现状 |
+#### P1.b　推荐分配（保留）
+
+| 任务类型 | 建议主选 | 混合成本 | 降级链 | 相对现状 |
 |---|---|---|---|---|
-| `simple_qa` | qwen2.5-local | 0 | qwen-plus → qwen3.6-flash | 云端兜底由 flash 改 plus |
-| `general` | qwen-plus | 4.8 | qwen3.6-flash → local | 不变 |
-| `decompose` / `classify`（内部） | **qwen-plus** | 4.8 | qwen3.6-flash | **省约 69%** |
-| `coding` | deepseek-v3 | 17.0 | qwen-plus → qwen3-max | 升级位由 plus 改 max |
-| `math_logic` | deepseek-v3 | 17.0 | qwen3-max → qwen-plus | 升级位改 max |
-| `complex_reasoning`（≤32K） | **qwen3-max** | 22.5 | deepseek-v3 → qwen-plus | 主选由 3.6-plus 改 max |
-| `complex_reasoning`（>32K） | qwen3.6-plus | 26.0 | qwen3-max | 阶梯价交叉后切换 |
+| simple_qa | qwen2.5-local | 0 | qwen-plus→qwen3.6-flash | 兜底由 flash 改 plus |
+| general | qwen-plus | 4.8 | qwen3.6-flash→local | 不变 |
+| decompose/classify | **qwen-plus** | 4.8 | qwen3.6-flash | **省约 69%** |
+| coding | deepseek-v3 | 17.0 | qwen-plus→qwen3-max | 升级位 plus→max |
+| math_logic | deepseek-v3 | 17.0 | qwen3-max→qwen-plus | 改 max |
+| complex_reasoning(≤32K) | **qwen3-max** | 22.5 | deepseek-v3→qwen-plus | 主选 3.6-plus→max |
+| complex_reasoning(>32K) | qwen3.6-plus | 26.0 | qwen3-max | 阶梯价交叉后切换 |
 
-#### P1.c　成效分：冷启动 + 在线修正（v2 具体化信号源）
+最后一行正是 `price_tiers_json` 的价值：同一任务不同上下文长度最优模型会切换，静态偏好表表达不了。
 
-- **冷启动 `quality_score`**：litellm 元数据 + overlay 里按 task_type 存的榜单折算分
-  （公开评测 → 0..1）。**按任务类型分别给分**（一个模型 coding 0.8、math 0.5 是正常状态），
-  这正是 RouterBench「模型 × 任务 × 对错 × 成本」数据形态的本地化。
-- **在线 `ewma_quality`**：正常完成（+）/ 重生成或切换模型重问（−）/ cascade 升级率（−）/
-  点赞点踩（强 ±）/ 结构化解析失败率（−）/ **reask 信号（v2 新增）**：同对话内
-  embedding 相似度 >0.85 且间隔 <5 分钟的重复提问记一次隐式不满。`α = 0.1~0.2`。
+#### P1.c　成效分：冷启动 + 在线 EWMA
 
-#### P1.d　分任务阈值 + 影子评测 + AIQ 式指标
+- **冷启动 `quality_score`**：overlay 里按 task_type 存榜单折算分（公开评测→0..1），**按任务分别给分**
+  （coding 0.8、math 0.5 是正常态）= RouterBench「模型×任务×对错×成本」本地化。
+- **在线 `ewma_quality`**，更新公式（`db::upsert_model_task_score_signal`）：
+  `ewma ← α·σ + (1-α)·ewma`，`α=0.15`（settings 可调）。信号值 σ：
 
-- `routing_policy` 三权重按任务给不同预设（`simple_qa` c_w=0.7，`complex_reasoning` q_w=0.8）。
-- `POST /api/routing/shadow`：采样流量双跑「路由选择」与「强模型基线」，两份结果落
-  `model_task_score`，只返回路由结果。
-- **AIQ 式重放评测（v2 新增）**：基于 `usage_records` + `routing_decisions` 历史离线重放，
-  与「全弱 / 全强」两条基线比，输出「成本—质量」曲线与 AIQ（填补差距比例）。
-  这是调 `routing_policy` 权重的依据，避免凭感觉调参。
+| 信号 | σ 值 | 来源 |
+|---|---|---|
+| 正常完成 | +0.7 | `result.ok=true` |
+| 子任务失败 | −0.5 | `task_done.error` 非空 |
+| cascade 升级 | −0.4 | `escalation_count+1` |
+| 重生成/切模型重问 | −0.6 | 同 conv 短间隔新请求 + 不同模型 |
+| reask 隐式不满 | −0.4 | `signal.reask` 命中（同对话相似度>0.85 且间隔<300s） |
+| 点赞 | +1.0 | `cache_feedback` label=1 |
+| 点踩 | −1.0 | label=0 |
+| 结构化解析失败 | −0.3 | JSON schema 校验失败 |
+
+`sample_count` 每次 ±1；达 20 解除保守期。
+
+#### P1.d　影子评测 + AIQ
+
+- `POST /api/routing/shadow`：采样（默认 10%）双跑「路由选择」与「强模型基线」，两份落 `routing_calibration`，
+  只返回路由结果。开关存 `settings.routing.shadow_ratio`。
+- **AIQ 重放**：离线脚本读 `usage_records`+`routing_decisions`，重放对比「全弱基线」/「全强基线」/「当前策略」
+  三条成本—质量曲线，输出 AIQ = (策略质量 − 全弱质量)/(全强质量 − 全弱质量) 的预算积分。
+  这是调 `routing_policy` 权重的依据，避免凭感觉。
 
 ---
 
-### 阶段 P2：定价表系统与动态更新（v2 新增独立阶段）
+### 阶段 P2：定价表系统与动态更新
 
-前置：P0.a/b 的量纲修正与 `price_source` 列。
+> **代码级细化见 [`PRICING-PLAN.md`](./PRICING-PLAN.md)**（PriceSpec 分项计价 × 时段 × 阶梯 × 来源、
+> `pricing.rs` 单一计价真源、幂等迁移 SQL、校准 tokio job、探针预算状态机、WebUI REST 端点、单测矩阵）。
+> 本节只列**与路由决策的衔接点**，不重复实现细节。
 
-#### P2.a　刷新机制
+前置：P0.a/b 量纲修正 + `price_source` 列。
 
-- Rust 侧后台 job（`lloom-server` 内 tokio 定时任务）：默认每 24h 拉一次
-  `model_prices_and_context_window.json`（GitHub raw，失败走 jsdelivr/ghproxy 镜像，
-  复用 `GH_MIRROR` 基建），models.dev `api.json` 作为 context window / 国际模型补充源。
-- 刷新规则：
-  - 只更新 `price_source ∈ {litellm_packaged, litellm_remote, heuristic}` 的条目；
-  - `manual` / `overlay` 来源**永不自动覆盖**（用户核对过的价格最高优先）；
-  - 新价与现价偏差 >20%：非 manual 直接更新并记 `price_updated_at`；
-    manual 则置 `price_stale=1`（WebUI 黄点提示「官方价已变化，点击核对」）；
-  - 拉取失败：静默保持本地值，连续失败 7 天才告警（网络受限是常态，不该刷屏）。
-- WebUI：「模型与定价」页显示每个模型的 `price_source` 徽标 + 更新时间 + stale 标记 +
-  「采纳建议价」按钮（一键把刷新价转正为 manual）。
+**与路由的衔接（决策层如何用定价）**：
+- `plan()` 的 `estimate_cost()` 调 `pricing::effective_input_cost(model, est_in)` —— 后者按
+  `PriceSpec` 算「缓存读折扣后的有效输入单价 + 阶梯价 + 峰谷系数」，使路由选型直接体现缓存命中率
+  与时段红利（PRICING-PLAN §路由衔接）。
+- `price_source` 优先级 `manual > overlay > litellm_remote > litellm_packaged > heuristic` 仍由本计划 P2 维护，
+  PRICING-PLAN 的 `PriceSpec.source` 与之一致（同字段语义）。
+- 刷新 job（24h tokio，走 jsdelivr/ghproxy 镜像）+ overlay（百炼唯一覆盖层）+ WebUI 徽标/stale/采纳建议价，
+  三者细节见 PRICING-PLAN §六/§九，本计划不重述。
+- 对账（OpenRouter `usage.cost`）与 models.dev 无 DashScope 的结论见 §3.4。
+
+#### P2.a　刷新 job（tokio 后台）
+
+```rust
+// lloom-server 启动时 spawn
+tokio::spawn(async {
+    let mut int = tokio::time::interval(Duration::from_secs(86400)); // 24h
+    loop {
+        int.tick().await;
+        if let Err(e) = pricing::refresh().await {
+            tracing::warn!("pricing refresh failed: {e}"); // 静默，不刷屏
+        }
+    }
+});
+// pricing::refresh
+const RAW: &str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const JSDELIVR: &str = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json";
+async fn refresh() -> Result<()> {
+    let db = match fetch(RAW).or_else(|| fetch(JSDELIVR)).or_else(|| fetch_with_ghproxy(RAW)).await? {
+        .. }; // 复用 GH_MIRROR
+    for m in db::list_models(false)? {
+        if matches!(m.price_source.as_str(), "manual"|"overlay") { continue; } // 永不覆盖
+        if let Some(new) = db.get(&m.litellm_model) {
+            let drift = rel_drift(m.input_cost_per_token, new.input_cost_per_token);
+            if drift > 0.20 {
+                if m.price_source == "manual" { db::set_price_stale(&m.name, 1)?; } // 黄点提示
+                else { db::apply_price(&m.name, new, "litellm_remote")?; } // 直接更新
+            }
+        }
+    }
+    db::set_setting("pricing.last_refresh", &now_iso())?;
+    Ok(())
+}
+```
+失败计数达 7 天才 `tracing::error`（网络受限是常态）。
+`POST /api/pricing/refresh`（手动触发）、`GET /api/pricing/status`（last_refresh + stale 数）。
 
 #### P2.b　overlay 维护
 
-`model_catalog.json` 按 `{provider}/{model}` 键存：单价（USD/token）、阶梯价、
-context window、supports_*、按任务类型的冷启动 quality_score。百炼模型在此维护。
-版本随仓库更新；刷新 job 不碰它。
+`data/model_catalog.json` 按 `{provider}/{model}` 键存：单价（USD/token）、阶梯价、context、supports_*、
+按 task_type 的冷启动 quality_score。百炼模型在此。版本随仓库；刷新 job 不碰它。
 
-#### P2.c　对账（可选，低优先级）
+#### P2.c　WebUI 字段
 
-若未来接入 OpenRouter：响应内 `usage.cost` 可直接对账本地计算值，偏差 >5% 记告警。
-当前供应商（DashScope/DeepSeek/Ollama）无此能力，跳过。
-
----
-
-### 阶段 P3：健康感知与故障转移（v1 P2 保留 + v2 增补）
-
-- 被动健康：失败/超时/429 滑窗累计 → `degraded` → `down` + 指数退避探测。
-- 主动探测：`down` 每 N 秒最小请求试探。
-- 故障转移：按 P0.d fallback 链顺序重试，每次记 `escalation_count`。
-- 熔断：单模型连续失败达阈值，临时剔除候选集。
-- **（v2）routing overhead 指标**：`routing_decisions.routing_ms` 聚合暴露；
-  启发式快路径超 10ms / 全路径超 100ms 视为实现 bug，进验收断言。
+「模型与定价」页每行加：`price_source` 徽标（manual/overlay/litellm_remote/litellm_packaged/heuristic）、
+`price_updated_at`、`price_stale` 黄点、「采纳建议价」按钮（`POST /api/models/{name}` 设 price_source=manual）。
 
 ---
 
-### 阶段 P4：编排智能升级（v2 新增，多模型协作的核心）
+### 阶段 P3：健康感知与故障转移
+
+- 状态机：`unknown → up`（首次成功）/ `up → degraded`（滑窗 5 次内失败≥2）/ `degraded → down`（连续 3 失败）/
+  `down → up`（主动探测成功）。`health_checked_at` 每次更新。
+- 被动：`ai_client::chat` 失败/超时/429 在 `server.rs` 记 `db::record_health(model, outcome)`；滑窗存 `settings` 或内存 LRU。
+- 主动探测：`down` 每 60s（`settings.health.probe_sec`）发最小请求（1 token）试探。
+- 故障转移：`plan()` 已产 fallback 链；`ai_client::chat` 失败时 server 按链顺序重试，每次 `db::inc_escalation_count`。
+- 熔断：单模型连续失败达阈值（默认 5）临时剔除候选集（`health_state='down'`）。
+- routing overhead：`routing_decisions.routing_ms` 聚合暴露 `GET /api/routing/overhead`；
+  快路径 >10ms / 全路径 >100ms 视为实现 bug（断言）。
+
+---
+
+### 阶段 P4：编排智能升级（多模型协作核心）
 
 前置：P0.f（Rust 统一决策）、P1.a（子任务记账）。
 
-#### P4.a　子任务级评分分配（R2-Router 思路）
+#### P4.a　子任务级评分分配（R2 思路）
+分解产出子任务带 `task_type`（DECOMPOSE_SYSTEM_PROMPT 已要求标注，ai_service.py:901）。
+Rust 在 `orchestrate_stream` 收到分解结果后，对每个子任务按其 task_type 独立 `plan()`，
+把结果填入 `assignments.subtasks` 下发 Python。无依赖子任务可并行（与已知待办 O6 合并）。
 
-分解产出的每个子任务，按其**自身的** task_type（分解器输出中带类型标注）独立走一遍
-`plan()`——而不是像现在把全部 `ModelSpec` 丢给 Python 轮询分配。子任务间无依赖时
-可并行（LLooM 已知待办 O6 与此合并实现）。
+#### P4.b　Stage 路由伪代码（Switchyard 核心借鉴）
+```
+for subtask in subtasks:
+    outcome = plan(subtask)                      # 选 primary + fallback 链
+    try:
+        result = ai_client.chat(outcome.primary, subtask_msgs)
+        if result.ok and quality_signal_ok(result):   # 零成本信号：解析成功/JSON schema/长度合理
+            emit task_done(ok)
+        else:
+            raise StageError                      # 进 stage 路由
+    except StageError:
+        for fb in outcome.fallback_chain[1..]:    # 降级重试
+            db::inc_escalation_count(fb, task_type)
+            result = ai_client.chat(fb, ...)
+            if result.ok: emit task_done(model=fb); break
+        else:
+            consecutive_fail += 1
+            if consecutive_fail >= 2:
+                bump_min_tier(+1) for remaining subtasks   # 整体升档
+            emit task_done(error,如实) # 不美化
+```
 
-#### P4.b　Stage 路由：执行期信号升级（Switchyard 核心借鉴）
+#### P4.c　Escalation 模式
+`routing_policy.escalation_enabled=1` 的任务启用 §4.5：先跑轻量档候选，零成本信号判质量不达标才升级强档
+（裁判优先 `JSON schema 校验`/`解析成功`，不够才 LLM judge）。默认只对 `decompose`/`classify`/`simple_qa` 开。
 
-- `task_done.error` 非空 → 该子任务按 fallback 链降级重试一次（记 escalation）；
-- 重试仍失败 → 整体错误如实汇报（沿用现有「失败不美化」原则）；
-- 连续 ≥2 个子任务失败 → 剩余子任务整体升一档 capability_tier；
-- 子任务全绿且耗时低于该任务 P50 → 同批后续子任务允许降一档试探（成本优化，
-  失败立刻回滚档位）。
+#### P4.d　汇总也走评分
+聚合模型按 `task_type="aggregate"` 走 `plan()`（种子策略已预填）。长输入汇总受 `context_window` 门槛约束
+（子任务结果拼接可能超小窗口 → 自动选大窗口模型或分批汇总）。
 
-#### P4.c　Escalation 模式（可选开关）
-
-`routing_policy.escalation_enabled=1` 的任务类型启用 §4.5 流程。默认只对
-`decompose`/`classify`/`simple_qa` 这类「零成本质量信号可靠」（解析成功即对错分明）
-的任务开启；开放式生成不开启（业界结论：置信度在开放式任务上不可靠，需 judge，成本高）。
-
-#### P4.d　汇总模型也走评分
-
-聚合阶段模型选择按 `task_type="aggregate"` 走 `plan()`，不再写死偏好。
-长输入汇总场景天然受 `context_window` 门槛约束（所有子任务结果拼接可能超小窗口）。
+#### SSE 事件契约（Python 侧补字段，Rust 透传）
+`task_done` 加 `escalated_from`（升级前的模型名，无则省）、`retry_count`；
+`result` 加 `escalations`（总升级次数）、`tier_bumped`（是否触发整体升档）。
+Rust 在 SSE 处理（server.rs:462-501）把这些写入 `routing_decisions.outcome`。
 
 ---
 
-### 阶段 P5：预算驱动的动态调整（v1 P3 保留）
+### 阶段 P5：预算驱动动态调整
 
 #### P5.a　预算进入决策链
+`budget_tier` 由 `budget_ratio(r)` 决定，注入 `PlanInput`：
 
-| 剩余预算 r | 档位 | 行为 |
+| 剩余预算 r | tier | 行为 |
 |---|---|---|
-| r > 50% | 正常 | 按 `routing_policy` 原权重 |
-| 20% < r ≤ 50% | 节流 | `cost_weight × 1.5` |
-| 5% < r ≤ 20% | 紧缩 | `cost_weight × 2.5`；复杂任务降一档；强制开语义缓存 |
-| r ≤ 5% | 保护 | 仅 `is_local=1` 或成本低于阈值；超限任务明确提示 |
+| r>50% | normal | 原权重 |
+| 20<r≤50% | throttle | cost_weight×1.5 |
+| 5<r≤20% | tight | cost_weight×2.5；复杂任务降一档；强制开语义缓存 |
+| r≤5% | protect | 仅 is_local 或 cost=0；超限任务明确提示 |
 
-降级而非硬拒：预算耗尽推给本地 Ollama。`qwen2.5-local` 必须始终留在候选集。
+降级非硬拒：耗尽推本地 Ollama。`qwen2.5-local` 始终留候选集。
+接入点：`chat_stream`/`orchestrate_stream` 在 `plan()` 前调 `db::check_budget(...)`（P1-6 那个现成函数）算 r。
 
 #### P5.b　预算模型扩展
-
-`budgets` 加 `scope_task_type` / `soft_limit_ratio` / `action_on_exceed(degrade|block)`；
-`scope` 扩到 `user / model / task_type / global`。
+```sql
+ALTER TABLE budgets ADD COLUMN scope_task_type TEXT;
+ALTER TABLE budgets ADD COLUMN soft_limit_ratio REAL DEFAULT 0.8;
+ALTER TABLE budgets ADD COLUMN action_on_exceed TEXT DEFAULT 'degrade';
+```
+`scope` 扩 `user/model/task_type/global`（`scope_id` 复用）。
 
 #### P5.c　预估成本前置校验
-
-tiktoken 算输入 token（`tiktoken_cache/` 已有），输出用该 task_type 历史 P50 估计，
-得 `est_cost` 参与 `max_cost_per_request` 门槛与档位判断。
-（业界通用「先估算、后对账」模式；若只有 token 预算没有价格数据，也可先做 token 硬顶。）
+tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史 P50（`model_task_score.avg_*` 估），
+得 `est_cost` 参与 `max_cost_per_request` 门槛与 tier 判断。无价格数据时退化为 token 硬顶（token-only budget）。
 
 ---
 
-## 六、落地顺序与验收（v2 更新）
+## 六、落地顺序与验收（v3）
 
-| 顺序 | 内容 | 验收标准 |
+| 序 | 内容 | 验收标准 |
 |---|---|---|
-| 1 | P1.a 修用量落库 | 一次对话后 `usage_records` 出现正确的 model/tokens/cost/task_type/latency |
-| 2 | P0.a 修成本量纲 + 写入断言 | qwen 系列单价降为原 1/10；越界单价写入被拒 |
-| 3 | P0.b/c 建表迁移（含 price_source 三列、routing_decisions） | 幂等可重跑，旧数据不丢 |
-| 4 | P0.d 评分式 `plan()` + router 单测 | 删任一模型后自动改选；不再返回未注册名字；空候选集明确报错 |
-| 5 | P0.e 五级打标 | 新增未知模型 → 元数据自动填充、标 `needs_calibration`、不承接复杂任务 |
-| 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；信号可配置、有单测 |
+| 1 | P1.a 修用量落库 | chat 一次对话后 `usage_records` 有正确 model/tokens/cost/task_type/latency；编排 task_type 非 None |
+| 2 | P0.a 修量纲 + 写入断言 | qwen 单价降为 1/10；越界单价写入被 422 拒 |
+| 3 | P0.b/c 建表迁移（幂等） | 重跑不报错、旧数据不丢；迁移前已备份 `data/lloom.db` |
+| 4 | P0.d 评分 plan() + router 单测 | 删任一模型自动改选；不再返回未注册名；空候选集明确报错；阶梯价交叉单测过 |
+| 5 | P0.e 五级打标 | 新增未知模型→元数据自动填充、标 needs_calibration、不接复杂任务 |
+| 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；signals 可配置有单测 |
 | 7 | P1.b/c 成效分 + 推荐分配 | 影子评测下内部分解路径成本降 ≥60%，质量无显著回退 |
-| 8 | P2 定价刷新 job + WebUI 徽标 | 手动触发刷新成功更新非 manual 来源；断网刷新静默保持本地值 |
-| 9 | P3 健康 + fallback + overhead 指标 | 停 Ollama/错 key → 自动降级；routing_ms 快路径 <10ms |
-| 10 | P4 编排升级 | 子任务失败自动降级重试成功；`escalation_enabled` 任务成本再降 ≥30%（相对步骤 7） |
-| 11 | P5 预算联动 | 预算接近耗尽 → 逐档降级直至只走本地 |
-| 12 | P1.d AIQ 重放评测 | 离线重放输出成本—质量曲线；`routing_policy` 调参有数据依据 |
+| 8 | P2 定价刷新 + WebUI 徽标 | 手动刷新更新非 manual 来源；断网静默保持本地值 |
+| 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms |
+| 10 | P4 编排升级 | 子任务失败自动降级重试成功；escalation 任务成本再降 ≥30%（相对序 7） |
+| 11 | P5 预算联动 | 预算近耗尽→逐档降级至只走本地 |
+| 12 | P1.d AIQ 重放 | 离线重放输出成本—质量曲线；调参有数据依据 |
 
-**测试基建**（v1 结论保留）：Rust 侧零单测，`router.rs` / `signals.rs` 纯函数为主最适合先补。
-覆盖：空候选集、单模型、删主选后降级、阶梯价交叉点、预算各档位、difficulty 分带边界、
-reask 判定、保守期解除阈值。
+**测试基建**：Rust 侧零单测，`router.rs`/`signals.rs`/`metadata.rs` 纯函数为主最适合先补。
+覆盖：空候选集、单模型、删主选后降级、阶梯价交叉点、预算各档、band 边界、reask 判定、保守期解除、
+健康状态机迁移、price drift 阈值。
 
 ---
 
-## 七、风险与注意事项（v2 更新）
+## 七、风险与注意事项（v3）
 
-1. **价格会过期** → 放 DB + overlay + 刷新 job + manual 校准入口，代码里零价格字面量。
-   本机 litellm 远端拉取有 SSL 问题，刷新走镜像；`qwen3.6-flash` 存在 1.2/7.2 与
-   0.367/2.936 两种公开口径（本计划采信 1.2/7.2，与 DB 反推值逐位吻合）。
-2. **models.dev 无 DashScope**（2026-08-24 实测）：百炼价格只能靠 overlay + 人工核对，
-   别指望全自动覆盖国产模型。
-3. **Switchyard 是 pre-alpha**（v0.2.0，v1.0 前 API 会破坏性变更，Python launcher 已移除）：
-   **只借鉴设计，不引入 crate 依赖**。若未来要引入，走 libsy（库路径）而非 server 路径，
-   且等 v1.0。
-4. **vLLM Semantic Router 是 Envoy ext_proc 控制面**，架构重、面向服务网格场景：
-   借它的「信号—投影—决策」分层思想与 YAML 契约形态，不引入 Envoy。
-5. **收益预期按区间管理**：路由收益 35–85% 取决于负载难度分布；验收写「随难度可变」
-   的 AIQ 式指标，不承诺固定百分比。
+1. **价格会过期** → DB+overlay+刷新 job+manual 校准入口，代码零价格字面量。litellm 远端 SSL 失败走镜像；
+   `qwen3.6-flash` 存 1.2/7.2 与 0.367/2.936 两口径（采信 1.2/7.2，与 DB 反推逐位吻合）。
+2. **models.dev 无 DashScope**（2026-08-24 实测）→ 百炼价只能 overlay+人工核对。
+3. **Switchyard pre-alpha**（v0.2.0，v1.0 前 API 破坏性变更，Python launcher 已移除）→ 只借鉴设计，
+   未来引入走 libsy（库路径）且等 v1.0。
+4. **vLLM Semantic Router 是 Envoy ext_proc** → 借分层思想与契约形态，不引入 Envoy。
+5. **收益按区间管理**（35–85% 随负载难度），验收用 AIQ 式指标不承诺固定百分比。
 6. **级联/升级延迟翻倍** → 只在编排路径（P4）启用；`chat/stream` 保持一次性分类路由。
-7. **开放式生成不能靠置信度做级联裁判** → escalation 默认只对结构化/解析可判任务开启。
-8. **Router-R1 式 RL 路由是远期可选项**：当前阶段「描述符评分 + EWMA + 影子评测」已覆盖
-   其核心收益（泛化到新模型），RL 训练回路等影子评测数据积累到千级样本再评估。
-9. **迁移幂等性**：`data/lloom.db` 含真实对话与向量数据，所有 ALTER 先查
-   `PRAGMA table_info`，迁移前备份。
-10. **改 Python 后必须重启 Rust 服务**才会重拉 AI 服务（既有踩坑记录，P0.f 之后该类问题消失）。
+7. **开放式生成不能靠置信度做级联裁判** → escalation 默认只对结构化可判任务开。
+8. **Router-R1 式 RL 是远期可选** → 当前「描述符评分+EWMA+影子评测」已覆盖其核心收益（泛化新模型），
+   RL 回路等影子数据千级样本再评估。
+9. **迁移幂等性** → `data/lloom.db` 含真实对话/向量，所有 `ALTER` 先 `PRAGMA table_info` 去重，迁移前 `cp` 备份。
+10. **改 Python 后必须重启 Rust 服务**才重拉 AI 服务（既有踩坑）；P0.f 后该类问题消失。
+11. **（v3 新增）update_model 白名单**：新增列要同步加白名单否则 WebUI 改不了；`health_state`/`needs_calibration`/
+    `price_stale` 由系统写不放白名单（防用户手改破坏自适应）。
+12. **（v3 新增）Python 仍需全模型池**：P0.f 下发 `assignments` 同时必须保留 `models` 全池，
+    否则 `_make_summary`（摘要）与分解兜底失去模型来源 → 契约见 §P0.f 双字段。

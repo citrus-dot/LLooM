@@ -61,6 +61,11 @@ fn main() {
                 });
             println!("[core] REST server on :{web_port}");
 
+            // Background jobs: daily price calibration + always-on probes
+            // (PRICING-PLAN §6.2 / §7). Handles are intentionally not held;
+            // they die with the process.
+            let _jobs = server::spawn_background_jobs();
+
             // Graceful shutdown: on SIGINT (Ctrl+C) or SIGTERM (kill/stop-lloom.command),
             // clean up all child processes so no stale AI service / Ollama holds the ports.
             let s = state_for_spawn.clone();

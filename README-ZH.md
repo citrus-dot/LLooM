@@ -158,6 +158,8 @@ bash scripts/smoke_test.sh
 | POST | `/api/chat/stream` | 聊天（SSE 流式） |
 | POST | `/api/orchestrate/stream` | 任务编排（SSE 流式） |
 | GET/POST/DELETE | `/api/conversations` | 对话 CRUD |
+| POST | `/api/conversations/{id}/messages` | 追加单条消息（原子写）|
+| PATCH | `/api/conversations/{id}/messages/{seq}` | 回填消息内容/元数据 |
 | GET | `/api/services/status` | 诚实的服务状态 |
 | POST | `/api/services/{name}/start` | 启动服务（ollama/ai） |
 | POST | `/api/services/{name}/stop` | 停止服务 |
@@ -166,6 +168,11 @@ bash scripts/smoke_test.sh
 | POST | `/api/services/smart-restart` | 配置变更后重启 AI 服务 |
 | POST | `/api/system/open-folder` | 打开目录 |
 | POST | `/api/system/open-web` | 打开网页 |
+| GET | `/api/pricing/specs` | 列出所有 PriceSpec |
+| PUT | `/api/pricing/specs/{provider}/{model}` | 手工改价 |
+| GET | `/api/pricing/calibration` | 校准曲线 |
+| GET | `/api/probe/stats` | 探针消耗/预算 |
+| PUT | `/api/probe/budget` | 调整探针月预算 |
 | POST | `/api/system/cli` | 运行 CLI |
 
 ## 技术栈
@@ -262,6 +269,7 @@ LLooM/
 ├── crates/lloom-core/            # 业务核心 lib（UI 无关）
 │   └── src/                      # server.rs, db.rs, router.rs, security.rs,
 │                                 # ai_client.rs, processes.rs, conversations.rs,
+│                                 # pricing.rs, probe.rs, signals.rs,
 │                                 # models.rs, config.rs, error.rs
 ├── crates/lloom-server/          # 主服务器（REST + WebUI）
 ├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）

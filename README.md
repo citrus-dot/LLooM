@@ -163,6 +163,8 @@ All configuration is via environment variables in `.env`:
 | POST | `/api/chat/stream` | Chat with SSE streaming |
 | POST | `/api/orchestrate/stream` | Task orchestration with SSE |
 | GET/POST/DELETE | `/api/conversations` | Conversation CRUD |
+| POST | `/api/conversations/{id}/messages` | Append one message (atomic) |
+| PATCH | `/api/conversations/{id}/messages/{seq}` | Backfill message content/meta |
 | GET | `/api/services/status` | Honest service status |
 | POST | `/api/services/{name}/start` | Start a service (ollama/ai) |
 | POST | `/api/services/{name}/stop` | Stop a service |
@@ -171,6 +173,11 @@ All configuration is via environment variables in `.env`:
 | POST | `/api/services/smart-restart` | Restart AI service after config change |
 | POST | `/api/system/open-folder` | Open a folder |
 | POST | `/api/system/open-web` | Open a URL |
+| GET | `/api/pricing/specs` | List all PriceSpecs |
+| PUT | `/api/pricing/specs/{provider}/{model}` | Manual price override |
+| GET | `/api/pricing/calibration` | Calibration curve |
+| GET | `/api/probe/stats` | Probe spend/budget stats |
+| PUT | `/api/probe/budget` | Adjust probe monthly budget |
 
 ## Tech Stack
 
@@ -274,6 +281,7 @@ LLooM/
 ├── crates/lloom-core/            # Business core lib (UI-agnostic)
 │   └── src/                      # server.rs, db.rs, router.rs, security.rs,
 │                                 # ai_client.rs, processes.rs, conversations.rs,
+│                                 # pricing.rs, probe.rs, signals.rs,
 │                                 # models.rs, config.rs, error.rs
 ├── crates/lloom-server/          # Main server (REST + WebUI)
 ├── crates/lloom-cli/             # CLI (clap, links lloom-core)
