@@ -242,7 +242,22 @@ pub fn open_fk() -> Result<Connection> {
 
 // ── Model CRUD ──
 
+/// P0.a 量纲写入断言：单价必须为 0（本地/未知价）或落在 [1e-9, 1e-3] USD/token。
+/// 防「官方元/M × 汇率」忘除量纲的 10× 错误复发（见 ROUTING-PLAN P0-4）。
+fn validate_cost(in_cost: f64, out_cost: f64) -> Result<()> {
+    const LO: f64 = 1e-9;
+    const HI: f64 = 1e-3;
+    let ok = |v: f64| v == 0.0 || (LO..=HI).contains(&v);
+    if !ok(in_cost) || !ok(out_cost) {
+        return Err(AppError::InvalidRequest(format!(
+            "单价越界 [1e-9, 1e-3] USD/token: in={in_cost} out={out_cost}; 疑似量纲错误（百炼价是否忘了 /10 或汇率）"
+        )));
+    }
+    Ok(())
+}
+
 pub fn insert_model(m: &Model) -> Result<i64> {
+    validate_cost(m.input_cost_per_token, m.output_cost_per_token)?;
     let conn = open()?;
     let res = conn.execute(
         "INSERT INTO models (name, provider, litellm_model, api_base, api_key_env, task_type,
@@ -325,6 +340,16 @@ pub fn update_model(name: &str, updates: &serde_json::Map<String, serde_json::Va
                 ALLOWED.join(", ")
             )));
         }
+    }
+    // P0.a：单价更新走同一断言（未提供的分量按 0 只验证出现的键）
+    if let Some(in_v) = updates.get("input_cost_per_token").and_then(|v| v.as_f64()) {
+        let out_v = updates
+            .get("output_cost_per_token")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        validate_cost(in_v, out_v)?;
+    } else if let Some(out_v) = updates.get("output_cost_per_token").and_then(|v| v.as_f64()) {
+        validate_cost(0.0, out_v)?;
     }
     let conn = open()?;
     let mut sql = String::from("UPDATE models SET ");
@@ -1097,5 +1122,25 @@ mod migration_tests {
         drop(conn2);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod cost_assert_tests {
+    use super::*;
+
+    #[test]
+    fn validate_cost_bounds() {
+        assert!(validate_cost(0.0, 0.0).is_ok()); // 本地/未知价
+        assert!(validate_cost(1.11e-7, 2.78e-7).is_ok()); // 正常 USD/token
+        assert!(validate_cost(1e-9, 1e-3).is_ok()); // 边界含端点
+        // 10× 内部错误（1e-6 级）值域仍在界内，断言拦不住——那是迁移+校准层的职责；
+        // 断言拦的是「忘除 1e6」级（元/M 原值直接写入）与负数/超上限
+        assert!(validate_cost(1.39e-6, 1.111e-5).is_ok()); // 迁移前原始 10× 值仍在界内
+        assert!(validate_cost(1.11e-5, 2.78e-5).is_ok()); // 100× 仍 < 1e-3
+        assert!(validate_cost(2.5e-6, 1.0e-5).is_ok()); // gpt-4o 正确值（USD）不受影响
+        assert!(validate_cost(0.8, 2.0).is_err()); // 元/M 原值（忘除量纲）被拒
+        assert!(validate_cost(-1e-6, 0.0).is_err()); // 负数被拒
+        assert!(validate_cost(0.0, 1e-2).is_err()); // 超上限
     }
 }
