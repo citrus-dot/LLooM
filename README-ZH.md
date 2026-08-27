@@ -38,10 +38,13 @@ LLM 提供商（DashScope / Ollama / OpenAI / Anthropic）
 
 ### 智能路由
 - **两层分类**：正则规则（零成本）优先，LLM 兜底其次
-- **回退链**：5 级故障转移（qwen3-max → plus → qwen-plus → flash → 本地）
+- **评分路由（`plan()`）**：注册表门槛（能力档/上下文/健康/成本上限/钉选）+ 成本质量加权评分；成本走 `pricing.rs est_cost`，质量走 EWMA 冷启动分。已彻底取代全部硬编码模型表
+- **回退链 + 升档**：5 级故障转移（qwen3-max → plus → qwen-plus → flash → 本地），健康感知自动升档
+- **影子评测 + AIQ**：自动采样流量校准成本—质量，可离线重放（`scripts/aiq_replay.py`）
+- **健康感知容灾**：滑窗健康状态机、主动探测恢复、按请求回退
+- **预算联动**：预算档（normal/throttle/tight/protect）注入路由；tight 复杂任务降档，protect 强制本地/零成本
 - **推理模型支持**：自动为推理模型启用流式输出
 - **领域增强**：STEM → 数学逻辑，计算机/工程 → 编程
-- **成本感知选择**：挑选能处理任务的最低成本模型
 
 ### 任务编排
 - **复杂度检测**：6 条正则规则 + 长度/句子数启发式
@@ -60,6 +63,7 @@ LLM 提供商（DashScope / Ollama / OpenAI / Anthropic）
 - 对重复的简单问答返回缓存响应（零成本）
 - 缓存命中会被标记（`cache_hit`）并在各界面显示"来自缓存"，因此服务 down 时仍能回复也一目了然
 - 嵌入模型不可用时优雅降级
+- 缓存生命周期可通过 `/api/cache/*` 管理（预初始化 / 状态 / 清理 / 反馈 / 阈值自调）
 
 ### 界面
 - **WebUI** — 浏览器访问 `http://localhost:7861/`（服务状态、聊天、模型、用量、设置）
@@ -170,9 +174,20 @@ bash scripts/smoke_test.sh
 | POST | `/api/system/open-web` | 打开网页 |
 | GET | `/api/pricing/specs` | 列出所有 PriceSpec |
 | PUT | `/api/pricing/specs/{provider}/{model}` | 手工改价 |
+| POST | `/api/pricing/specs/{provider}/{model}/accept` | 采纳刷新价（转正 manual） |
+| POST | `/api/pricing/refresh` | 触发远端定价刷新 job |
 | GET | `/api/pricing/calibration` | 校准曲线 |
 | GET | `/api/probe/stats` | 探针消耗/预算 |
 | PUT | `/api/probe/budget` | 调整探针月预算 |
+| POST | `/api/routing/plan-subtask` | 子任务级路由规划（primary + fallback + escalation） |
+| POST,GET | `/api/routing/shadow` | 影子评测采样（AIQ 重放） |
+| GET | `/api/routing/overhead` | 路由开销报告（count/avg/P95/max/slow） |
+| POST | `/api/shutdown` | 优雅关停（等价 SIGINT） |
+| POST | `/api/cache/init` | 语义缓存预初始化（触发 chroma 模型下载） |
+| GET | `/api/cache/status` | 缓存状态（就绪 / 下载进度） |
+| POST | `/api/cache/cleanup` | 清理缓存 |
+| POST | `/api/cache/feedback` | 命中反馈（灰区采样） |
+| GET,POST | `/api/cache/threshold` | 缓存阈值查询 / 自调 |
 | POST | `/api/system/cli` | 运行 CLI |
 
 ## 技术栈
@@ -270,6 +285,7 @@ LLooM/
 │   └── src/                      # server.rs, db.rs, router.rs, security.rs,
 │                                 # ai_client.rs, processes.rs, conversations.rs,
 │                                 # pricing.rs, probe.rs, signals.rs,
+│                                 # metadata.rs, health.rs,
 │                                 # models.rs, config.rs, error.rs
 ├── crates/lloom-server/          # 主服务器（REST + WebUI）
 ├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）

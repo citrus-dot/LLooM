@@ -38,10 +38,13 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API re
 
 ### Smart Routing
 - **Two-layer classification**: Regex rules (zero cost) first, LLM fallback second
-- **Fallback chains**: 5-level failover (qwen3-max → plus → qwen-plus → flash → local)
+- **Scoring router (`plan()`)**: Registry-gated (tier/context/health/cost-cap/pinned) + weighted cost/quality score; cost via `pricing.rs est_cost`, quality via EWMA cold-start score. Replaces all hardcoded model maps.
+- **Fallback chains**: 5-level failover (qwen3-max → plus → qwen-plus → flash → local) with health-aware escalation
+- **Shadow evaluation + AIQ**: Auto-samples traffic to calibrate cost-vs-quality, replayable offline (`scripts/aiq_replay.py`)
+- **Health-aware failover**: Sliding-window health state machine, auto-probe recovery, per-request fallback
+- **Budget-driven**: Budget tier (normal/throttle/tight/protect) injected into routing; tight downgrades complex tasks, protect forces local/zero-cost
 - **Inference model support**: Auto-enables streaming for inference models
 - **Domain enhancement**: STEM → math_logic, CS/engineering → coding
-- **Cost-aware selection**: Picks the cheapest model that can handle the task
 
 ### Task Orchestration
 - **Complexity detection**: 6 regex rules + length/sentence count heuristics
@@ -61,6 +64,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API re
 - Cache hits are flagged (`cache_hit`) and shown as "来自缓存" in the UIs, so a
   reply while services are down is clearly identified as cached
 - Graceful degradation when embedding model unavailable
+- Cache lifecycle is manageable via `/api/cache/*` (pre-init / status / cleanup / feedback / threshold autotune)
 
 ### UIs
 - **WebUI** — browser UI at `http://localhost:7861/` (service status, chat, models, usage, settings)
@@ -175,9 +179,20 @@ All configuration is via environment variables in `.env`:
 | POST | `/api/system/open-web` | Open a URL |
 | GET | `/api/pricing/specs` | List all PriceSpecs |
 | PUT | `/api/pricing/specs/{provider}/{model}` | Manual price override |
+| POST | `/api/pricing/specs/{provider}/{model}/accept` | Accept refreshed price (force manual) |
+| POST | `/api/pricing/refresh` | Trigger remote price refresh job |
 | GET | `/api/pricing/calibration` | Calibration curve |
 | GET | `/api/probe/stats` | Probe spend/budget stats |
 | PUT | `/api/probe/budget` | Adjust probe monthly budget |
+| POST | `/api/routing/plan-subtask` | Per-subtask route plan (primary + fallback + escalation) |
+| POST,GET | `/api/routing/shadow` | Shadow evaluation sampling (AIQ replay) |
+| GET | `/api/routing/overhead` | Routing overhead report (count/avg/P95/max/slow) |
+| POST | `/api/shutdown` | Graceful shutdown (equivalent to SIGINT) |
+| POST | `/api/cache/init` | Semantic cache pre-init (fetch chroma model) |
+| GET | `/api/cache/status` | Cache status (ready / download progress) |
+| POST | `/api/cache/cleanup` | Clean up cache |
+| POST | `/api/cache/feedback` | Hit feedback (gray-zone sampling) |
+| GET,POST | `/api/cache/threshold` | Cache threshold query / autotune |
 
 ## Tech Stack
 
@@ -282,6 +297,7 @@ LLooM/
 │   └── src/                      # server.rs, db.rs, router.rs, security.rs,
 │                                 # ai_client.rs, processes.rs, conversations.rs,
 │                                 # pricing.rs, probe.rs, signals.rs,
+│                                 # metadata.rs, health.rs,
 │                                 # models.rs, config.rs, error.rs
 ├── crates/lloom-server/          # Main server (REST + WebUI)
 ├── crates/lloom-cli/             # CLI (clap, links lloom-core)

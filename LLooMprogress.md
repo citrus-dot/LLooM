@@ -65,7 +65,7 @@
 | 文档 | 编写时间 | 提交状态 | 内容范围 | 落地状态 |
 |---|---|---|---|---|
 | [`CONTEXT-PLAN.md`](./CONTEXT-PLAN.md) | 2026-08-24 | **已提交**（a2b8bb5）| 上下文优化：SQLite 对话存储、预算上下文、两层缓存、原子写、两阶段落盘 | Phase 1 + 部分 Phase 4 已落地（追加端点存在于 server.rs）|
-| [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **未提交**（工作区 M）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（未提交）；PR-6/7 前端定价页+探针视图已落地；**P2.a 定价刷新 + P2.c 缓存节省已追加落地**；PR-5/PR-8 待办 |
+| [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **已提交**（694f0a9 等，P2.a/P2.c 已落地）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（已提交）；PR-6/7 前端定价页+探针视图已落地；**P2.a 定价刷新 + P2.c 缓存节省已追加落地**；PR-5/PR-8 待办 |
 | [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4–v8 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/b/c/d/e/f/g 全部落地**（09480fa、8dddc59、50ec431、d6912b9）；P1.a/b/c/d 全部落地（P1 阶段完成）；**P2.a 定价刷新 + P2.c 定价页/徽标已落地**；**P3 健康感知 + fallback + overhead 已落地**；**P4 编排智能升级已落地**；**P5 预算驱动动态调整已落地**（本阶段提交） |
 
 > 三份计划文档是详细设计与落地顺序的权威来源。本进度文档只做索引与高层同步，不重复其细节。
@@ -246,12 +246,12 @@
 
 | 文件 | 用途 | 同步状态 |
 |---|---|---|
-| `LLooMprogress.md`（本文件）| 项目总进度、决策、待办、约束、文档索引 | 本次大幅更新至 2026-08-26 |
+| `LLooMprogress.md`（本文件）| 项目总进度、决策、待办、约束、文档索引 | 本次大幅更新至 2026-08-27，已同步至 08a1b50（P5）|
 | `ARCHITECTURE.md` | 分层架构、端点、数据流、技术栈 | 已补新模块/新路由（本次）|
 | `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）| 已补新模块/新路由（本次）|
 | `CONTEXT-PLAN.md` | 上下文优化方案（已落地部分）| 已提交，与 a2b8bb5 一致 |
-| `PRICING-PLAN.md` | 定价表系统详细设计与落地 | 未提交（工作区 M），内容新且准 |
-| `ROUTING-PLAN.md` | 路由重构方案（v3 + v4/v5 注记）| 已提交，P0 阶段全部落地状态已更新 |
+| `PRICING-PLAN.md` | 定价表系统详细设计与落地 | 已提交（694f0a9 等），P2.a/P2.c 已落地 |
+| `ROUTING-PLAN.md` | 路由重构方案（v3 + 注记至 P5）| 已提交，P0–P5 阶段全部落地状态已更新 |
 | `ROUTING-PLAN.md` 引用的外部研究 | Switchyard / vLLM Semantic Router / Router-R1 等 | 设计借鉴，不引入依赖 |
 
 > **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② **P0–P5 阶段已全部完成**，下一优先项为 **PRICING-PLAN PR-5 `effective_input_cost` 进 plan() 评分**（P0.d 已完成，此项留待与路由联动一并处理）或 **PR-8 峰谷调度**（依赖 P4 已完）。每次 `cargo build`/`cargo test` 全绿再提交。

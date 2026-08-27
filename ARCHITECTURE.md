@@ -91,17 +91,30 @@
 | `/api/system/cli` | POST | 运行 CLI |
 | `/api/pricing/specs` | GET | 列出所有 PriceSpec（定价分项规格，含 stale 标记）|
 | `/api/pricing/specs/:provider/:model` | PUT | 手工改价（强制转正 manual）|
+| `/api/pricing/specs/:provider/:model/accept` | POST | 采纳刷新价（转正 manual，此后不被覆盖）|
+| `/api/pricing/refresh` | POST | 触发远端定价刷新 job（jsdelivr 主源 + ghproxy 回退）|
 | `/api/pricing/calibration` | GET | 校准曲线（对账偏差、缓存命中率）|
 | `/api/probe/stats` | GET | 探针月消耗/预算/命中验证 |
 | `/api/probe/budget` | PUT | 调整探针月预算 |
+| `/api/routing/plan-subtask` | POST | 子任务级路由规划（primary + fallback 链 + escalation）|
+| `/api/routing/shadow` | POST/GET | 影子评测采样（AIQ 重放用；GET 查状态）|
+| `/api/routing/overhead` | GET | 路由开销报告（count/avg/P95/max/slow）|
+| `/api/shutdown` | POST | 优雅关停（等价 SIGINT，清理子进程）|
+| `/api/cache/init` | POST | 语义缓存预初始化（触发 chroma 模型下载）|
+| `/api/cache/status` | GET | 缓存状态（就绪 / 下载进度）|
+| `/api/cache/cleanup` | POST | 清理缓存 |
+| `/api/cache/feedback` | POST | 命中反馈（灰区采样，调优用）|
+| `/api/cache/threshold` | GET/POST | 缓存阈值查询 / 自调 |
 
 ### 业务核心（core）
 
 - **db.rs** — rusqlite SQLite 层，强类型（`Model`/`Budget`/`UsageStats`）
-- **router.rs** — 任务分类（正则层）+ 成本最优模型选择（评分路由 `plan()` 重构见 ROUTING-PLAN.md，尚未实施）
+- **router.rs** — 任务分类（正则层）+ **`plan()` 评分路由**（注册表门槛 + 成本/质量加权，已落地，见 ROUTING-PLAN.md P0.d）
 - **pricing.rs** — 定价引擎（`PriceSpec`/`TierBand`/`ZoneRule`/`UsageDetail`/`ZoneResolver` + actual_cost/est_cost/effective_input_cost）
 - **probe.rs** — 常开探针（预算状态机 `ProbeBudget` + 探测循环，监控响应性与校准燃料）
 - **signals.rs** — 信号层（`prefix_stability` 等启发式信号，为路由评分提供特征）
+- **metadata.rs** — 模型元数据五级自动打标（`resolve_and_fill`：overlay > 启发式，供 `insert_model` 自动回填，P0.e）
+- **health.rs** — 健康状态机（滑窗 degraded/连续失败 down/熔断/成功恢复，`set_model_health` 持久化，P3）
 - **security.rs** — PII 检测 / 越狱拦截 / 领域分类（正则零成本层，fancy-regex 支持 lookaround）
 - **ai_client.rs** — Python AI 微服务的 async HTTP 客户端
 - **processes.rs** — 子进程管理（API 服务器 / Ollama / AI 服务）
@@ -229,7 +242,7 @@ LLooM/
 │       ├── lib.rs                # 模块声明
 │       ├── server.rs             # axum REST 服务器
 │       ├── db.rs                 # SQLite 层（含价格/校准幂等迁移）
-│       ├── router.rs             # 任务分类 + 模型选择（路由重构见 ROUTING-PLAN.md）
+│       ├── router.rs             # 任务分类 + `plan()` 评分路由（见 ROUTING-PLAN.md）
 │       ├── security.rs           # 正则安全层
 │       ├── ai_client.rs          # AI 微服务客户端
 │       ├── processes.rs          # 子进程管理
@@ -237,6 +250,8 @@ LLooM/
 │       ├── pricing.rs            # 定价引擎（PriceSpec / 校准）
 │       ├── probe.rs              # 常开探针（预算状态机）
 │       ├── signals.rs            # 信号层（prefix_stability 等）
+│       ├── metadata.rs           # 模型元数据自动打标（P0.e）
+│       ├── health.rs             # 健康状态机（P3）
 │       ├── models.rs             # 类型定义
 │       ├── config.rs             # 路径/端口配置
 │       └── error.rs              # 统一错误
