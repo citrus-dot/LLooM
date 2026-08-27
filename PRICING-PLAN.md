@@ -21,7 +21,7 @@
 | PR-2 量纲修正 + PriceSpec 迁移 | ✅ 已实施 | `db.rs` 新增 `migrate_db()`：usage 7 列 ALTER、dashscope ÷10（settings 标记幂等）、models→price_specs 投影、deepseek 峰谷规则预置；迁移测试覆盖旧库升级路径 |
 | PR-3 pricing.rs 引擎 | ✅ 已实施 | 新建 `crates/lloom-core/src/pricing.rs`：PriceSpec/TierBand/ZoneRule/UsageDetail + actual_cost/est_cost/effective_input_cost/zone_multiplier + ZoneResolver + 北京时间纯标准库换算；16 个单测 |
 | PR-4 prompt 稳定化 | ✅ 已实施 | 新建 `signals.rs` 的 `prefix_stability` 信号（5 单测）；`build_context` 补前缀稳定约定文档（代码结构本已符合） |
-| PR-5 路由衔接（eff_in/sticky） | ⏳ **待办** | 依赖 ROUTING-PLAN 步骤 4（plan() 评分路由重构），跨计划，另行实施 |
+| PR-5 路由衔接（eff_in/sticky） | ✅ **已实施**（2026-08-27，commit 864b552） | `model_cache_hit_rate`（按 task_type 聚合真实 cached/prompt 平均）喂 `plan()`/`plan_for_task()` 的 `effective_input_cost`；`recent_conversation_model` + `sticky_bonus`（+0.05，仅缓存敏感通道且匹配会话末模型，无样本缺省 0 不偏袒）；`ChatBody.conversation_id` 透传、shadow 传 None；+3 单测（合计 73 全绿） |
 | PR-6 校准 job + WebUI 定价页 | ✅ **已实施** | `calibration_job` 每日聚合（样本 ≥50 才计算）、对账比 act/est、命中率与 out/in 落 `price_calibration`、偏差连续 3 天越界标 `price_stale`；REST：`GET /api/pricing/specs`、`PUT /api/pricing/specs/{provider}/{model}`（含 USD/token 断言，强制转 manual）、`GET /api/pricing/calibration`。WebUI 定价页**已完成**（PricingPage：price_source 徽标/stale 黄点/改价转 manual/采纳建议价/近 30 天校准曲线） |
 | PR-7 探针系统 | ✅ **已实施** | `probe.rs`：每小时一轮（固定 >512 字符稳定前缀，暖机+命中验证两条）、预算状态机（默认 ¥5/月、单轮 0.002 USD 熔断、Hourly→Daily→SuspendedCloud 降频、连续 8 轮失败暂停）、记账 `task_type='probe'`（失败 cost=-1 哨兵）；REST：`GET /api/probe/stats`、`PUT /api/probe/budget`。用量页**探针视图已完成** |
 | PR-8 峰谷调度 | ⏳ 待办 | 依赖 ROUTING-PLAN P4 |

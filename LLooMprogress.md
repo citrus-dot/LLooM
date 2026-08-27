@@ -157,7 +157,7 @@
 按优先级：`🔥` 高/安全，`⚡` 体验，`🔧` 优化。
 
 ### 来自 PRICING-PLAN.md
-- [ ] 🔶 **PR-5 路由衔接**：`effective_input_cost` 进 `plan()` 评分（依赖 ROUTING-PLAN P0.d，P0.d 已完成，此项留待与 P3 路由联动一并处理）
+- [x] ✅ **PR-5 路由衔接**（2026-08-27，commit 864b552）：缓存命中率喂 `effective_input_cost` 进 `plan()`/`plan_for_task()`（按 task_type 聚合真实 cached/prompt）；会话亲和 sticky（+0.05，仅缓存敏感通道，缺省 0 不偏袒）+ `conversation_id` 透传；+3 单测（合计 73）
 - [x] ✅ **PR-6 WebUI 定价页**：`GET /api/pricing/specs` 等后端 + PricingPage 前端均已落地（2026-08-27）
 - [x] ✅ **PR-7 探针视图**：`GET /api/probe/stats` 后端 + 用量页/定价页探针视图均已落地（2026-08-27）
 - [ ] ⏳ **PR-8 峰谷调度**：可延迟任务挪谷时（依赖 ROUTING-PLAN P4）
@@ -177,7 +177,7 @@
 - [x] ✅ **P3 健康感知 + fallback + overhead**（2026-08-27，commit 3551f8c）：`health.rs` 状态机（滑窗 degraded/连续失败 down/熔断+成功恢复）；chat `chat_with_failover` 按 fallback 链重试；后台 `health_probe_loop` 主动探测；`GET /api/routing/overhead`（count/avg/p95/max/slow）；65 单测全绿
 - [x] ✅ **P4 编排智能升级**（2026-08-27）：子任务级独立 plan + 阶段降级重试 + escalate 升档；修复 SCHEMA 旧库升级断裂 + Python 升档崩溃；70 测试全绿；冒烟验证端点正确
 - [x] ✅ **P5 预算联动**（2026-08-27，本阶段）：预算档进入决策链（throttle/tight cost 倍率 + tight 复杂降档 + protect 仅本地）+ `avg_out_tokens` 真实输出 EWMA + tiktoken 精确 est_in + plan-subtask 服务端默认注档；70 单测全绿
-- [ ] 🔶 **PR-5 路由衔接**：`effective_input_cost` 进 `plan()` 评分（依赖 ROUTING-PLAN P0.d，P0.d 已完成，此项留待与 P3 路由联动一并处理）
+- [x] ✅ **PR-5 路由衔接**（2026-08-27，commit 864b552）：缓存命中率喂 `effective_input_cost` 进 `plan()`/`plan_for_task()`（按 task_type 聚合真实 cached/prompt）；会话亲和 sticky（+0.05，仅缓存敏感通道，缺省 0 不偏袒）+ `conversation_id` 透传；+3 单测（合计 73）
 
 ### 来自 CONTEXT-PLAN.md
 - [ ] ⚡ **Phase 2 上下文架构迁移**：前端只发 (conversation_id, query)，Rust 构建历史
