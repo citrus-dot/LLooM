@@ -1,7 +1,7 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-08-27** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：**PR-8 峰谷调度**（本阶段）；P5 预算驱动动态调整、P4 编排智能升级（含 SCHEMA 升级断裂修复）已提交
+> 最新已提交：**CONTEXT-PLAN 2–5 审计收尾**（本阶段：确认已落地 + 补 conversation 层 5 守护单测）；此前 PR-8 峰谷调度、P5 预算驱动、P4 编排智能升级（含 SCHEMA 修复）已提交
 
 ---
 
@@ -64,8 +64,8 @@
 
 | 文档 | 编写时间 | 提交状态 | 内容范围 | 落地状态 |
 |---|---|---|---|---|
-| [`CONTEXT-PLAN.md`](./CONTEXT-PLAN.md) | 2026-08-24 | **已提交**（a2b8bb5）| 上下文优化：SQLite 对话存储、预算上下文、两层缓存、原子写、两阶段落盘 | Phase 1 + 部分 Phase 4 已落地（追加端点存在于 server.rs）|
-| [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **已提交**（694f0a9 等，P2.a/P2.c 已落地）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（已提交）；PR-6/7 前端定价页+探针视图已落地；**P2.a 定价刷新 + P2.c 缓存节省已追加落地**；PR-5/PR-8 待办 |
+| [`CONTEXT-PLAN.md`](./CONTEXT-PLAN.md) | 2026-08-24 | **已提交**（a2b8bb5，本阶段审计确认 Phase 2–5 全部落地）| 上下文优化：SQLite 对话存储、预算上下文、两层缓存、原子写、两阶段落盘 | Phase 1–5 已全部落地（两阶段追加/更新端点、服务端 history、L1/L2 摘要、两层缓存+单例+淘汰、UsagePage 缓存节省）；本阶段补 conversation 层 5 个守护单测（84 全绿）|
+| [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **已提交**（694f0a9 等，P2.a/P2.c 已落地）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-8 已全部落地（含 PR-5 路由衔接、PR-8 峰谷调度已提交）；PR-6/7 前端定价页+探针视图已落地；P2.a 定价刷新 + P2.c 缓存节省已追加落地 |
 | [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4–v8 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/b/c/d/e/f/g 全部落地**（09480fa、8dddc59、50ec431、d6912b9）；P1.a/b/c/d 全部落地（P1 阶段完成）；**P2.a 定价刷新 + P2.c 定价页/徽标已落地**；**P3 健康感知 + fallback + overhead 已落地**；**P4 编排智能升级已落地**；**P5 预算驱动动态调整已落地**（本阶段提交） |
 
 > 三份计划文档是详细设计与落地顺序的权威来源。本进度文档只做索引与高层同步，不重复其细节。
@@ -179,11 +179,11 @@
 - [x] ✅ **P5 预算联动**（2026-08-27，本阶段）：预算档进入决策链（throttle/tight cost 倍率 + tight 复杂降档 + protect 仅本地）+ `avg_out_tokens` 真实输出 EWMA + tiktoken 精确 est_in + plan-subtask 服务端默认注档；70 单测全绿
 - [x] ✅ **PR-5 路由衔接**（2026-08-27，commit 864b552）：缓存命中率喂 `effective_input_cost` 进 `plan()`/`plan_for_task()`（按 task_type 聚合真实 cached/prompt）；会话亲和 sticky（+0.05，仅缓存敏感通道，缺省 0 不偏袒）+ `conversation_id` 透传；+3 单测（合计 73）
 
-### 来自 CONTEXT-PLAN.md
-- [ ] ⚡ **Phase 2 上下文架构迁移**：前端只发 (conversation_id, query)，Rust 构建历史
-- [ ] ⚡ **Phase 3 压缩**：tiktoken 预算器、L1 截断、L2 滚动摘要
-- [ ] ⚡ **Phase 4 缓存增强**：L1 精确缓存表、上下文无关判别器、单例化、淘汰线程、看板
-- [ ] ⚡ **Phase 5 供应商前缀缓存验证**
+### 来自 CONTEXT-PLAN.md（审计确认：Phase 2–5 已落地，详见 a2b8bb5）
+- [x] ✅ **Phase 2 上下文架构迁移**：前端只发 (conversation_id, query)，Rust 构建历史（`load_history_for_orchestrate`）+ meta 持久化回显 + `interrupted` 崩溃恢复 UI（chatStore.persistPhase1 / ChatPage）
+- [x] ✅ **Phase 3 压缩**：tiktoken 预算器 + L1 截断（`build_context`，`LLOOM_CONTEXT_BUDGET` 配）+ L2 滚动摘要（`_make_summary`，`get/set_summary` 持久化、`SUMMARY_BLOCK` 区间增量重算）
+- [x] ✅ **Phase 4 缓存增强**：L1 精确缓存（SQLite `sha256(model|system|fingerprint|q)`）+ 上下文无关判别器（`_is_context_free` 启发式）+ `SemanticCache`/`ExactCache` 单例 + 5min 淘汰线程（TTL+LRU `LLOOM_CACHE_MAX_ENTRIES`）+ UsagePage 缓存节省卡
+- [x] ✅ **Phase 5 供应商前缀缓存（代码侧）**：`build_context` 固定 `[system][?summary][kept]` 前缀 + summary 块状更新，已为 DashScope 前缀缓存铺路；**账单侧命中核对留待办**（需 DashScope key）
 
 ### 历史遗留（LLooMprogress 原 TODO）
 - [ ] 🔧 **O2**：`main.rs` 绑定 `0.0.0.0`，建议改 `127.0.0.1`（本地工具；涉及局域网访问，需确认后再改）
@@ -254,4 +254,4 @@
 | `ROUTING-PLAN.md` | 路由重构方案（v3 + 注记至 P5）| 已提交，P0–P5 阶段全部落地状态已更新 |
 | `ROUTING-PLAN.md` 引用的外部研究 | Switchyard / vLLM Semantic Router / Router-R1 等 | 设计借鉴，不引入依赖 |
 
-> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② **P0–P5 阶段与 PRICING-PLAN PR-1~PR-8 已全部完成**，下一优先项为 **CONTEXT-PLAN 阶段 2–5 / O6 子任务并行** 等剩余优化（见规划交接）。每次 `cargo build`/`cargo test` 全绿再提交。
+> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② **P0–P5、PRICING-PLAN PR-1~PR-8、CONTEXT-PLAN Phase 1–5 已全部完成**，下一优先项见下方**待办/后端phase 5 账单核对（需 DashScope key）、O6 子任务并行、前缀缓存深挖**等（见规划交接）。每次 `cargo build`/`cargo test` 全绿再提交。

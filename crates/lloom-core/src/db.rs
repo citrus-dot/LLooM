@@ -2209,6 +2209,143 @@ mod migration_tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ── CONTEXT-PLAN 验收①/⑤：两阶段持久化、中断恢复、服务端 history、追加非覆盖 ──
+    // 复用 DB_LOCK 串行化 + 独立临时目录，与其它写库测试不互相污染。
+
+    fn conv_dir(tag: &str) -> (std::path::PathBuf, Option<std::string::String>) {
+        let dir = std::env::temp_dir().join(format!("lloom_conv_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let prev = std::env::var("LLOOM_DATA_DIR").ok();
+        std::env::set_var("LLOOM_DATA_DIR", &dir);
+        (dir, prev)
+    }
+
+    fn conv_restore(dir: std::path::PathBuf, prev: Option<std::string::String>) {
+        match prev {
+            Some(v) => std::env::set_var("LLOOM_DATA_DIR", v),
+            None => std::env::remove_var("LLOOM_DATA_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conv_two_phase_append_update_load() {
+        let _guard = DB_LOCK.lock().unwrap();
+        let (dir, prev) = conv_dir("twophase");
+        init_db_retry();
+        let cid = "conv-tp-1";
+        // 阶段一：用户消息 + assistant 占位(generating)
+        let (u_id, u_seq) = crate::conversations::append_message(cid, "user", "请写个快排", None).unwrap();
+        let (a_id, a_seq) = crate::conversations::append_message(
+            cid, "assistant", "", Some(&serde_json::json!({"status": "generating"})),
+        )
+        .unwrap();
+        assert_eq!(u_id, cid);
+        assert_eq!(u_seq, 1);
+        assert_eq!(a_seq, 2);
+        // 阶段二：流结束回填内容 + 元数据
+        crate::conversations::update_message(
+            cid, a_seq, Some("```rust\nfn qsort(...)\n```"),
+            Some(&serde_json::json!({"status": "done", "model": "qwen-plus", "input_tokens": 20, "output_tokens": 40})),
+        )
+        .unwrap();
+        drop(u_id);
+        let doc = crate::conversations::load(cid).unwrap();
+        let msgs = doc["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[0]["content"], "请写个快排");
+        assert_eq!(msgs[1]["role"], "assistant");
+        assert_eq!(msgs[1]["content"].as_str().unwrap().contains("qsort"), true);
+        assert_eq!(msgs[1]["meta"]["status"], "done");
+        assert_eq!(msgs[1]["meta"]["model"], "qwen-plus");
+        conv_restore(dir, prev);
+    }
+
+    #[test]
+    fn conv_interrupted_tail_marked_on_load() {
+        let _guard = DB_LOCK.lock().unwrap();
+        let (dir, prev) = conv_dir("interrupted");
+        init_db_retry();
+        let cid = "conv-int-1";
+        crate::conversations::append_message(cid, "user", "你好", None).unwrap();
+        // 中途崩溃：assistant 卡在 generating
+        crate::conversations::append_message(
+            cid, "assistant", "", Some(&serde_json::json!({"status": "generating"})),
+        )
+        .unwrap();
+        let doc = crate::conversations::load(cid).unwrap();
+        let tail = doc["messages"].as_array().unwrap().last().unwrap();
+        assert_eq!(tail["meta"]["status"], "interrupted", "崩溃残留应标记为 interrupted");
+        // 落库为 interrupted（load 已持久化）
+        let doc2 = crate::conversations::load(cid).unwrap();
+        assert_eq!(doc2["messages"].as_array().unwrap().last().unwrap()["meta"]["status"], "interrupted");
+        conv_restore(dir, prev);
+    }
+
+    #[test]
+    fn conv_history_excludes_generating_and_current_user() {
+        let _guard = DB_LOCK.lock().unwrap();
+        let (dir, prev) = conv_dir("hist");
+        init_db_retry();
+        let cid = "conv-hist-1";
+        crate::conversations::append_message(cid, "user", "先聊", None).unwrap();
+        crate::conversations::append_message(cid, "assistant", "好的", None).unwrap();
+        // 本轮：当前 query + 空 assistant 占位（generating）
+        crate::conversations::append_message(cid, "user", "现在问", None).unwrap();
+        crate::conversations::append_message(
+            cid, "assistant", "", Some(&serde_json::json!({"status": "generating"})),
+        )
+        .unwrap();
+        let hist = crate::conversations::load_history_for_orchestrate(cid, "现在问").unwrap();
+        // 只应剩：先聊(user)+好的(assistant)；当前 user 与 generating 占位都剔除
+        assert_eq!(hist.len(), 2, "history 应剔除当前轮与崩溃占位");
+        assert_eq!(hist[0]["role"], "user");
+        assert_eq!(hist[0]["content"], "先聊");
+        assert_eq!(hist[1]["role"], "assistant");
+        assert_eq!(hist[1]["content"], "好的");
+        // meta/seq 已剥离，仅剩 role/content
+        assert!(hist[0].get("meta").is_none());
+        assert!(hist[0].get("seq").is_none());
+        conv_restore(dir, prev);
+    }
+
+    #[test]
+    fn conv_append_is_additive_no_overwrite() {
+        let _guard = DB_LOCK.lock().unwrap();
+        let (dir, prev) = conv_dir("append");
+        init_db_retry();
+        let cid = "conv-app-1";
+        let (_, s1) = crate::conversations::append_message(cid, "user", "甲", None).unwrap();
+        let (_, s2) = crate::conversations::append_message(cid, "user", "乙", None).unwrap();
+        assert!(s1 != s2, "追加语义：第二条 seq 必须不同（非整包覆盖）");
+        let doc = crate::conversations::load(cid).unwrap();
+        let msgs = doc["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 2, "两条消息都落盘、无覆盖丢失");
+        assert_eq!(msgs[0]["content"], "甲");
+        assert_eq!(msgs[1]["content"], "乙");
+        conv_restore(dir, prev);
+    }
+
+    #[test]
+    fn conv_summary_roundtrip() {
+        let _guard = DB_LOCK.lock().unwrap();
+        let (dir, prev) = conv_dir("summary");
+        init_db_retry();
+        let cid = "conv-sum-1";
+        crate::conversations::append_message(cid, "user", "早期目标", None).unwrap();
+        crate::conversations::set_summary(cid, "用户想用 Rust 写快排", 2).unwrap();
+        let (text, upto) = crate::conversations::get_summary(cid).unwrap();
+        assert_eq!(text.as_deref(), Some("用户想用 Rust 写快排"));
+        assert_eq!(upto, 2);
+        // load 文档带出 summary
+        let doc = crate::conversations::load(cid).unwrap();
+        assert_eq!(doc["summary"], "用户想用 Rust 写快排");
+        assert_eq!(doc["summary_upto"].as_i64(), Some(2));
+        conv_restore(dir, prev);
+    }
 }
 
 #[cfg(test)]
