@@ -1,7 +1,7 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-08-27** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：P2 定价刷新 + 定价页/徽标（694f0a9）；当前工作区为 **P3 健康感知/fallback/overhead**（待审查后统一推送）
+> 最新已提交：**P4 编排智能升级**（本阶段，含 SCHEMA 升级断裂修复）；P2/P3 已提交（694f0a9/3551f8c）
 
 ---
 
@@ -66,7 +66,7 @@
 |---|---|---|---|---|
 | [`CONTEXT-PLAN.md`](./CONTEXT-PLAN.md) | 2026-08-24 | **已提交**（a2b8bb5）| 上下文优化：SQLite 对话存储、预算上下文、两层缓存、原子写、两阶段落盘 | Phase 1 + 部分 Phase 4 已落地（追加端点存在于 server.rs）|
 | [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **未提交**（工作区 M）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（未提交）；PR-6/7 前端定价页+探针视图已落地；**P2.a 定价刷新 + P2.c 缓存节省已追加落地**；PR-5/PR-8 待办 |
-| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4–v7 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/b/c/d/e/f/g 全部落地**（09480fa、8dddc59、50ec431、d6912b9）；P1.a/b/c/d 全部落地（P1 阶段完成）；**P2.a 定价刷新 + P2.c 定价页/徽标已落地**；**P3 健康感知 + fallback + overhead 已落地** |
+| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4–v8 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/b/c/d/e/f/g 全部落地**（09480fa、8dddc59、50ec431、d6912b9）；P1.a/b/c/d 全部落地（P1 阶段完成）；**P2.a 定价刷新 + P2.c 定价页/徽标已落地**；**P3 健康感知 + fallback + overhead 已落地**；**P4 编排智能升级已落地**（本阶段提交） |
 
 > 三份计划文档是详细设计与落地顺序的权威来源。本进度文档只做索引与高层同步，不重复其细节。
 
@@ -111,6 +111,13 @@
 - `GET /api/routing/overhead`（?days=N，0 全部；>100ms 记 slow；`fast_path_healthy` 标注快路径健康度）
 - config.rs：`health_fail_window/degraded_fails/down_consecutive/circuit_threshold/probe_sec` 五键，默认 5/2/3/5/60
 - 冒烟：`cargo test` 65 全绿（+7 health 状态机 +1 overhead 聚合）；`cargo build` 无警告
+
+**2026-08-27 落地（ROUTING-PLAN P4 编排智能升级；P4 阶段完成）**：
+- P4.0 选 A 轻量回调：Rust 新增 `POST /api/routing/plan-subtask`（无状态 `plan_for_task(task_type, est_in, est_out, budget_tier)` 出 primary + fallback 链 + escalation_enabled）；`router.rs::plan_for_task` 为 `plan()` 的参数化封装，`plan_decision` 复用其默认参（500/1000/"normal"）
+- Python `orchestrate_stream` 每子任务按其 `task_type` 回调拿 plan（`_plan_subtask`，urllib 标准库，失败回落原 assignments），primary→fallback_chain 逐个降级重试（记 `retry_count`，失败绝不美化）；P4.c 零成本质量信号（`_quality_signal_ok`：非空/≥2 字/无失败哨兵）不达标 + `escalation_enabled` → `_strongest_model` 升档强模型重试一次（用单价 in+out 作强档代理，本地免费模型不成为目标、无更高价则不开）；`decompose`/`simple_qa` routing_policy 种子 `escalation_enabled=1`
+- SSE 契约：`task_done` 透传 `escalated_from`/`retry_count`/`tier_bumped`，`result` 透传 `escalations`/`tier_bumped`；Rust 对 `escalated_from` 记 **Escalation** 成效信号（P3 同语义，final 模型仍记 Success）；P4.d 汇总/轻量路径均走 Rust `plan_decision(aggregate/general)`
+- 顺带修复两处既有 bug：① **SCHEMA `idx_usage_req` 升级断裂**——该索引引用仅靠 migrate ALTER 才加的 `request_id`，P1.a 前的旧库在 SCHEMA 阶段即失败 → 移入 `migrate_db` ALTER 后幂等建索引（真实 pre-P1a 旧库冒烟：启动成功、列补齐、索引就位）；② `_strongest_model` 曾依赖 Python `ModelSpec` 不存在的 `capability_tier`/`quality_score` → escalation 触发即崩溃 → 改单价代理
+- 冒烟：`cargo build` 无警告 + 65 单测全绿；plan-subtask 端点 simple_qa→qwen2.5-local/fallback[deepseek-v3,qwen-plus]、coding→deepseek-v3/fallback[qwen3-max,qwen3.6-plus]、aggregate 走 plan 均正确；Python 助手（quality_signal/plan_subtask/strongest_model/dead-url 兜底）校验全过
 
 **2026-08-27 落地（ROUTING-PLAN P2 定价刷新 + WebUI；PR-6/7 前端；P2 阶段完成）**：
 - P2.a 定价刷新：`server.rs` `pricing_refresh_loop` 24h 后台 job（jsdelivr 主源 + ghproxy 回退，断网失败静默保留本地值）+ `POST /api/pricing/refresh`（手动触发）、`POST /api/pricing/specs/{provider}/{model}/accept`（采纳转 manual，此后不被覆盖）；`pricing.rs::parse_remote_prices` 纯函数解析（跳过非 provider/model 键、负价，离线单测）+ `db::refresh_price_spec`（COALESCE 保 cache_read，不覆盖 manual）
@@ -160,8 +167,10 @@
 - [x] ✅ **P1.c 成效分**（2026-08-27）
 - [x] ✅ **P1.d 影子评测 + AIQ 重放**（2026-08-27，热路径自动采样已接入）
 - [x] ✅ **P2.a 定价刷新 + P2.c 定价页/徽标**（2026-08-27）：24h 刷新 job + 手动触发 + 采纳转 manual；WebUI PricingPage（specs/徽标/改价/采纳/校准）；用量页缓存节省卡片 + 探针视图
-- [x] ✅ **P3 健康感知 + fallback + overhead**（2026-08-27）：`health.rs` 状态机（滑窗 degraded/连续失败 down/熔断/成功恢复）；chat `chat_with_failover` 按 fallback 链重试；后台 `health_probe_loop` 主动探测；`GET /api/routing/overhead`（count/avg/p95/max/slow）
-- [ ] 🔧 **P4 编排升级**、**P5 预算联动**
+- [x] ✅ **P3 健康感知 + fallback + overhead**（2026-08-27，commit 3551f8c）：`health.rs` 状态机（滑窗 degraded/连续失败 down/熔断+成功恢复）；chat `chat_with_failover` 按 fallback 链重试；后台 `health_probe_loop` 主动探测；`GET /api/routing/overhead`（count/avg/p95/max/slow）；65 单测全绿
+- [x] ✅ **P4 编排智能升级**（2026-08-27，本阶段）：子任务级独立 plan + 阶段降级重试 + escalate 升档；修复 SCHEMA 旧库升级断裂 + Python 升档崩溃；65 测试全绿；冒烟验证端点正确
+- [ ] 🔧 **P5 预算联动**
+- [ ] 🔶 **PR-5 路由衔接**：`effective_input_cost` 进 `plan()` 评分（依赖 ROUTING-PLAN P0.d，P0.d 已完成，此项留待与 P3 路由联动一并处理）
 
 ### 来自 CONTEXT-PLAN.md
 - [ ] ⚡ **Phase 2 上下文架构迁移**：前端只发 (conversation_id, query)，Rust 构建历史
@@ -238,4 +247,4 @@
 | `ROUTING-PLAN.md` | 路由重构方案（v3 + v4/v5 注记）| 已提交，P0 阶段全部落地状态已更新 |
 | `ROUTING-PLAN.md` 引用的外部研究 | Switchyard / vLLM Semantic Router / Router-R1 等 | 设计借鉴，不引入依赖 |
 
-> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② P0 阶段已全部完成，下一优先项为 **P1.a 用量落库补全**（orchestrate 的 `task_type`/`latency`/`request_id`）或 PRICING-PLAN **PR-6 WebUI 定价页**。每次 `cargo build`/`cargo test` 全绿再提交。
+> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② P0–P4 阶段已全部完成，下一优先项为 **P5 预算驱动动态调整**（或 PRICING-PLAN **PR-5 `effective_input_cost` 进 plan() 评分**）。每次 `cargo build`/`cargo test` 全绿再提交。

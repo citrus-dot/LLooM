@@ -450,6 +450,19 @@ pub async fn route(model: &str, user_text: &str, classifier: Option<&ModelSpec>)
 /// 按固定编排角色做一次 plan() 决策，返回主模型名所在 PlanOutcome。
 /// 失败时由调用方兜底（回落 models 首模型），不抛业务中断。
 pub fn plan_decision(task_type: &str, models: &[Model]) -> Result<PlanOutcome, PlanError> {
+    plan_for_task(task_type, models, 500, 1000, "normal")
+}
+
+/// P4：子任务级/可变预算档 plan——按调用方给的预估 token 与预算档评分路由。
+/// 供 `POST /api/routing/plan-subtask` 使用（Python 每个子任务按其 task_type 独立 plan）；
+/// 无状态，仅为 plan() 的参数化封装。
+pub fn plan_for_task(
+    task_type: &str,
+    models: &[Model],
+    est_in_tokens: i64,
+    est_out_tokens: i64,
+    budget_tier: &str,
+) -> Result<PlanOutcome, PlanError> {
     let policy = db::get_routing_policy(task_type)
         .ok()
         .flatten()
@@ -485,10 +498,10 @@ pub fn plan_decision(task_type: &str, models: &[Model]) -> Result<PlanOutcome, P
         price_specs: &spec_map,
         zones: &zr,
         t_epoch_secs: now_epoch(),
-        est_in_tokens: 500,
-        est_out_tokens: 1000,
+        est_in_tokens,
+        est_out_tokens,
         quality_override: &quality_override,
-        budget_tier: "normal",
+        budget_tier,
     };
     plan(&input)
 }

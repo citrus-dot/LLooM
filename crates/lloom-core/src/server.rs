@@ -771,6 +771,13 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     };
                     db::upsert_model_task_score_signal(&model, &role, kind).ok();
                 }
+                // P4：子任务升档（P4.c）把被跳过的轻量模型按 P3 相同语义记 Escalation 信号——
+                // 其质量信号不达标（零成本判别），让路由学习少用该模型。final model 仍记 Success。
+                if let Some(ef) = obj.get("escalated_from").and_then(|v| v.as_str()) {
+                    if !ef.is_empty() && ef != model && role != "unknown" {
+                        db::upsert_model_task_score_signal(ef, &role, QualitySignalKind::Escalation).ok();
+                    }
+                }
                 // P1.d：按 shadow_ratio 概率后台采样双跑（以主 query 作路由样本），不改返回。
                 maybe_shadow_sample(models.clone(), role, shadow_query.clone());
             }
@@ -1286,6 +1293,48 @@ async fn probe_budget_update(Json(body): Json<ProbeBudgetBody>) -> Json<Value> {
 struct OverheadQuery {
     days: Option<i64>,
 }
+
+/// P4.a：子任务级 plan-subtask 回调（Python 每子任务按其 task_type 独立 plan）。
+/// 无状态：入 task_type/预估 token/预算档 → 出 primary + fallback 链 + escalation_enabled。
+/// 返回模型名，Python 用自己的 models 池解析成 ModelSpec。
+#[derive(Deserialize)]
+struct PlanSubtaskRequest {
+    task_type: String,
+    est_in_tokens: Option<i64>,
+    est_out_tokens: Option<i64>,
+    budget_tier: Option<String>,
+}
+async fn rust_plan_subtask(Json(req): Json<PlanSubtaskRequest>) -> Result<Json<Value>> {
+    let est_in = req.est_in_tokens.unwrap_or(500).max(0);
+    let est_out = req.est_out_tokens.unwrap_or(1000).max(0);
+    let tier = req.budget_tier.unwrap_or_else(|| "normal".to_string());
+    let models = db::list_models(true)?;
+
+    let outcome = match router::plan_for_task(&req.task_type, &models, est_in, est_out, &tier) {
+        Ok(o) => o,
+        Err(e) => {
+            return Ok(Json(json!({
+                "primary": null,
+                "fallback_chain": [],
+                "escalation_enabled": false,
+                "tier_req": 0,
+                "error": e.to_string(),
+            })));
+        }
+    };
+    let escalation_enabled = db::get_routing_policy(&req.task_type)
+        .ok()
+        .flatten()
+        .map(|p| p.escalation_enabled == 1)
+        .unwrap_or(false);
+    Ok(Json(json!({
+        "primary": outcome.primary,
+        "fallback_chain": outcome.fallback_chain,
+        "escalation_enabled": escalation_enabled,
+        "tier_req": 0,
+    })))
+}
+
 async fn routing_overhead(Query(q): Query<OverheadQuery>) -> Result<Json<Value>> {
     let days = q.days.unwrap_or(0);
     if days < 0 || days > 90 {
@@ -1391,6 +1440,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/orchestrate/stream", post(orchestrate_stream))
         // P1.d 影子评测 + AIQ 重放数据源
         .route("/api/routing/shadow", post(routing_shadow).get(routing_shadow_status))
+        .route("/api/routing/plan-subtask", post(rust_plan_subtask)) // P4.a Python 每子任务回调
         .route("/api/routing/overhead", get(routing_overhead))
         // Services (process management)
         .route("/api/services/status", get(services_status))

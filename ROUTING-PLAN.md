@@ -688,32 +688,62 @@ async fn refresh() -> Result<()> {
 
 前置：P0.f（Rust 统一决策）、P1.a（子任务记账）。
 
-#### P4.a　子任务级评分分配（R2 思路）
-分解产出子任务带 `task_type`（DECOMPOSE_SYSTEM_PROMPT 已要求标注，ai_service.py:901）。
-Rust 在 `orchestrate_stream` 收到分解结果后，对每个子任务按其 task_type 独立 `plan()`，
-把结果填入 `assignments.subtasks` 下发 Python。无依赖子任务可并行（与已知待办 O6 合并）。
+#### P4.0　架构选型：轻量回调（A）vs 双手协商重构（B）
 
-#### P4.b　Stage 路由伪代码（Switchyard 核心借鉴）
-```
-for subtask in subtasks:
-    outcome = plan(subtask)                      # 选 primary + fallback 链
-    try:
-        result = ai_client.chat(outcome.primary, subtask_msgs)
-        if result.ok and quality_signal_ok(result):   # 零成本信号：解析成功/JSON schema/长度合理
-            emit task_done(ok)
+| 维度 | A 轻量回调（单次 SSE） | B 双手协商（拆 decompose 独立端点） |
+|---|---|---|
+| 决策真源 | Rust（`plan-subtask` 端点跑 `plan()`） | Rust（收 decompose 后 plan 每子任务下发） |
+| 执行期降级主导 | Python（litellm 在此，降级自然在此） | Python（降级仍必在 Python）→ Rust 主导只在初始分配 |
+| Python 重构 | 局部（generator 内加回调 + 降级循环） | 大（拆 decompose/execute 两端点） |
+| Rust 角色 | 透传 SSE + 1 个无状态 plan 端点 | 编排驱动者（有状态，持 decompose 结果 midway） |
+| 客户端 SSE | 单次不中断 | decompose 段同步无流 → execute 段才流 |
+| 依赖 P0.g | 否（用 Python 既有 `_is_complex`） | 是（Rust 入口须复刻 `_is_complex` 判走哪路） |
+| 每子任务开销 | +1 次 localhost 回调（~1ms） | decompose→execute 多一次完整往返 + 序列化 |
+| 预算时点 | 按需 plan，每子任务拿最新预算水位（更准） | 初始一次性 plan，用请求初预算 |
+
+**选 A**。理由：
+1. **降级重试必在 Python**（litellm 调用在那）——B 的「Rust 主动 plan」只体现在初始分配，执行期降级仍回 Python，却付了拆两段 + Rust 有状态的代价；A 用回调拿 plan、Python 内降级，执行期主导统一在 Python，决策真源仍在 Rust。
+2. **重构小**：Python generator 结构不变；Rust 加 1 个无状态端点。
+3. **不阻塞 P0.g**：P4 可先于 signals 上移落地；B 强依赖 Rust 复刻 `_is_complex`。
+4. **预算更准**：每子任务时点回调拿最新预算水位（P5 动态档），而非请求初一次性。
+
+A 的代价：新增 Python→Rust 调用方向（Python 需知 Rust URL，经 `OrchestrateRequest.rust_base_url` 或 env `LLOOM_ROUTER_URL` 传入）；每子任务一次同步回调（localhost ~1ms，可忽略）。
+B 的适用场景（未来）：若要把编排状态/可观测完全收归 Rust，或支持编排中途暂停/恢复/人工介入——届时 Rust 主导更合适，当前无此需求。
+
+#### P4.a　子任务级评分分配（A 架构：Python 回调 Rust plan）
+分解产出子任务带 `task_type`（DECOMPOSE_SYSTEM_PROMPT 已要求标注，ai_service.py:901）。
+Python 在执行每个子任务前，回调 Rust 新增端点拿 plan：
+
+- Rust 新增 `POST /api/routing/plan-subtask`：入 `{task_type, est_in_tokens, est_out_tokens, budget_tier, needs_tools, needs_vision, request_id}`，出 `{primary: ModelSpec, fallback_chain: [ModelSpec], escalation_enabled, tier_req}`。纯 `plan()` + 查 `model_task_score`，**无状态**。
+- Python `orchestrate_stream` generator 内：子任务执行前 `httpx.post(rust_base_url+"/api/routing/plan-subtask", ...)`，用 `primary` 执行，失败按 `fallback_chain` 重试（见 P4.b）。
+- 轻量路径（不分解）同样回调 `plan-subtask(task_type="general")` 拿模型，统一入口。
+- `assignments`（P0.f 请求体）此时只承载 `decompose`/`aggregate` 的 spec（请求时可算的），子任务 plan 走回调——与 P0.f 双字段契约一致（`models` 全池仍下发，供 summary/兜底）。
+
+#### P4.b　Stage 路由降级（Python 内，Switchyard 核心借鉴）
+```python
+# Python orchestrate_stream generator 内，per subtask
+for sub in subtasks:
+    tier_bump = 0
+    while True:                                   # 升级重试循环
+        plan = httpx.post(rust+"/api/routing/plan-subtask",
+                          {task_type: sub.task_type, est_in: est(sub),
+                           budget_tier, tier_bump, request_id})
+        result, ok = run_with_fallback(plan, sub) # primary → fallback_chain 逐个试
+        if ok and quality_signal_ok(result):      # 零成本信号：解析成功/JSON schema/长度合理
+            emit task_done(ok, model=result.model, retry_count=result.retries,
+                           escalated_from=result.escalated_from, task_type=sub.task_type)
+            break
         else:
-            raise StageError                      # 进 stage 路由
-    except StageError:
-        for fb in outcome.fallback_chain[1..]:    # 降级重试
-            db::inc_escalation_count(fb, task_type)
-            result = ai_client.chat(fb, ...)
-            if result.ok: emit task_done(model=fb); break
-        else:
+            if plan.escalation_enabled and tier_bump < MAX_TIER_BUMP:
+                tier_bump += 1; continue          # 整体升一档再 plan
             consecutive_fail += 1
-            if consecutive_fail >= 2:
-                bump_min_tier(+1) for remaining subtasks   # 整体升档
-            emit task_done(error,如实) # 不美化
+            emit task_done(error, 如实); break     # 不美化
+# run_with_fallback: 每次失败 attempt → routing_decisions.outcome='fail'（不进 usage）；
+#                    成功 attempt → task_done 触发 usage 落库（P1.a，task_type 细分）
 ```
+`result.escalated_from` = 实际服务模型 ≠ primary 时记 primary 名；`tier_bumped` = tier_bump>0。
+`result` 事件补 `escalations`（总升级次数）。Rust 在 SSE 透传时把这些写 `routing_decisions.outcome`。
+无依赖子任务可并行（与已知待办 O6 合并）——并行时各子任务独立回调 plan-subtask，互不阻塞。
 
 #### P4.c　Escalation 模式
 `routing_policy.escalation_enabled=1` 的任务启用 §4.5：先跑轻量档候选，零成本信号判质量不达标才升级强档
@@ -772,7 +802,7 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 | 7 | P1.b/c 成效分 + 推荐分配 | 影子评测下内部分解路径成本降 ≥60%，质量无显著回退 | ✅ 2026-08-27（P1.b/c）P1.b `migrate_db` 按 §P1.b 表为新库预置 `pinned_model` 推荐主选（INSERT OR IGNORE）+ 既有库仅回填 NULL（settings 标记 `migration_policy_v1_p1b`，绝不覆盖用户钦定）；P1.c `metadata.rs::cold_start_quality` overlay 按 task_type 榜单折算分 + `db::upsert_model_task_score_signal` 线上 EWMA（α 读 `signal.ewma_alpha` 默认 0.15，输入 σ 不 clamp、结果 clamp）并按信号自增 success/fail/escalation、`sample_count≥20` 解除保守期；server.rs chat 落 Success、orchestrate 按 task_done error 落 Success/SubtaskFail（model/role≠unknown 才打点）；≥60% 指标待影子真实样本验收 |
 | 8 | P2 定价刷新 + WebUI 徽标 | 手动刷新更新非 manual 来源；断网静默保持本地值 | ✅ 2026-08-27（P2）P2.a `server.rs` `pricing_refresh_loop` 24h 后台 job（jsdelivr 主源 + ghproxy 回退，断网失败静默保留本地值）+ `POST /api/pricing/refresh`（手动触发）、`POST /api/pricing/specs/{provider}/{model}/accept`（采纳转 manual，此后不被覆盖）；`pricing.rs::parse_remote_prices` 纯函数解析（跳过非 provider/model 键、负价），`db::refresh_price_spec`（COALESCE 保 cache_read，不覆盖 manual）；P2.c WebUI 新增 **PricingPage**（`price_source` 徽标 manual/overlay/litellm_remote…、`price_updated_at`、`price_stale` 黄点、手工改价强制转 manual、采纳建议价）+ 用量页「缓存为您节省 ¥X」卡片与「缓存节省」列（`cache_saved_cost` 聚合，CNY 展示）；PR-6 定价页 + PR-7 探针视图（`GET /api/probe/stats`）一并落地；57 单测 + tsc + vite build 全过 |
 | 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms | ✅ 2026-08-27（P3）新增 `health.rs` 状态机：滑窗（默认 5 内 ≥2 失败 degraded）/连续 ≥3 失败 down/成功永远向 up 收敛/熔断连续 ≥5 强制 down（阈值全走 settings `health.*` KV），状态变化才 `set_model_health` 落库 + `health_checked_at`；chat 路径 `chat_with_failover` 按 `primary + fallback_chain` 顺序重试（失败打健康哨点、跳升记 Escalation 成效信号、成功按实际响应模型计价），orchestrate 按 `task_done` 成功/失败喂哨点；后台 `health_probe_loop` 每 `health.probe_sec`（默认 60s）对 down/degraded 模型发最小请求主动探测恢复；`GET /api/routing/overhead`（count/avg/p95/max/slow，>100ms 记慢，`routing_decisions.routing_ms` 真源）；65 单测全绿（+7 health 状态机 +1 overhead 聚合）|
-| 10 | P4 编排升级 | 子任务失败自动降级重试成功；escalation 任务成本再降 ≥30%（相对序 7） | ⏳ 待办 |
+| 10 | P4 编排升级 | 子任务失败自动降级重试成功；escalation 任务成本再降 ≥30%（相对序 7） | ✅ 2026-08-27（P4）P4.0 选 A 轻量回调：Rust 新增 `POST /api/routing/plan-subtask`（无状态 `plan_for_task(task_type, est_in, est_out, budget_tier)` 出 primary + fallback 链 + escalation_enabled）`router.rs::plan_for_task` 为 `plan()` 参数化封装，`plan_decision` 复用其默认参；Python `orchestrate_stream` 每子任务按其 `task_type` 回调拿 plan，primary→fallback_chain 逐个降级重试（记 `retry_count`），失败绝不美化；质量信号（非空/长度/失败哨兵）不达标 + `escalation_enabled` → 升档强模型重试一次（`_strongest_model` 用单价 in+out 作强档代理，「先轻量档→零成本判质→升强档」，无更高价则不开）；SSE 契约：`task_done` 透传 `escalated_from`/`retry_count`/`tier_bumped`，`result` 透传 `escalations`/`tier_bumped`；Rust 侧对 `escalated_from` 记 Escalation 成效信号（P3 同语义），final 模型记 Success；`decompose`/`simple_qa` routing_policy 种子 `escalation_enabled=1`；P4.d 汇总与轻量路径均走 Rust `plan_decision(aggregate/general)`（assignments 常已含，P4.a 统一入口可选）。顺带修复两处既有 bug（见 v8 注记）：① SCHEMA `idx_usage_req` 引用仅靠 migrate ALTER 才加的 `request_id` → 旧库升级路径断裂，改为 migrate_db 内 ALTER 后幂等建索引（真实旧库冒烟验证）；② 升档助手曾依赖 Python `ModelSpec` 不存在的 `capability_tier`/`quality_score` → 运行时崩溃，改单价代理。`cargo build` 无警告、全量测试 65 全绿；plan-subtask 冒烟 simple_qa→qwen2.5-local/fallback[deepseek-v3,qwen-plus]、coding→deepseek-v3/fallback[qwen3-max,qwen3.6-plus]、aggregate 走 plan 均正确；≥30% 成本指标待影子真实样本验收 |
 | 11 | P5 预算联动 | 预算近耗尽→逐档降级至只走本地 | ⏳ 待办 |
 | 12 | P1.d AIQ 重放 | 离线重放输出成本—质量曲线；调参有数据依据 | ✅ 2026-08-27（P1.d）`POST/GET /api/routing/shadow` 采样双跑「路由选择 × 旗舰基线」（基线用 settings `routing.shadow_baseline` 钦定否则取能力档最高，采样率 `routing.shadow_ratio` 默认 0.10 可零成本关），FNV-1a 查询哈希防重，成本走 `priced_usage` 真源、结果落 `routing_calibration` 只导路由结果；`scripts/aiq_replay.py` 离线重放对比全弱基线/当前策略/全强基线三条成本—质量线，输出 AIQ（RouterBench 预算积分）与相对全强成本节省、质量缺失时从 `models`/`model_task_score` 回填并写库；**已在 chat/orchestrate 请求热路径按 `shadow_ratio` 概率接入 `maybe_shadow_sample` 后台自动采样**（抽取复用 `run_shadow_pair`，tokio spawn 不阻塞响应/不改返回，`ratio=0` 零成本关）；冒烟 3 样本出 AIQ=0 且 95% 节省+调参建议 |
 
@@ -791,6 +821,16 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 > P3 新增 `health.rs` 状态机（滑窗 degraded/连续失败 down/熔断+成功恢复）、`chat_with_failover` 主链+fallback 重试、
 > 后台 `health_probe_loop` 主动探测、`/api/routing/overhead` 端点；65 单测全绿。`plan()` 的 `health_state=="down"` 硬门
 > 已在 P0.d 产出、P3 补全了状态写入与持久化回路。下一阶段 P4 编排升级（子任务失败降级重试）需等减法合并后启动。
+> **v8 注记（2026-08-27，P4 阶段）**：**P4 编排智能升级已落地并勾选完成**（见序 10）。
+> A 架构「Python 回调 Rust `plan-subtask`」落地：每子任务按其 `task_type` 独立 plan，primary→fallback_chain 阶段降级，
+> 零成本质量信号不达标 + `escalation_enabled` → 升档强模型重试；`task_done`/`result` 按 SSE 契约透传
+> `escalated_from`/`retry_count`/`tier_bumped`/`escalations`，Rust 对被跳过的轻量模型记 Escalation 成效信号（P3 同语义）。
+> 顺带修复两处既有 bug：① SCHEMA 的 `idx_usage_req` 引用仅靠 migrate ALTER 才加的 `request_id` 列，
+> 导致 P1.a 之前创建的旧库升级路径在 SCHEMA 阶段即失败 → 移入 `migrate_db` 在 ALTER 后幂等建索引
+> （以真实 pre-P1a 旧库冒烟验证：启动成功、列补齐、索引就位）；② `_strongest_model` 曾依赖 Python `ModelSpec`
+> 不存在的 `capability_tier`/`quality_score` → escalation 触发即运行时崩溃 → 改以单价 in+out 作强档代理，
+> 本地免费模型天然不成为升档目标、无更高价则不开档。`cargo build` 无警告、65 单测全绿、冒烟过。
+> ≥30% 成本指标与 P1 的 ≥60% 同属需影子真实样本的验收，待现网采集后复验。
 
 ---
 

@@ -156,6 +156,8 @@ class OrchestrateRequest(BaseModel):
     # P0.f: Rust 统一决策结果（role -> model name）。Python 优先用，缺则回落 models[0]，
     # 从而彻底移除 TASK_MODEL_PREFERENCE / DECOMPOSER_PREFERENCE 硬编码真源。
     assignments: dict = field(default_factory=dict)
+    # P4: Python→Rust 回调地址（plan-subtask）。空则回退 env LLOOM_ROUTER_URL / localhost。
+    rust_base_url: str = ""
 
 
 # ── Helpers ──
@@ -998,6 +1000,79 @@ def _assigned_model(models: list[ModelSpec], assignments: dict, role: str) -> Mo
     return models[0] if models else None
 
 
+# ── P4：子任务级 plan 回调 + 阶段路由降级（Rust 决策真源，Python 内降级执行）──
+
+def _rust_base_url(req: OrchestrateRequest) -> str:
+    """Python→Rust 回调地址：优先请求体显式字段，其次 env，最后回退 localhost。"""
+    if getattr(req, "rust_base_url", ""):
+        return req.rust_base_url.rstrip("/")
+    return os.environ.get("LLOOM_ROUTER_URL", "http://localhost:7861").rstrip("/")
+
+
+def _plan_subtask(task_type: str, est_in: int, est_out: int, rust_base_url: str,
+                  budget_tier: str = "normal") -> dict:
+    """回调 Rust `POST /api/routing/plan-subtask`，拿 primary + fallback 链 + escalation 开关。
+    失败（网络/Rust 未启动）返回空 dict，调用方回落原有 assignments/selected_model，绝不死链。"""
+    try:
+        payload = {
+            "task_type": task_type,
+            "est_in_tokens": max(int(est_in or 0), 0),
+            "est_out_tokens": max(int(est_out or 0), 0),
+            "budget_tier": budget_tier,
+        }
+        import urllib.request  # 标准库，避免新增 httpx 依赖
+        body = json.dumps(payload).encode("utf-8")
+        reqq = urllib.request.Request(
+            f"{rust_base_url}/api/routing/plan-subtask", data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(reqq, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if not data.get("primary"):
+            return {}
+        return {"primary": data["primary"],
+                "fallback_chain": [x for x in (data.get("fallback_chain") or []) if isinstance(x, str)],
+                "escalation_enabled": bool(data.get("escalation_enabled", False))}
+    except Exception:
+        return {}
+
+
+def _quality_signal_ok(text: str | None) -> bool:
+    """零成本质量信号：非空、非极短、不含失败哨兵 → 认为达标。
+    不够才走 escalation 升档重试（P4.c），避免为每个成功子任务多付一次强档。"""
+    if not text:
+        return False
+    s = text.strip()
+    if len(s) < 2:
+        return False
+    low = s.lower()
+    if text.startswith("执行失败") or "请稍后再试" in low or text.startswith("error"):
+        return False
+    return True
+
+
+def _strongest_model(models: list[ModelSpec], current: str | None = None) -> ModelSpec | None:
+    """升档：池内比 `current` 严格更高价的模型里取最贵者作为强档。
+    用单价（in+out）作强档代理——本地免费模型 cost=0 天然不会成为升档目标；
+    无更高价模型时返回 None（调用方据此不升档）。不依赖 Rust 侧能力档字段。"""
+    if not models:
+        return None
+
+    def _cost(m: ModelSpec) -> float:
+        return (m.input_cost_per_token or 0.0) + (m.output_cost_per_token or 0.0)
+
+    cur_cost = -1.0
+    if current:
+        c = _model_by_name(models, current)
+        if c is not None:
+            cur_cost = _cost(c)
+    higher = [m for m in models if _cost(m) > cur_cost]
+    if not higher:
+        return None
+    return max(higher, key=_cost)
+
+
 def _system_id(messages: list[dict]) -> str:
     """Stable digest of the system prompt so cache keys invalidate when the
     system prompt changes (different role instructions ≠ same answer)."""
@@ -1571,6 +1646,11 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
         total_in = total_out = 0
         total_cost = 0.0
         total_saved = 0.0
+        # P4：整次编排的累计升级次数与整体升档标记（写入 result 事件）
+        p4_total_escalations = 0
+        p4_tier_bumped = False
+        # Python→Rust 回调地址（每子任务独立 plan）
+        rust_base = _rust_base_url(req)
         # Complex subtasks use the budgeted history window (kept turns only —
         # the summary already covers dropped older turns).
         kept_history = history[len(history) - ctx_stats["kept"]:] if ctx_stats["kept"] else []
@@ -1592,12 +1672,27 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             if context:
                 user_content = f"前置任务结果：\n{context}\n\n当前任务：{task['description']}"
 
+            # P4.a：每子任务按其 task_type 独立回调 Rust plan，拿 primary + fallback 链。
+            task_topic = task.get("task_type", "general")
+            plan_info = _plan_subtask(
+                task_topic, task.get("est_in", 0), task.get("est_out", 0), rust_base)
+            candidate_names: list[str] = []
+            if plan_info.get("primary"):
+                candidate_names.append(plan_info["primary"])
+                candidate_names.extend(plan_info.get("fallback_chain") or [])
+            if not candidate_names and task.get("selected_model"):
+                candidate_names.append(task["selected_model"])  # 回落原分配
+            candidate_names = list(dict.fromkeys(candidate_names))
+            escalation_enabled = bool(plan_info.get("escalation_enabled", False))
+
             start = time.time()
             task_hit: list[bool] = []
             task_usage: dict = {}
-            try:
-                result = _call_llm(
-                    spec,
+
+            def _call_one(name: str) -> str:
+                sp = _model_by_name(req.models, name) or ModelSpec(name=name, litellm_model=name)
+                return _call_llm(
+                    sp,
                     messages=[
                         {"role": "system", "content": LIGHT_SYSTEM},
                         *kept_history[-10:],
@@ -1614,15 +1709,52 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                     cache_hit_ref=task_hit,
                     usage_ref=task_usage,
                 )
-                task["result"] = result
-                task["status"] = "done"
-            except Exception as e:
-                task["result"] = f"执行失败: {e}"
+
+            # P4.b：阶段路由——primary → fallback_chain 逐个降级重试，记录 retry_count。
+            done_result = None
+            final_model = candidate_names[0] if candidate_names else task["selected_model"]
+            retry_count = 0
+            first_fail = None
+            for name in candidate_names:
+                try:
+                    done_result = _call_one(name)
+                    final_model = name
+                    break
+                except Exception as e:
+                    if first_fail is None:
+                        first_fail = str(e)
+                    retry_count += 1
+                    continue
+            # P4.c：零成本质量信号不达标 + escalation 开 → 升档强模型重试一次。
+            tier_bumped = False
+            escalated_from: str | None = None
+            if (done_result is not None
+                    and not _quality_signal_ok(done_result)
+                    and escalation_enabled):
+                escalated_from = final_model or task["selected_model"]
+                strong = _strongest_model(req.models, final_model)
+                if strong is not None and strong.name != final_model:
+                    tier_bumped = True
+                    p4_tier_bumped = True
+                    try:
+                        done_result = _call_one(strong.name)
+                        final_model = strong.name
+                        p4_total_escalations += 1
+                    except Exception:
+                        pass  # 保留上一次真实结果（即使质量不佳）
+
+            if done_result is None:
+                task["result"] = f"执行失败: {first_fail or '所有候选模型均失败'}"
                 task["status"] = "failed"
-                task["error"] = str(e)
+                task["error"] = first_fail or "所有候选模型均失败"
+            else:
+                task["result"] = done_result
+                task["status"] = "done"
             task["duration"] = time.time() - start
+            if final_model:
+                task["selected_model"] = final_model  # 下游显示/统计用实际服务模型
             hit = bool(task_hit) or task_usage.get("cache_hit", False)
-            sim = task_usage.get("cache_sim") or (sem.best_sim(user_content, task["selected_model"]) if sem else None)
+            sim = task_usage.get("cache_sim") or (sem.best_sim(user_content, final_model or task["selected_model"]) if sem else None)
             task["cache_hit"] = hit
             task["cache_sim"] = sim
             any_cache_hit = any_cache_hit or hit
@@ -1633,8 +1765,8 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             completed[task["id"]] = task
 
             done_payload: dict = {
-                "id": task["id"], "model": task["selected_model"],
-                "task_type": task.get("task_type", "general"),  # P1.a role：子任务自身 task_type
+                "id": task["id"], "model": final_model or task["selected_model"],
+                "task_type": task_topic,  # P1.a role：子任务自身 task_type
                 "duration": task["duration"],
                 "cost": task_usage.get("cost", 0.0),
                 "input_tokens": task_usage.get("input_tokens", 0),
@@ -1643,6 +1775,13 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 "cache_hit": hit,
                 "cache_sim": sim,
             }
+            # P4 SSE 契约：降级/升级字段（无则省）
+            if retry_count > 0:
+                done_payload["retry_count"] = retry_count
+            if escalated_from:
+                done_payload["escalated_from"] = escalated_from
+            if tier_bumped:
+                done_payload["tier_bumped"] = True
             if task.get("status") == "failed":
                 done_payload["error"] = task.get("error") or "执行失败"
             yield _sse("task_done", done_payload)
@@ -1723,6 +1862,8 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             "aggregator": agg_model.name,
             "cache_hit": any_cache_hit,
             "cache_sim": max((t.get("cache_sim") or 0.0) for t in sub_tasks) if sub_tasks else 0.0,
+            "escalations": p4_total_escalations,
+            "tier_bumped": p4_tier_bumped,
             "sr_info": f"SR域分类: {req.sr_domain}" if req.sr_domain else "",
         })
 

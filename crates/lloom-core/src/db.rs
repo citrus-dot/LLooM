@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS budgets (
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(model_name);
 CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_records(created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_records(user_id);
-CREATE INDEX IF NOT EXISTS idx_usage_req ON usage_records(request_id);
+-- idx_usage_req 移到 migrate_db（P1.a）：旧库 usage_records 缺 request_id 时，
+-- 此处建索引会在 migrate 的 ALTER 补列之前失败，必须等 ALTER 后幂等创建。
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -380,7 +381,7 @@ pub fn migrate_db(conn: &Connection) -> Result<()> {
             (task_type, min_capability_tier, cost_weight, quality_weight, latency_weight,
              max_cost_per_request, pinned_model, fallback_depth, escalation_enabled)
          VALUES
-            ('simple_qa',         1, 0.7, 0.2, 0.1, NULL, 'qwen2.5-local', 2, 0),
+            ('simple_qa',         1, 0.7, 0.2, 0.1, NULL, 'qwen2.5-local', 2, 1),
             ('general',           2, 0.5, 0.4, 0.1, NULL, 'qwen-plus', 2, 0),
             ('coding',            3, 0.3, 0.6, 0.1, NULL, 'deepseek-v3', 2, 0),
             ('math_logic',        3, 0.3, 0.6, 0.1, NULL, 'deepseek-v3', 2, 0),
