@@ -16,6 +16,7 @@ use crate::ai_client::{self, ModelSpec};
 use crate::db;
 use crate::models::Model;
 use crate::pricing;
+use crate::router;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -176,14 +177,26 @@ fn is_cloud(m: &Model) -> bool {
 }
 
 /// 后台探针循环：每小时一轮。由 `server::spawn_background_jobs` 挂载。
+/// PR-8：当有分时渠道正处高峰且 2h 内进谷时，本轮探针先挪到谷时窗口执行（DeepSeek 直接半价）。
 pub async fn probe_loop() {
     let mut ticker = tokio::time::interval(Duration::from_secs(3600));
     loop {
         ticker.tick().await;
+        // PR-8 谷时对齐：可延迟后台任务（探针）避开高峰成本
+        if let Some(wait) = valley_wait_secs(crate::server::zone_resolver(), crate::server::now_epoch_secs()) {
+            eprintln!("[core] probe deferring {wait}s to next valley window (peak-hour cost avoidance)");
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+        }
         if let Err(e) = run_probe_round().await {
             eprintln!("[core] probe round failed: {e}");
         }
     }
+}
+
+/// PR-8：探针可延迟——当前处于某分时渠道高峰（multiplier≥1）且 2h 内有谷时窗口时，
+/// 返回等待到谷时窗口的秒数；否则 None（当下立即执行，实测价已含时段系数）。
+fn valley_wait_secs(zr: &pricing::ZoneResolver, now: i64) -> Option<u64> {
+    router::next_valley_epoch(zr, now).map(|v| (v - now).max(0) as u64)
 }
 
 async fn run_probe_round() -> std::result::Result<(), crate::error::AppError> {
@@ -363,5 +376,31 @@ mod tests {
             "prefix too short: {}",
             PROBE_PREFIX.chars().count()
         );
+    }
+
+    #[test]
+    fn probe_wait_defers_only_during_peak_with_upcoming_valley() {
+        let zr = pricing::ZoneResolver::new();
+        zr.load(vec![pricing::Zone::from_db(
+            "deepseek",
+            r#"[
+              {"holidays":true,"hours":"*","multiplier":0.5},
+              {"days":["sat","sun"],"hours":"*","multiplier":0.5},
+              {"days":["mon","tue","wed","thu","fri"],"hours":"9-12,14-18","multiplier":1.0},
+              {"days":["mon","tue","wed","thu","fri"],"hours":"*","multiplier":0.5}
+            ]"#,
+            "Asia/Shanghai",
+            "[]",
+        )]);
+        // 周一 10:00 高峰，2h 内（12:00）进谷 → 等待到 12:00
+        let peak = pricing::beijing_epoch(2026, 8, 24, 10, 0, 8);
+        let valley12 = pricing::beijing_epoch(2026, 8, 24, 12, 0, 8);
+        assert_eq!(valley_wait_secs(&zr, peak), Some((valley12 - peak) as u64));
+        // 已在谷时（23:00 周一）→ 无需延迟
+        let valley_now = pricing::beijing_epoch(2026, 8, 24, 23, 0, 8);
+        assert_eq!(valley_wait_secs(&zr, valley_now), None);
+        // 空渠道（无分时）→ 恒 1.0，永不延迟
+        let empty = pricing::ZoneResolver::new();
+        assert_eq!(valley_wait_secs(&empty, peak), None);
     }
 }

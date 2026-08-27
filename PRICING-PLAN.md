@@ -24,7 +24,7 @@
 | PR-5 路由衔接（eff_in/sticky） | ✅ **已实施**（2026-08-27，commit 864b552） | `model_cache_hit_rate`（按 task_type 聚合真实 cached/prompt 平均）喂 `plan()`/`plan_for_task()` 的 `effective_input_cost`；`recent_conversation_model` + `sticky_bonus`（+0.05，仅缓存敏感通道且匹配会话末模型，无样本缺省 0 不偏袒）；`ChatBody.conversation_id` 透传、shadow 传 None；+3 单测（合计 73 全绿） |
 | PR-6 校准 job + WebUI 定价页 | ✅ **已实施** | `calibration_job` 每日聚合（样本 ≥50 才计算）、对账比 act/est、命中率与 out/in 落 `price_calibration`、偏差连续 3 天越界标 `price_stale`；REST：`GET /api/pricing/specs`、`PUT /api/pricing/specs/{provider}/{model}`（含 USD/token 断言，强制转 manual）、`GET /api/pricing/calibration`。WebUI 定价页**已完成**（PricingPage：price_source 徽标/stale 黄点/改价转 manual/采纳建议价/近 30 天校准曲线） |
 | PR-7 探针系统 | ✅ **已实施** | `probe.rs`：每小时一轮（固定 >512 字符稳定前缀，暖机+命中验证两条）、预算状态机（默认 ¥5/月、单轮 0.002 USD 熔断、Hourly→Daily→SuspendedCloud 降频、连续 8 轮失败暂停）、记账 `task_type='probe'`（失败 cost=-1 哨兵）；REST：`GET /api/probe/stats`、`PUT /api/probe/budget`。用量页**探针视图已完成** |
-| PR-8 峰谷调度 | ⏳ 待办 | 依赖 ROUTING-PLAN P4 |
+| PR-8 峰谷调度 | ✅ **已实施**（2026-08-27） | `Zone::multiplier_at`/`first_valley_epoch`（扫 2h 内首个谷时窗口，`[9-12,14-18)` 边界）；`router::next_valley_epoch`/`cost_epoch`（deferrable 按谷价估成本）；`plan-subtask` 收 `deferrable` 回传 `defer_until`；探针高峰自动挪谷；实时路径零延迟；+9 单测（合计 79 全绿） |
 | P2.a 定价刷新（追加） | ✅ **已实施** | ROUTING-PLAN P2.a：`server.rs` `pricing_refresh_loop` 24h 后台 job（jsdelivr 主源 + ghproxy 回退，断网失败静默保留本地值）+ `POST /api/pricing/refresh`、`POST /api/pricing/specs/{provider}/{model}/accept`；`pricing.rs::parse_remote_prices` 纯函数解析 + `db::refresh_price_spec`（COALESCE 保 cache_read，不覆盖 manual） |
 | P2.c 缓存节省（追加） | ✅ **已实施** | `usage_records.cache_saved_cost` 列（语义缓存命中省下的费用）+ `UsageExtra` 透传 + `get_usage_stats` SUM 聚合；用量页「缓存为您节省 ¥X」卡片 + 「缓存节省」列（CNY 展示） |
 

@@ -266,7 +266,8 @@ fn hours_match(spec: &str, hh: u32) -> bool {
             .next()
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(lo);
-        if hh >= lo && hh <= hi {
+        // 区间为 [lo, hi)：高峰截止时刻整点即进入谷（如 12:00、18:00 已是谷时）。
+        if hh >= lo && hh < hi {
             return true;
         }
     }
@@ -299,6 +300,11 @@ impl ZoneResolver {
     pub fn len(&self) -> usize {
         self.inner.read().unwrap().len()
     }
+
+    /// 已加载分时渠道快照（PR-8 峰谷调度扫描用）。
+    pub fn zones(&self) -> Vec<Zone> {
+        self.inner.read().unwrap().values().cloned().collect()
+    }
 }
 
 // ── PriceSpec 计算 ──
@@ -323,37 +329,7 @@ impl PriceSpec {
     pub fn zone_multiplier(&self, t_epoch_secs: i64, zr: &ZoneResolver) -> f64 {
         let Some(zref) = &self.zone_ref else { return 1.0; };
         let Some(zone) = zr.get(zref) else { return 1.0; };
-        let (_, _, _, dow, hh) = beijing_parts(t_epoch_secs, zone.tz_offset_hours);
-        let dow_name = match dow {
-            1 => "mon",
-            2 => "tue",
-            3 => "wed",
-            4 => "thu",
-            5 => "fri",
-            6 => "sat",
-            _ => "sun",
-        }
-        .to_string();
-        let is_holiday = zone.holidays.contains(&holiday_key(t_epoch_secs, zone.tz_offset_hours));
-        for rule in &zone.rules {
-            let day_ok = rule
-                .days
-                .as_ref()
-                .map(|d| d.contains(&dow_name))
-                .unwrap_or(true);
-            let hit = if rule.holidays {
-                is_holiday
-            } else {
-                day_ok
-            };
-            if !hit {
-                continue;
-            }
-            if hours_match(&rule.hours, hh) {
-                return rule.multiplier;
-            }
-        }
-        1.0
+        zone.multiplier_at(t_epoch_secs)
     }
 
     /// 事后精确账单（对齐 LiteLLM cost_calculator 分项公式）
@@ -418,6 +394,58 @@ impl Zone {
             rules,
             holidays,
         }
+    }
+
+    /// 渠道在指定时刻的分时系数（PR-8 抽出，供调度扫描复用）。
+    /// 规则缺失/未命中 → 1.0。
+    pub fn multiplier_at(&self, t_epoch_secs: i64) -> f64 {
+        let (_, _, _, dow, hh) = beijing_parts(t_epoch_secs, self.tz_offset_hours);
+        let dow_name = match dow {
+            1 => "mon",
+            2 => "tue",
+            3 => "wed",
+            4 => "thu",
+            5 => "fri",
+            6 => "sat",
+            _ => "sun",
+        }
+        .to_string();
+        let is_holiday = self.holidays.contains(&holiday_key(t_epoch_secs, self.tz_offset_hours));
+        for rule in &self.rules {
+            let day_ok = rule
+                .days
+                .as_ref()
+                .map(|d| d.contains(&dow_name))
+                .unwrap_or(true);
+            let hit = if rule.holidays {
+                is_holiday
+            } else {
+                day_ok
+            };
+            if !hit {
+                continue;
+            }
+            if hours_match(&rule.hours, hh) {
+                return rule.multiplier;
+            }
+        }
+        1.0
+    }
+
+    /// PR-8：在 `horizon_secs` 内（严格未来）首个折扣系数 (<1.0) 的起始时刻。
+    /// 30 分钟步进扫描；当前已在谷时（multiplier<1）不返回 now，仅返回未来的谷时窗口。
+    /// 无谷时窗口 → None。
+    pub fn first_valley_epoch(&self, t_epoch_secs: i64, horizon_secs: i64) -> Option<i64> {
+        let step: i64 = 1800; // 30-min 粒度，能对齐半小时/整点边界
+        let end = t_epoch_secs.saturating_add(horizon_secs.max(step));
+        let mut t = t_epoch_secs.saturating_add(step);
+        while t <= end {
+            if self.multiplier_at(t) < 1.0 {
+                return Some(t);
+            }
+            t = t.saturating_add(step);
+        }
+        None
     }
 }
 
@@ -625,6 +653,32 @@ mod tests {
         assert!((ec_valley - ec_peak * 0.5).abs() < 1e-12);
     }
 
+    // ── PR-8 峰谷调度：first_valley_epoch ──
+
+    #[test]
+    fn first_valley_epoch_finds_next_window_from_peak() {
+        let z = deepseek_zone();
+        // 周一 17:00 处于高峰段 14-18 → 下一谷时 18:00
+        let t = beijing_epoch(2026, 8, 24, 17, 0, 8);
+        assert_eq!(z.first_valley_epoch(t, 7200), Some(beijing_epoch(2026, 8, 24, 18, 0, 8)));
+    }
+
+    #[test]
+    fn first_valley_epoch_from_morning_peak_hits_noon() {
+        let z = deepseek_zone();
+        // 周一 10:00 高峰 9-12 → 下一谷时 12:00
+        let t = beijing_epoch(2026, 8, 24, 10, 0, 8);
+        assert_eq!(z.first_valley_epoch(t, 7200), Some(beijing_epoch(2026, 8, 24, 12, 0, 8)));
+    }
+
+    #[test]
+    fn first_valley_epoch_none_when_horizon_too_small() {
+        let z = deepseek_zone();
+        // 17:00 高峰 14-18；horizon 仅 1800s → 只扫到 17:30（仍高峰）→ None
+        let t = beijing_epoch(2026, 8, 24, 17, 0, 8);
+        assert_eq!(z.first_valley_epoch(t, 1800), None);
+    }
+
     #[test]
     fn hours_match_parser() {
         assert!(hours_match("*", 0));
@@ -632,6 +686,9 @@ mod tests {
         assert!(hours_match("9-12,14-18", 17));
         assert!(!hours_match("9-12,14-18", 13));
         assert!(!hours_match("9-12,14-18", 8));
+        // [lo, hi)：截止时刻整点即入谷
+        assert!(!hours_match("9-12,14-18", 12));
+        assert!(!hours_match("9-12,14-18", 18));
     }
 
     #[test]

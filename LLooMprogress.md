@@ -1,7 +1,7 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-08-27** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：**P5 预算驱动动态调整**（本阶段）；P4 编排智能升级（含 SCHEMA 升级断裂修复）、P2/P3 已提交（694f0a9/3551f8c）
+> 最新已提交：**PR-8 峰谷调度**（本阶段）；P5 预算驱动动态调整、P4 编排智能升级（含 SCHEMA 升级断裂修复）已提交
 
 ---
 
@@ -160,7 +160,7 @@
 - [x] ✅ **PR-5 路由衔接**（2026-08-27，commit 864b552）：缓存命中率喂 `effective_input_cost` 进 `plan()`/`plan_for_task()`（按 task_type 聚合真实 cached/prompt）；会话亲和 sticky（+0.05，仅缓存敏感通道，缺省 0 不偏袒）+ `conversation_id` 透传；+3 单测（合计 73）
 - [x] ✅ **PR-6 WebUI 定价页**：`GET /api/pricing/specs` 等后端 + PricingPage 前端均已落地（2026-08-27）
 - [x] ✅ **PR-7 探针视图**：`GET /api/probe/stats` 后端 + 用量页/定价页探针视图均已落地（2026-08-27）
-- [ ] ⏳ **PR-8 峰谷调度**：可延迟任务挪谷时（依赖 ROUTING-PLAN P4）
+- [x] ✅ **PR-8 峰谷调度**（2026-08-27，本阶段）：可延迟任务挪谷时——`Zone::multiplier_at`/`first_valley_epoch`（30-min 步进扫 2h 内首个折扣窗口，`[lo,hi)` 边界 12/18 时即谷）+ `ZoneResolver::zones()`；`router::next_valley_epoch`（取最早进谷渠道）+ `cost_epoch`（deferrable 且 2h 内进谷按谷时估成本）；`plan-subtask` 收 `deferrable` 回传 `defer_until`；探针 `valley_wait_secs` 高峰自动挪谷执行；实时 chat 路径 `deferrable=false` 零延迟；+9 单测（合计 79 全绿）
 
 ### 来自 ROUTING-PLAN.md（v3，P0/P1/P2 阶段均已完结）
 - [x] ✅ **P0.a 量纲写入断言**（09480fa）
@@ -254,4 +254,4 @@
 | `ROUTING-PLAN.md` | 路由重构方案（v3 + 注记至 P5）| 已提交，P0–P5 阶段全部落地状态已更新 |
 | `ROUTING-PLAN.md` 引用的外部研究 | Switchyard / vLLM Semantic Router / Router-R1 等 | 设计借鉴，不引入依赖 |
 
-> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② **P0–P5 阶段已全部完成**，下一优先项为 **PRICING-PLAN PR-5 `effective_input_cost` 进 plan() 评分**（P0.d 已完成，此项留待与路由联动一并处理）或 **PR-8 峰谷调度**（依赖 P4 已完）。每次 `cargo build`/`cargo test` 全绿再提交。
+> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② **P0–P5 阶段与 PRICING-PLAN PR-1~PR-8 已全部完成**，下一优先项为 **CONTEXT-PLAN 阶段 2–5 / O6 子任务并行** 等剩余优化（见规划交接）。每次 `cargo build`/`cargo test` 全绿再提交。

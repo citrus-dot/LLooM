@@ -1320,6 +1320,9 @@ struct PlanSubtaskRequest {
     est_in_tokens: Option<i64>,
     est_out_tokens: Option<i64>,
     budget_tier: Option<String>,
+    /// PR-8：deferrable=1 时按谷价估成本（B 端批/夜间评测接入预留；默认 false 实时）。
+    #[serde(default)]
+    deferrable: bool,
 }
 async fn rust_plan_subtask(Json(req): Json<PlanSubtaskRequest>) -> Result<Json<Value>> {
     let est_in = req.est_in_tokens.unwrap_or(500).max(0);
@@ -1337,7 +1340,7 @@ async fn rust_plan_subtask(Json(req): Json<PlanSubtaskRequest>) -> Result<Json<V
     };
     let models = db::list_models(true)?;
 
-    let outcome = match router::plan_for_task(&req.task_type, &models, est_in, est_out, &tier) {
+    let outcome = match router::plan_for_task(&req.task_type, &models, est_in, est_out, &tier, req.deferrable) {
         Ok(o) => o,
         Err(e) => {
             return Ok(Json(json!({
@@ -1354,11 +1357,18 @@ async fn rust_plan_subtask(Json(req): Json<PlanSubtaskRequest>) -> Result<Json<V
         .flatten()
         .map(|p| p.escalation_enabled == 1)
         .unwrap_or(false);
+    // PR-8：deferrable 时回传「预计谷时执行时刻」（epoch 秒；0 = 无需延迟/实时）。
+    let defer_until = if req.deferrable {
+        router::next_valley_epoch(zone_resolver(), now_epoch_secs()).unwrap_or(0)
+    } else {
+        0
+    };
     Ok(Json(json!({
         "primary": outcome.primary,
         "fallback_chain": outcome.fallback_chain,
         "escalation_enabled": escalation_enabled,
         "tier_req": 0,
+        "defer_until": defer_until,
     })))
 }
 

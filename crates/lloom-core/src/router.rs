@@ -176,6 +176,9 @@ pub struct PlanInput<'a> {
     pub hit_rate: &'a HashMap<String, f64>,
     /// PR-5 §5.2 会话亲和：本会话上一轮所用模型（sticky）。None = 不粘。
     pub last_model_conv: Option<&'a str>,
+    /// PR-8：deferrable=1 时按「预计谷时执行时刻」估成本（若 2h 内进谷则用谷价+该候选机会成本下降）。
+    /// 实时 chat/编排默认 false（实时路径零延迟变化）。
+    pub deferrable: bool,
 }
 
 #[derive(Debug)]
@@ -262,7 +265,7 @@ pub fn plan(input: &PlanInput) -> Result<PlanOutcome, PlanError> {
         let ec = input
             .price_specs
             .get(&(m.provider.clone(), m.name.clone()))
-            .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, input.t_epoch_secs, input.zones))
+            .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, cost_epoch(input), input.zones))
             .unwrap_or(0.0);
         // P5.a protect：仅本地免费或零成本模型（预算耗尽推本地 Ollama 的最后一档）。
         if input.budget_tier == "protect" && m.is_local != 1 && ec > 0.0 {
@@ -356,6 +359,35 @@ fn sticky_bonus(input: &PlanInput, m: &Model) -> f64 {
     if cache_sensitive { 0.05 } else { 0.0 }
 }
 
+/// PR-8 谷时调度视野：当前高峰（multiplier≥1）且 2 小时内有谷时窗口的渠道，其最早谷时起始时刻。
+/// None = 无需延迟（非高峰、已谷时、或 2h 内无谷时）。供 plan() 估谷价 + probe/server 对齐执行。
+pub const VALLEY_HORIZON_SECS: i64 = 7200;
+
+/// 扫描已加载分时渠道，取「当前高峰且 2h 内有谷时」的最早谷时起始时刻（严格未来）。None=无需延迟。
+pub fn next_valley_epoch(zr: &ZoneResolver, now: i64) -> Option<i64> {
+    let mut best: Option<i64> = None;
+    for zone in zr.zones() {
+        // 当前已是谷价（multiplier<1）→ 无需延迟；无分时渠道 multiplier 恒 1 → 无谷时窗口，自然跳过。
+        if zone.multiplier_at(now) >= 1.0 {
+            if let Some(v) = zone.first_valley_epoch(now, VALLEY_HORIZON_SECS) {
+                if best.map_or(true, |b| v < b) {
+                    best = Some(v);
+                }
+            }
+        }
+    }
+    best
+}
+
+/// 估算成本所用时刻：deferrable 且 2h 内进谷 → 用谷时起始时刻（谷价）；否则用当前时刻（实时价）。
+fn cost_epoch(input: &PlanInput) -> i64 {
+    if input.deferrable {
+        next_valley_epoch(input.zones, input.t_epoch_secs).unwrap_or(input.t_epoch_secs)
+    } else {
+        input.t_epoch_secs
+    }
+}
+
 /// s = qw·quality − cw·norm_cost − lw·norm_latency + 0.05·priority + sticky − 保守期罚分
 fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
     let ecs: Vec<f64> = gated
@@ -364,7 +396,7 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
             input
                 .price_specs
                 .get(&(m.provider.clone(), m.name.clone()))
-                .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, input.t_epoch_secs, input.zones))
+                .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, cost_epoch(input), input.zones))
                 .unwrap_or(0.0)
         })
         .collect();
@@ -487,6 +519,7 @@ pub async fn route(
         budget_tier,
         hit_rate: &hit_rate,
         last_model_conv: last_model,
+        deferrable: false, // 实时 chat 永不延迟（PR-8）
     };
 
     match plan(&input) {
@@ -527,18 +560,19 @@ pub async fn route(
 /// 按固定编排角色做一次 plan() 决策，返回主模型名所在 PlanOutcome。
 /// 失败时由调用方兜底（回落 models 首模型），不抛业务中断。
 pub fn plan_decision(task_type: &str, models: &[Model]) -> Result<PlanOutcome, PlanError> {
-    plan_for_task(task_type, models, 500, 1000, "normal")
+    plan_for_task(task_type, models, 500, 1000, "normal", false)
 }
 
 /// P4：子任务级/可变预算档 plan——按调用方给的预估 token 与预算档评分路由。
 /// 供 `POST /api/routing/plan-subtask` 使用（Python 每个子任务按其 task_type 独立 plan）；
-/// 无状态，仅为 plan() 的参数化封装。
+/// 无状态，仅为 plan() 的参数化封装。`deferrable` 为 PR-8：true 时按谷价估成本（B 端批/评测接入）。
 pub fn plan_for_task(
     task_type: &str,
     models: &[Model],
     est_in_tokens: i64,
     est_out_tokens: i64,
     budget_tier: &str,
+    deferrable: bool,
 ) -> Result<PlanOutcome, PlanError> {
     let policy = db::get_routing_policy(task_type)
         .ok()
@@ -586,6 +620,7 @@ pub fn plan_for_task(
         budget_tier,
         hit_rate: &hit_rate,
         last_model_conv: None,
+        deferrable,
     };
     plan(&input)
 }
@@ -706,6 +741,7 @@ mod tests {
             budget_tier: "normal",
             hit_rate: &ctx.hit,
             last_model_conv: ctx.sticky.as_deref(),
+            deferrable: false,
         }
     }
 
@@ -1104,5 +1140,93 @@ mod tests {
         ctx.hit.insert("qwen-plus".into(), 0.9);
         let hit = plan(&base_input(&models, &specs, "general", "medium", &policy, 1000, &ctx)).unwrap();
         assert!(hit.candidates[0].est_cost < no_hit.candidates[0].est_cost);
+    }
+
+    // ── PR-8 峰谷调度：deferrable 任务按谷价估成本，翻转候选偏好 ──
+
+    fn deepseek_test_zone() -> crate::pricing::Zone {
+        crate::pricing::Zone::from_db(
+            "deepseek",
+            r#"[
+              {"holidays":true,"hours":"*","multiplier":0.5},
+              {"days":["sat","sun"],"hours":"*","multiplier":0.5},
+              {"days":["mon","tue","wed","thu","fri"],"hours":"9-12,14-18","multiplier":1.0},
+              {"days":["mon","tue","wed","thu","fri"],"hours":"*","multiplier":0.5}
+            ]"#,
+            "Asia/Shanghai",
+            "[]",
+        )
+    }
+
+    #[test]
+    fn deferrable_shifts_to_valley_price_and_flips_primary() {
+        let ctx = Ctx::new();
+        ctx.zones.load(vec![deepseek_test_zone()]);
+
+        // 两个 tier3 候选：qwen（不分时，恒定价） vs deepseek（分时，高峰价更贵）
+        let models = vec![
+            model("qwen3-max", "dashscope", 3, 262144),
+            model("deepseek-v4-pro", "deepseek-official", 3, 131072),
+        ];
+        let mut specs = HashMap::new();
+        specs.insert(("dashscope".into(), "qwen3-max".into()), spec("dashscope", "qwen3-max", 1.5e-6, 4.0e-6));
+        let mut ds = spec("deepseek-official", "deepseek-v4-pro", 2.0e-6, 5.0e-6);
+        ds.zone_ref = Some("deepseek".into());
+        specs.insert(("deepseek-official".into(), "deepseek-v4-pro".into()), ds.clone());
+
+        let policy = RoutingPolicy {
+            task_type: "general".into(),
+            min_capability_tier: 2,
+            cost_weight: 0.8,
+            quality_weight: 0.1,
+            latency_weight: 0.1,
+            ..Default::default()
+        };
+        // 2026-08-24 周一 10:00 高峰（deepseek 原价 1.0×；2h 内 12:00 进谷）
+        let peak = crate::pricing::beijing_epoch(2026, 8, 24, 10, 0, 8);
+
+        // 实时路径：deepseek 按峰价更贵 → qwen 胜
+        let mut rt = base_input(&models, &specs, "general", "medium", &policy, 1000, &ctx);
+        rt.t_epoch_secs = peak;
+        rt.deferrable = false;
+        assert_eq!(plan(&rt).unwrap().primary, "qwen3-max");
+
+        // 可延迟路径：本轮估 2h 内谷价（deepseek 半价）→ 翻转胜出
+        let mut d = base_input(&models, &specs, "general", "medium", &policy, 1000, &ctx);
+        d.t_epoch_secs = peak;
+        d.deferrable = true;
+        assert_eq!(plan(&d).unwrap().primary, "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn deferrable_in_valley_does_not_shift() {
+        // 已在谷时（23:00 周一 0.5×）：deferrable 与实时一致，无谷时窗口可挪，候选不变
+        let ctx = Ctx::new();
+        ctx.zones.load(vec![deepseek_test_zone()]);
+        let models = vec![
+            model("qwen3-max", "dashscope", 3, 262144),
+            model("deepseek-v4-pro", "deepseek-official", 3, 131072),
+        ];
+        let mut specs = HashMap::new();
+        specs.insert(("dashscope".into(), "qwen3-max".into()), spec("dashscope", "qwen3-max", 2.5e-6, 6.0e-6));
+        let mut ds = spec("deepseek-official", "deepseek-v4-pro", 1.0e-6, 2.0e-6);
+        ds.zone_ref = Some("deepseek".into());
+        specs.insert(("deepseek-official".into(), "deepseek-v4-pro".into()), ds.clone());
+        let policy = RoutingPolicy {
+            task_type: "general".into(),
+            min_capability_tier: 2,
+            cost_weight: 0.8,
+            quality_weight: 0.1,
+            latency_weight: 0.1,
+            ..Default::default()
+        };
+        let valley = crate::pricing::beijing_epoch(2026, 8, 24, 23, 0, 8);
+        let mut rt = base_input(&models, &specs, "general", "medium", &policy, 1000, &ctx);
+        rt.t_epoch_secs = valley;
+        assert_eq!(plan(&rt).unwrap().primary, "deepseek-v4-pro");
+        let mut d = base_input(&models, &specs, "general", "medium", &policy, 1000, &ctx);
+        d.t_epoch_secs = valley;
+        d.deferrable = true;
+        assert_eq!(plan(&d).unwrap().primary, "deepseek-v4-pro");
     }
 }
