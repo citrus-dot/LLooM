@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS usage_records (
     cost REAL NOT NULL,
     task_type TEXT,
     cache_hit INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    latency_ms REAL,
+    request_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS budgets (
@@ -59,6 +61,7 @@ CREATE TABLE IF NOT EXISTS budgets (
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(model_name);
 CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_records(created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_records(user_id);
+CREATE INDEX IF NOT EXISTS idx_usage_req ON usage_records(request_id);
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -213,11 +216,30 @@ fn migrate_db(conn: &Connection) -> Result<()> {
         ("zone_multiplier", "ALTER TABLE usage_records ADD COLUMN zone_multiplier REAL DEFAULT 1.0"),
         ("conversation_id", "ALTER TABLE usage_records ADD COLUMN conversation_id TEXT"),
         ("field_missing", "ALTER TABLE usage_records ADD COLUMN field_missing INTEGER DEFAULT 0"),
+        // P1.a：延迟与请求号，串联 chat/orchestrate 的用量行
+        ("latency_ms", "ALTER TABLE usage_records ADD COLUMN latency_ms REAL"),
+        ("request_id", "ALTER TABLE usage_records ADD COLUMN request_id TEXT"),
     ];
     for (col, ddl) in add_cols {
         if !cols.iter().any(|c| c == col) {
             conn.execute_batch(ddl)?;
         }
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_usage_req ON usage_records(request_id)")?;
+
+    // 7. P1.a：清理遗留脏数据（早期编排展示性占位行：model='default'、cost=0）。
+    //    一次性标记防重复跑；只清 cost=0 的占位，不动真实（可能 cost=0 的本地/缓存）成功账。
+    let usage_cleaned: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM settings WHERE key = 'migration_usage_v1_p1a'",
+        [],
+        |r| r.get(0),
+    )?;
+    if usage_cleaned == 0 {
+        conn.execute("DELETE FROM usage_records WHERE model_name = 'default' AND cost = 0", [])?;
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('migration_usage_v1_p1a', 'done')",
+            [],
+        )?;
     }
 
     // 2. 量纲修正（一次性）
@@ -598,6 +620,8 @@ pub struct UsageExtra {
     pub field_missing: bool,
 }
 
+/// Insert one usage_records row. `latency_ms`/`request_id` (P1.a) are optional
+/// for backward compatibility — old callers pass None.
 #[allow(clippy::too_many_arguments)]
 pub fn insert_usage(
     model_name: &str,
@@ -607,12 +631,13 @@ pub fn insert_usage(
     cost: f64,
     task_type: Option<&str>,
     cache_hit: bool,
+    latency_ms: Option<f64>,
+    request_id: Option<&str>,
     extra: Option<&UsageExtra>,
 ) -> Result<i64> {
-    let conn = open()?;
-    let mut sql = String::from(
-        "INSERT INTO usage_records (model_name, user_id, input_tokens, output_tokens, cost, task_type, cache_hit",
-    );
+    let mut cols: Vec<&str> = vec![
+        "model_name", "user_id", "input_tokens", "output_tokens", "cost", "task_type", "cache_hit",
+    ];
     let mut vals: Vec<rusqlite::types::Value> = vec![
         rusqlite::types::Value::Text(model_name.to_string()),
         rusqlite::types::Value::Text(user_id.to_string()),
@@ -625,24 +650,36 @@ pub fn insert_usage(
         },
         rusqlite::types::Value::Integer(if cache_hit { 1 } else { 0 }),
     ];
-    match extra {
-        Some(e) => {
-            sql.push_str(", cached_tokens, reasoning_tokens, est_cost, act_cost, zone_multiplier, conversation_id, field_missing) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)");
-            vals.push(rusqlite::types::Value::Integer(e.cached_tokens));
-            vals.push(rusqlite::types::Value::Integer(e.reasoning_tokens));
-            vals.push(rusqlite::types::Value::Real(e.est_cost));
-            vals.push(rusqlite::types::Value::Real(e.act_cost));
-            vals.push(rusqlite::types::Value::Real(e.zone_multiplier));
-            vals.push(match &e.conversation_id {
-                Some(c) => rusqlite::types::Value::Text(c.clone()),
-                None => rusqlite::types::Value::Null,
-            });
-            vals.push(rusqlite::types::Value::Integer(if e.field_missing { 1 } else { 0 }));
-        }
-        None => {
-            sql.push_str(") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)");
-        }
+    if let Some(e) = extra {
+        cols.extend(["cached_tokens", "reasoning_tokens", "est_cost", "act_cost",
+                     "zone_multiplier", "conversation_id", "field_missing"]);
+        vals.push(rusqlite::types::Value::Integer(e.cached_tokens));
+        vals.push(rusqlite::types::Value::Integer(e.reasoning_tokens));
+        vals.push(rusqlite::types::Value::Real(e.est_cost));
+        vals.push(rusqlite::types::Value::Real(e.act_cost));
+        vals.push(rusqlite::types::Value::Real(e.zone_multiplier));
+        vals.push(match &e.conversation_id {
+            Some(c) => rusqlite::types::Value::Text(c.clone()),
+            None => rusqlite::types::Value::Null,
+        });
+        vals.push(rusqlite::types::Value::Integer(if e.field_missing { 1 } else { 0 }));
     }
+    cols.extend(["latency_ms", "request_id"]);
+    vals.push(match latency_ms {
+        Some(l) => rusqlite::types::Value::Real(l),
+        None => rusqlite::types::Value::Null,
+    });
+    vals.push(match request_id {
+        Some(r) => rusqlite::types::Value::Text(r.to_string()),
+        None => rusqlite::types::Value::Null,
+    });
+    let placeholders: Vec<String> = (1..=vals.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "INSERT INTO usage_records ({}) VALUES ({})",
+        cols.join(", "),
+        placeholders.join(", ")
+    );
+    let conn = open()?;
     conn.execute(&sql, rusqlite::params_from_iter(vals.iter().cloned()))?;
     Ok(conn.last_insert_rowid())
 }
@@ -1506,6 +1543,35 @@ mod migration_tests {
         assert_eq!(ctx, 32768, "未显式上下文应回填 32K");
         assert_eq!(calib, 1, "新模型应进入保守期");
         drop(conn3);
+
+        // P1.a 冒烟：新列存在 + insert_usage 落 latency_ms/request_id/task_type，
+        // 且幂等 init_db 不重复清脏、不重复加列。
+        let p1_cols = table_columns(&open().unwrap(), "usage_records").unwrap();
+        for c in ["latency_ms", "request_id"] {
+            assert!(p1_cols.contains(&c.to_string()), "missing P1.a column {c}");
+        }
+        insert_usage(
+            "qwen-plus-test", "default", 100, 20, 1.11e-5,
+            Some("coding"), true, Some(812.5), Some("chat-smoke-1"),
+            Some(&UsageExtra {
+                cached_tokens: 0, reasoning_tokens: 0, est_cost: 0.0, act_cost: 1.11e-5,
+                zone_multiplier: 1.0, conversation_id: None, field_missing: false,
+            }),
+        )
+        .unwrap();
+        let conn4 = open().unwrap();
+        let (lat, rid, tt): (Option<f64>, Option<String>, Option<String>) = conn4
+            .query_row(
+                "SELECT latency_ms, request_id, task_type FROM usage_records
+                 WHERE request_id = 'chat-smoke-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(lat, Some(812.5));
+        assert_eq!(rid.as_deref(), Some("chat-smoke-1"));
+        assert_eq!(tt.as_deref(), Some("coding"));
+        drop(conn4);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

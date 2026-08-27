@@ -1473,6 +1473,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
             yield _sse("task_done", {
                 "id": 1, "model": model_name,
+                "task_type": "general",   # P1.a role：轻量路径复用 general 决策
                 "duration": duration,
                 "cost": usage.get("cost", 0.0),
                 "input_tokens": usage.get("input_tokens", 0),
@@ -1633,6 +1634,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
             done_payload: dict = {
                 "id": task["id"], "model": task["selected_model"],
+                "task_type": task.get("task_type", "general"),  # P1.a role：子任务自身 task_type
                 "duration": task["duration"],
                 "cost": task_usage.get("cost", 0.0),
                 "input_tokens": task_usage.get("input_tokens", 0),
@@ -1700,6 +1702,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
         total_saved += agg_usage.get("saved_cost", 0.0)
 
         yield _sse("task_done", {"id": 0, "model": agg_model.name,
+                                 "task_type": "aggregate",  # P1.a role：汇总
                                  "duration": agg_duration,
                                  "cost": agg_usage.get("cost", 0.0),
                                  "input_tokens": agg_usage.get("input_tokens", 0),

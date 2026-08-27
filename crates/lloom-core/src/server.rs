@@ -454,6 +454,7 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
     );
 
     // Direct async AI call (reqwest is async; safe on the tokio executor)
+    let chat_start = std::time::Instant::now();
     let tail = match ai_client::chat(&spec, &processed_messages, 500, 0.3).await {
         Ok(res) => {
             if decision_id > 0 {
@@ -461,6 +462,8 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
             }
             // PRICING-PLAN §4.2/§6.1：Rust 单一计价真源，按真实 usage 分项计算并落库。
             // （PR-5 落地前 est_cost 传 0；task_type 用路由分类结果）
+            // P1.a：只记成功路径；失败/重试走 routing_decisions.outcome。
+            let latency_ms = chat_start.elapsed().as_secs_f64() * 1000.0;
             let (act_cost, zm) = priced_usage(provider, &res.model, &res.usage);
             let _ = db::insert_usage(
                 &res.model,
@@ -470,6 +473,8 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
                 act_cost,
                 Some(&routing_task_type),
                 false,
+                Some(latency_ms),
+                Some(&request_id),
                 Some(&db::UsageExtra {
                     cached_tokens: res.usage.cached_tokens,
                     reasoning_tokens: res.usage.reasoning_tokens,
@@ -573,6 +578,16 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
     // Forward each event as it arrives (true SSE, not buffered). The Python
     // side streams `token` deltas; the browser renders them incrementally.
     let conv_for_events = conversation_id.clone();
+    // P1.a：编排级别的聚合请求号——有会话 id 用它，否则自生成（供 usage 行串联同一次编排的多次 task_done）
+    let orchestrate_rid = conversation_id.clone().unwrap_or_else(|| {
+        format!(
+            "orchestrate-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        )
+    });
     let body = Body::from_stream(events.map(move |ev| {
         // Persist cache hit/miss for hit-rate stats + threshold calibration.
         // Pure side-effect; failures are non-fatal (cache is best-effort).
@@ -600,33 +615,37 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     .to_string();
                 let _ = db::insert_cache_calibration(sim, decision, &model, None, "passive");
             }
-            // Real usage accounting (PRICING-PLAN PR-1): unconditional on the
-            // final `result` event — no longer gated behind cache_sim, which
-            // previously dropped every non-cached orchestration.
-            if ev.event == "result" {
+            // Real usage accounting (PRICING-PLAN PR-1 + ROUTING P1.a): one row
+            // per LLM 动作的真实用量，按事件携带的 role（task_type）细分——
+            // 轻量=general、子任务=各自 task_type、汇总=aggregate，便于按角色成本归因。
+            // 只记带用量的 task_done（每个成功 LLM 调用都会发）；不记失败。
+            if ev.event == "task_done" {
+                // 读取 role/task_type：1) 事件显式字段；2) 汇总(agg, id=0)；3) 未知
+                let role = obj
+                    .get("task_type")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        obj.get("id")
+                            .and_then(|v| v.as_i64())
+                            .filter(|&id| id == 0)
+                            .map(|_| "aggregate".to_string())
+                    })
+                    .unwrap_or_else(|| "unknown".to_string());
                 let model = obj
                     .get("model")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("default")
+                    .unwrap_or("unknown")
                     .to_string();
-                let usage_v = obj.get("usage").cloned().unwrap_or(json!({}));
-                let in_tok = usage_v
-                    .get("prompt_tokens")
-                    .and_then(|v| v.as_i64())
-                    .or_else(|| obj.get("input_tokens").and_then(|v| v.as_i64()))
-                    .unwrap_or(0);
-                let out_tok = usage_v
-                    .get("completion_tokens")
-                    .and_then(|v| v.as_i64())
-                    .or_else(|| obj.get("output_tokens").and_then(|v| v.as_i64()))
-                    .unwrap_or(0);
-                let cached = usage_v.get("cached_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                let reasoning = usage_v.get("reasoning_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                let field_missing = usage_v
-                    .get("field_missing")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let in_tok = obj.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                let out_tok = obj.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                // task_done 事件不带 cached/reasoning/field_missing，走 0 默认
                 let is_hit = obj.get("cache_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+                // duration 为秒（Python 计时），换算毫秒落库
+                let latency_ms = obj
+                    .get("duration")
+                    .and_then(|v| v.as_f64())
+                    .map(|d| d * 1000.0);
                 let provider = models
                     .iter()
                     .find(|m| m.name == model)
@@ -635,10 +654,10 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                 let usage_detail = pricing::UsageDetail {
                     prompt_tokens: in_tok,
                     completion_tokens: out_tok,
-                    cached_tokens: cached,
-                    reasoning_tokens: reasoning,
+                    cached_tokens: 0,
+                    reasoning_tokens: 0,
                     cache_creation_tokens: 0,
-                    field_missing,
+                    field_missing: false,
                 };
                 let (mut act_cost, zm) = priced_usage(provider, &model, &usage_detail);
                 if is_hit {
@@ -651,16 +670,18 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     in_tok,
                     out_tok,
                     act_cost,
-                    Some("orchestrate"),
+                    Some(&role),
                     is_hit,
+                    latency_ms,
+                    Some(&orchestrate_rid),
                     Some(&db::UsageExtra {
-                        cached_tokens: cached,
-                        reasoning_tokens: reasoning,
+                        cached_tokens: 0,
+                        reasoning_tokens: 0,
                         est_cost: 0.0,
                         act_cost,
                         zone_multiplier: zm,
                         conversation_id: conv_for_events.clone(),
-                        field_missing,
+                        field_missing: false,
                     }),
                 );
             }

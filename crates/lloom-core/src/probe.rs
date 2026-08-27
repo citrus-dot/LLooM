@@ -257,6 +257,8 @@ fn record_probe_usage(m: &Model, usage: &pricing::UsageDetail, hit: bool) -> f64
         act_cost,
         Some("probe"),
         hit,
+        None, // P1.a：探针非用户请求，不标 latency/request_id
+        None,
         Some(&db::UsageExtra {
             cached_tokens: usage.cached_tokens,
             reasoning_tokens: usage.reasoning_tokens,
@@ -280,6 +282,8 @@ fn record_probe_failure(m: &Model) {
         FAIL_SENTINEL_COST,
         Some("probe"),
         false,
+        None, // P1.a：探针非用户请求，不标 latency/request_id
+        None,
         Some(&db::UsageExtra {
             cached_tokens: 0,
             reasoning_tokens: 0,
