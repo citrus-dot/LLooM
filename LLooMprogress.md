@@ -1,8 +1,8 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-08-26** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：`d6912b9`（"P0.e/g: auto-tag new models + configurable signal layer"）
-> 工作区状态：干净。本日新增 commit：`b09d229`（定价/探针/信号）→ `09480fa`（P0.a 断言）→ `8dddc59`（P0.b/c/d 路由重构）→ `50ec431`（P0.f 消除 Python 真源）→ `f333784`（文档）→ `d6912b9`（P0.e/g）→ 待提交（P0 阶段审查文档）。
+> 最新已提交：`cab03c8`（"P1.a: persist latency_ms/request_id in usage_records, per-role orchestrate accounting"）
+> P0 阶段已全部完成并推送（`b09d229..0dc7d89`）；P1.a 已落地（cab03c8），待推送。
 
 ---
 
@@ -132,7 +132,8 @@
 - [x] ✅ **P0.e 增删模型自动打标**：`metadata.rs` 五级兜底已在 `insert_model` 自动回填并标需校准（d6912b9）
 - [x] ✅ **P0.f 消除 Python 真源**：`plan_decision` + assignments 下发，`ai_service.py` 无模型名字面量（50ec431）
 - [x] ✅ **P0.g 信号层正规化**：`SignalSet`/难度带/reask/LLM 判定，阈值走 settings KV，有单测（d6912b9）
-- [ ] 🔥 **P1.a 用量落库完善**：chat 路径已落库，orchestrate 的 `task_type`/`latency`/`request_id` 补全
+- [x] ✅ **P1.a 用量落库补全**（2026-08-27）：`usage_records` 加 `latency_ms`/`request_id`；chat 落耗时+请求号（失败不写 usage，归 `routing_decisions.outcome`）；编排按 `task_done` 逐角色(task_type)记账、model 兜底 unknown；迁移清旧脏数据
+- [ ] 🔥 **P1.b 推荐分配**：各任务类型主选/降级链落 seed 策略（见 ROUTING-PLAN §P1.b 表）
 - [ ] 🔧 **P3 健康感知与故障转移**、**P4 编排升级**、**P5 预算联动**
 
 ### 来自 CONTEXT-PLAN.md

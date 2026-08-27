@@ -547,10 +547,18 @@ CREATE INDEX IF NOT EXISTS idx_usage_req ON usage_records(request_id);
 
 - **chat_stream**（server.rs:391-404）：`ai_client::chat` 成功后立即
   `db::insert_usage(&res.model, "default", res.input_tokens, res.output_tokens, res.cost,
-  Some(&routing.task_type), false, Some(latency), Some(&req_id))`。失败也记一条（fail 信号）。
-- **orchestrate_stream**（server.rs:486-493）：把 `None`（task_type）改为
-  `Some(&routing.task_type)`；`&model` 取不到时不再回落 `"default"`，而是记 `Some("unknown")` 便于排查；
-  补 `latency`（Python `task_done.duration` 已有，从事件取）与 `request_id`（编排会话 id）。
+  Some(&routing.task_type), false, Some(latency), Some(&req_id))`。失败**不写 `usage_records`**：失败/重试/升级 attempt 记 `routing_decisions.outcome`（P0.c 已定义 `success/fail/escalated/cache_hit`，`request_id` 串联 cascade 的多次 attempt）。
+
+**`usage_records` 语义边界**（v3 厘清——避免成本账本混入诊断信号）：
+- **只记最终成功**（含 cache 命中：`cache_hit=1`、`cost=0` 但属一次省钱服务，该计入 `request_count`）。
+- **预算口径不受影响**：`check_budget`/`get_total_spend`（db.rs:322）用 `SUM(cost)`，失败 `cost=0` → 记不记都不扣预算；受影响的只是 `request_count` 分母类展示指标（命中率、平均成本/请求），故不能让失败污染。
+- **EWMA 失败信号**：`fail_count` 从 `routing_decisions WHERE outcome='fail' GROUP BY model` 聚合写 `model_task_score`（见 P1.c），与成本账本解耦。
+- **不加 `outcome` 列到 `usage_records`**：纯成本账本无需状态枚举；状态归 `routing_decisions`。
+- **orchestrate_stream**：v3 原写「用 `routing.task_type`」**前提已过时**——编排路径 per-role plan（P0.f/P4.a：decompose / 各子任务 / aggregate 各自独立 `plan()`），**无单一 task_type**。改为**按事件携带的 role 细分**：
+  - 落库点从 `result` 事件（server.rs:486 一条汇总）**下沉到每个 `task_done` 事件**：每条 usage 的 `task_type` = 该 role 的 task_type（`decompose` / 子任务自身类型 / `aggregate`）；`model`/`cost`/`tokens` 取自 `task_done` 携带值，取不到才回落 `"unknown"`；补 `latency`（`task_done.duration`）与 `request_id`。
+  - `result` 事件不再重复落 usage（避免与 `task_done` 重复计费），只保留 `insert_cache_calibration`（cache 校准）+ 前端汇总展示。
+  - **Python 端需补字段**：`task_done` 加 `task_type`（从分解结果透传；轻量路径标 `general`）；`aggregate` 调用补发 `task_done`（或 `aggregate_done`）携带 `task_type="aggregate"` + 其 cost/tokens，**否则聚合成本漏记**（落地时需确认复杂路径 aggregate 是否已发 task_done）。
+  - 一次编排产生多条 usage（decompose 1 + 子任务 N + aggregate 1）= 真实 LLM 调用数，`request_count` 相应增加——与「失败不记 usage」不冲突（失败记 `routing_decisions`，成功调用才记 usage）。
 - 清 3 条旧脏数据（`DELETE FROM usage_records WHERE model_name='default' AND cost=0`，迁移脚本里做，先备份）。
 
 #### P1.b　推荐分配（保留）
@@ -755,7 +763,7 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 
 | 序 | 内容 | 验收标准 | 状态 |
 |---|---|---|---|
-| 1 | P1.a 修用量落库 | chat 一次对话后 `usage_records` 有正确 model/tokens/cost/task_type/latency；编排 task_type 非 None | ⏳ 待办 |
+| 1 | P1.a 修用量落库 | chat 一次对话后 `usage_records` 有正确 model/tokens/cost/task_type/latency/request_id；编排按角色(task_type)逐 LLM 动作建账，model 兜底 unknown | ✅ 2026-08-27（cab03c8）`usage_records` 加 `latency_ms`/`request_id`（SCHEMA+迁移幂等）并建 `idx_usage_req`；`insert_usage` 扩参（探针向后兼容）；chat 落耗时+请求号（失败不写 usage，归 `routing_decisions.outcome`）；编排改逐 `task_done` 按 role 细分记账（轻量=general/子任务=自身 task_type/汇总=aggregate）；迁移清 3 条 `default`+cost=0 旧脏数据；52 单测 + P1.a 持久化冒烟过 |
 | 2 | P0.a 修量纲 + 写入断言 | qwen 单价降为 1/10；越界单价写入被 422 拒 | ✅ 2026-08-26（09480fa）量纲迁移此前已落；models 表 insert/update 断言 + 单测 |
 | 3 | P0.b/c 建表迁移（幂等） | 重跑不报错、旧数据不丢；迁移前已备份 `data/lloom.db` | ✅ 2026-08-26（8dddc59）备份 `lloom.db.pre-routing-migration.bak`；回填经 settings 标记只跑一次 |
 | 4 | P0.d 评分 plan() + router 单测 | 删任一模型自动改选；不再返回未注册名；空候选集明确报错；阶梯价交叉单测过 | ✅ 2026-08-26（8dddc59）11 个单测 + 冒烟；阶梯价交叉单测随 P2 tiered 数据补（现 spec 平价）|
