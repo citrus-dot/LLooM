@@ -488,6 +488,8 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
             // P1.c：正常完成信号 → 该 模型×任务 的 ewma_quality 上修（+0.7）
             db::upsert_model_task_score_signal(&res.model, &routing_task_type, QualitySignalKind::Success)
                 .ok();
+            // P1.d：按 shadow_ratio 概率后台采样双跑，积累 AIQ 成本—质量样本（不改返回）。
+            maybe_shadow_sample(models.clone(), routing_task_type.clone(), user_text.clone());
             format!(
                 "data: {}\n\n",
                 json!({
@@ -591,6 +593,8 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                 .unwrap_or(0)
         )
     });
+    // P1.d：编排主 query 副本，供闭包内按 shadow_ratio 后台采样双跑（不改返回）。
+    let shadow_query = req.query.clone();
     let body = Body::from_stream(events.map(move |ev| {
         // Persist cache hit/miss for hit-rate stats + threshold calibration.
         // Pure side-effect; failures are non-fatal (cache is best-effort).
@@ -698,6 +702,8 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     };
                     db::upsert_model_task_score_signal(&model, &role, kind).ok();
                 }
+                // P1.d：按 shadow_ratio 概率后台采样双跑（以主 query 作路由样本），不改返回。
+                maybe_shadow_sample(models.clone(), role, shadow_query.clone());
             }
         }
         let data = serde_json::to_string(&ev.data).unwrap_or_default();
@@ -1237,21 +1243,31 @@ fn shadow_hash(q: &str) -> String {
     format!("{:08x}", h)
 }
 
-/// 影子评测：对一条请求「现网路由选择」×「强模型基线」双跑。
-/// 基线默认取能力档最高（旗舰）的 active 模型，可经 settings `routing.shadow_baseline` 钦定；
-/// 结果落 `routing_calibration` 供 AIQ 离线重放调权。只导路由结果给前端（不双写 SSE）。
-async fn routing_shadow(Json(req): Json<ShadowBody>) -> Json<Value> {
-    let fail = |msg: &str| Json(json!({ "ok": false, "error": msg }));
+/// P1.d 双跑结果。
+struct ShadowSample {
+    task_type: String,
+    routed_model: String,
+    baseline_model: String,
+    routed_cost: f64,
+    baseline_cost: f64,
+}
 
-    let models = match db::list_models(true) {
-        Ok(m) if !m.is_empty() => m,
-        Ok(_) => return fail("无可用模型，请先添加"),
-        Err(e) => return fail(&e.to_string()),
-    };
+/// P1.d 双跑核心（手动端点与请求热路径后台采样共用）：
+/// 现网 `plan()` 路由选择 × 旗舰基线各跑一次，成本走 `priced_usage` 定价真源，
+/// 落 `routing_calibration`（source 区分 shadow 采样/手动端点）。
+async fn run_shadow_pair(
+    models: Vec<Model>,
+    task_type: &str,
+    query: &str,
+    source: &str,
+) -> std::result::Result<ShadowSample, String> {
+    if models.is_empty() {
+        return Err("无可用模型".to_string());
+    }
 
     // 1) 现网路由：走真实 plan() 看「系统会选谁」；direct/未注册退回注册表首选。
     let classifier = pick_classifier(&models);
-    let routing = router::route("auto", &req.query, classifier.as_ref()).await;
+    let routing = router::route("auto", query, classifier.as_ref()).await;
     let routed_model = if models.iter().any(|m| m.name == routing.model) {
         routing.model.clone()
     } else {
@@ -1277,7 +1293,7 @@ async fn routing_shadow(Json(req): Json<ShadowBody>) -> Json<Value> {
     let baseline_spec: Option<ModelSpec> = models.iter().find(|m| m.name == baseline_model).map(ModelSpec::from);
     let (routed_cost, baseline_cost) = match (routed_spec, baseline_spec) {
         (Some(r), Some(b)) => {
-            let msgs = vec![serde_json::json!({ "role": "user", "content": req.query })];
+            let msgs = vec![serde_json::json!({ "role": "user", "content": query })];
             let (rr, br) = tokio::join!(
                 ai_client::chat(&r, &msgs, 500, 0.3),
                 ai_client::chat(&b, &msgs, 500, 0.3),
@@ -1293,30 +1309,69 @@ async fn routing_shadow(Json(req): Json<ShadowBody>) -> Json<Value> {
             };
             (cost_of(&rr, &routed_model), cost_of(&br, &baseline_model))
         }
-        _ => return fail("路由/基线模型解析失败"),
+        _ => return Err("路由/基线模型解析失败".to_string()),
     };
 
-    let task_type = req.task_type.unwrap_or_else(|| routing.task_type.clone());
-    let qhash = shadow_hash(&task_type);
-    let _ = db::insert_routing_calibration(
-        &task_type,
-        &qhash,
-        &routed_model,
-        &baseline_model,
+    let t = if task_type.is_empty() {
+        routing.task_type.clone()
+    } else {
+        task_type.to_string()
+    };
+    let qhash = shadow_hash(&t);
+    let _ = db::insert_routing_calibration(&t, &qhash, &routed_model, &baseline_model, routed_cost, baseline_cost, source);
+
+    Ok(ShadowSample {
+        task_type: t,
+        routed_model,
+        baseline_model,
         routed_cost,
         baseline_cost,
-        "shadow",
-    );
+    })
+}
 
-    Json(json!({
-        "ok": true,
-        "task_type": task_type,
-        "routed_model": routed_model,
-        "baseline_model": baseline_model,
-        "routed_cost": routed_cost,
-        "baseline_cost": baseline_cost,
-        "saved": (baseline_cost - routed_cost).max(0.0),
-    }))
+/// P1.d 请求热路径自动采样：按 `routing.shadow_ratio`（默认 0.10，0 即零成本关）
+/// 以概率后台 spawn 双跑落库，供 AIQ 离线重放积累样本。
+/// 不阻塞主响应、不改返回；后台偶发失败静默（AIQ 只需成功样本）。
+fn maybe_shadow_sample(models: Vec<Model>, task_type: String, query: String) {
+    let ratio = config::shadow_ratio();
+    if ratio <= 0.0 {
+        return;
+    }
+    // 简易概率采样：SystemTime 纳秒末位 < ratio 即命中（不引 rand 依赖）。
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as f64)
+        .unwrap_or(0.0);
+    if nanos / 1_000_000_000.0 >= ratio {
+        return;
+    }
+    tokio::spawn(async move {
+        let _ = run_shadow_pair(models, &task_type, &query, "shadow").await;
+    });
+}
+
+/// 手动影子评测端点：强制双跑一条请求，返回路由结果与成本对比（不按采样率）。
+/// 采样入口见 [`maybe_shadow_sample`]（请求热路径自动采集）。
+async fn routing_shadow(Json(req): Json<ShadowBody>) -> Json<Value> {
+    let fail = |msg: &str| Json(json!({ "ok": false, "error": msg }));
+    let models = match db::list_models(true) {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => return fail("无可用模型，请先添加"),
+        Err(e) => return fail(&e.to_string()),
+    };
+    let task_type = req.task_type.unwrap_or_default();
+    match run_shadow_pair(models, &task_type, &req.query, "shadow").await {
+        Ok(r) => Json(json!({
+            "ok": true,
+            "task_type": r.task_type,
+            "routed_model": r.routed_model,
+            "baseline_model": r.baseline_model,
+            "routed_cost": r.routed_cost,
+            "baseline_cost": r.baseline_cost,
+            "saved": (r.baseline_cost - r.routed_cost).max(0.0),
+        })),
+        Err(e) => fail(&e),
+    }
 }
 
 /// 影子评测配置与已采集样本数（AIQ 重放入口）。

@@ -142,7 +142,7 @@
 - [x] ✅ **P1.a 用量落库补全**（2026-08-27）：`usage_records` 加 `latency_ms`/`request_id`；chat 落耗时+请求号（失败不写 usage，归 `routing_decisions.outcome`）；编排按 `task_done` 逐角色(task_type)记账、model 兜底 unknown；迁移清旧脏数据
 - [x] ✅ **P1.b 推荐分配**（2026-08-27）：`migrate_db` 按 §P1.b 表为新库预置 `pinned_model` 推荐主选（INSERT OR IGNORE），既有库仅回填 `pinned_model IS NULL` 行（settings `migration_policy_v1_p1b` 一次性标记），绝不覆盖用户钦定模型
 - [x] ✅ **P1.c 成效分**（2026-08-27）：`metadata.rs::cold_start_quality` overlay 按 task_type 榜单折算分冷启动；`db::upsert_model_task_score_signal` 在线 EWMA`ewma←ασ+(1-α)ewma`（α 读 `signal.ewma_alpha` 默认 0.15），输入 σ 不 clamp、结果 clamp [0,1]；按信号自增 success/fail/escalation，`sample_count≥20` 解除保守期；server.rs chat 落 Success、orchestrate 按 task_done error 落 Success/SubtaskFail（model/role≠unknown 才打点）
-- [x] ✅ **P1.d 影子评测 + AIQ 重放**（2026-08-27）：`POST/GET /api/routing/shadow` 采样（`routing.shadow_ratio` 默认 0.10）双跑「路由选择 × 旗舰基线」落 `routing_calibration`；`scripts/aiq_replay.py` 离线对比全弱/当前/全强三条成本—质量线，输出 RouterBench 式 AIQ；冒烟过
+- [x] ✅ **P1.d 影子评测 + AIQ 重放**（2026-08-27）：`POST/GET /api/routing/shadow` 采样（`routing.shadow_ratio` 默认 0.10）双跑「路由选择 × 旗舰基线」落 `routing_calibration`；**请求热路径（chat/orchestrate）已按 shadow_ratio 概率接入 `maybe_shadow_sample` 后台自动采样**（复用 `run_shadow_pair`，tokio spawn 不阻塞响应）；`scripts/aiq_replay.py` 离线对比全弱/当前/全强三条成本—质量线，输出 RouterBench 式 AIQ；冒烟过
 - [ ] 🔧 **P3 健康感知与故障转移**、**P4 编排升级**、**P5 预算联动**
 
 ### 来自 CONTEXT-PLAN.md
