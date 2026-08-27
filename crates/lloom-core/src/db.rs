@@ -6,6 +6,7 @@ use crate::models::{Budget, Model, UsageStats};
 use crate::pricing::{PriceSpec, TierBand, Zone};
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use std::collections::HashMap;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS models (
@@ -1393,6 +1394,46 @@ pub fn task_avg_out_tokens(task_type: &str) -> f64 {
     match stmt.query_row(params![task_type], |r| r.get::<_, f64>(0)) {
         Ok(v) if v > 0.0 => v,
         _ => 750.0, // 冷启动
+    }
+}
+
+/// PR-5 §5.1：某 task_type 下各模型的缓存命中率（usage_records 真实 cached/prompt 平均，0..1）。
+/// 无样本的模型不回填——`plan()` 缺省 0，不偏袒任何候选。
+pub fn model_cache_hit_rate(task_type: &str) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    let conn = match open() {
+        Ok(c) => c,
+        Err(_) => return out,
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT model, AVG(CAST(COALESCE(cached_tokens,0) AS REAL) / MAX(prompt_tokens,1))
+         FROM usage_records WHERE task_type = ?1 AND prompt_tokens > 0 GROUP BY model",
+    ) else {
+        return out;
+    };
+    let Ok(rows) = stmt.query_map(params![task_type], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    }) else {
+        return out;
+    };
+    for r in rows.flatten() {
+        out.insert(r.0, r.1.clamp(0.0, 1.0));
+    }
+    out
+}
+
+/// PR-5 §5.2 会话亲和：某会话最近一次落库所用模型（usage_records 最新行）。None = 无记录。
+pub fn recent_conversation_model(conversation_id: &str) -> Result<Option<String>> {
+    let conn = open()?;
+    let mut stmt = conn.prepare(
+        "SELECT model FROM usage_records
+         WHERE conversation_id = ?1 AND model IS NOT NULL AND model <> ''
+         ORDER BY rowid DESC LIMIT 1",
+    )?;
+    let mut rows = stmt.query(params![conversation_id])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row.get(0)?)),
+        None => Ok(None),
     }
 }
 

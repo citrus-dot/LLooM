@@ -102,6 +102,9 @@ struct ChatBody {
     messages: Vec<Value>,
     #[serde(default)]
     sr_domain: Option<String>,
+    /// PR-5 §5.2 会话亲和：当请求属于某 conversation 时带上，路由据此粘上一轮所用模型。
+    #[serde(default)]
+    conversation_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -443,10 +446,16 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
     let classifier = pick_classifier(&models);
     let sr_domain = req.sr_domain.clone().unwrap_or_default();
     let route_start = std::time::Instant::now();
+    // PR-5 §5.2：会话亲和——从会话最近一次落库取「上一轮所用模型」传给路由（仅缓存敏感通道粘）。
+    let last_model = req
+        .conversation_id
+        .as_deref()
+        .and_then(|cid| db::recent_conversation_model(cid).ok().flatten());
     let mut routing = router::route(
         req.model.as_deref().unwrap_or("auto"),
         &user_text,
         classifier.as_ref(),
+        last_model.as_deref(),
     )
     .await;
     if !sr_domain.is_empty() {
@@ -1564,7 +1573,7 @@ async fn run_shadow_pair(
 
     // 1) 现网路由：走真实 plan() 看「系统会选谁」；direct/未注册退回注册表首选。
     let classifier = pick_classifier(&models);
-    let routing = router::route("auto", query, classifier.as_ref()).await;
+    let routing = router::route("auto", query, classifier.as_ref(), None).await;
     let routed_model = if models.iter().any(|m| m.name == routing.model) {
         routing.model.clone()
     } else {

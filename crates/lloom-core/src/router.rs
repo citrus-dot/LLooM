@@ -171,6 +171,11 @@ pub struct PlanInput<'a> {
     pub quality_override: &'a HashMap<String, f64>,
     /// P5 预算档预留，本阶段恒 "normal"
     pub budget_tier: &'a str,
+    /// PR-5 §5.1：model → 缓存命中率（0..1），喂 `effective_input_cost` 期望单价。
+    /// 缺省 0 = 不认为有缓存收益（不偏袒）。
+    pub hit_rate: &'a HashMap<String, f64>,
+    /// PR-5 §5.2 会话亲和：本会话上一轮所用模型（sticky）。None = 不粘。
+    pub last_model_conv: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -257,7 +262,7 @@ pub fn plan(input: &PlanInput) -> Result<PlanOutcome, PlanError> {
         let ec = input
             .price_specs
             .get(&(m.provider.clone(), m.name.clone()))
-            .map(|s| s.est_cost(0.0, input.est_in_tokens, input.est_out_tokens, input.t_epoch_secs, input.zones))
+            .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, input.t_epoch_secs, input.zones))
             .unwrap_or(0.0);
         // P5.a protect：仅本地免费或零成本模型（预算耗尽推本地 Ollama 的最后一档）。
         if input.budget_tier == "protect" && m.is_local != 1 && ec > 0.0 {
@@ -333,7 +338,25 @@ fn quality_of(input: &PlanInput, m: &Model) -> f64 {
         .clamp(0.0, 1.0)
 }
 
-/// s = qw·quality − cw·norm_cost − lw·norm_latency + 0.05·priority − 保守期罚分
+/// PR-5 §5.1：model → 缓存命中率（缺省 0，不偏袒）。
+fn hit_of(input: &PlanInput, m: &Model) -> f64 {
+    input.hit_rate.get(&m.name).copied().unwrap_or(0.0).clamp(0.0, 1.0)
+}
+
+/// PR-5 §5.2：会话亲和加分——仅缓存敏感通道（spec 有 cache_read 区分）且命中本会话末模型时 +0.05。
+fn sticky_bonus(input: &PlanInput, m: &Model) -> f64 {
+    if input.last_model_conv != Some(m.name.as_str()) {
+        return 0.0;
+    }
+    let cache_sensitive = input
+        .price_specs
+        .get(&(m.provider.clone(), m.name.clone()))
+        .map(|s| s.cache_read_cost.is_some())
+        .unwrap_or(false);
+    if cache_sensitive { 0.05 } else { 0.0 }
+}
+
+/// s = qw·quality − cw·norm_cost − lw·norm_latency + 0.05·priority + sticky − 保守期罚分
 fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
     let ecs: Vec<f64> = gated
         .iter()
@@ -341,7 +364,7 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
             input
                 .price_specs
                 .get(&(m.provider.clone(), m.name.clone()))
-                .map(|s| s.est_cost(0.0, input.est_in_tokens, input.est_out_tokens, input.t_epoch_secs, input.zones))
+                .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, input.t_epoch_secs, input.zones))
                 .unwrap_or(0.0)
         })
         .collect();
@@ -360,7 +383,8 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
             let mut s = input.policy.quality_weight * q
                 - input.policy.cost_weight * tier_cost_multiplier(input.budget_tier) * norm_cost
                 - input.policy.latency_weight * norm_latency
-                + 0.05 * m.priority as f64;
+                + 0.05 * m.priority as f64
+                + sticky_bonus(input, m); // PR-5 §5.2 会话亲和
             if m.needs_calibration != 0 && tier_req > 1 {
                 s -= 0.3;
             }
@@ -388,7 +412,12 @@ fn now_epoch() -> i64 {
 ///
 /// `model` 为 "auto"（分类 + plan() 评分）或显式模型名（direct）。
 /// direct 未注册模型由调用方（server）报错——本函数不伪造 spec。
-pub async fn route(model: &str, user_text: &str, classifier: Option<&ModelSpec>) -> RoutingDecision {
+pub async fn route(
+    model: &str,
+    user_text: &str,
+    classifier: Option<&ModelSpec>,
+    last_model: Option<&str>,
+) -> RoutingDecision {
     let models = db::list_models(true).unwrap_or_default();
     if model != "auto" && model != "auto-route" {
         let stream = models
@@ -422,12 +451,17 @@ pub async fn route(model: &str, user_text: &str, classifier: Option<&ModelSpec>)
     zr.load(db::list_provider_zones().unwrap_or_default());
 
     let mut quality_override = HashMap::new();
+    let mut hit_rate = HashMap::new();
     for m in &models {
         if let Some(sc) = db::get_model_task_score(&m.name, &task_type).ok().flatten() {
             if sc.sample_count >= 5 {
                 quality_override.insert(m.name.clone(), sc.ewma_quality.clamp(0.0, 1.0));
             }
         }
+    }
+    // PR-5 §5.1：真实缓存命中率喂 effective_input_cost（缺省 0 = 不偏袒）
+    for (k, v) in db::model_cache_hit_rate(&task_type) {
+        hit_rate.insert(k, v);
     }
 
     // est_in 粗估：中英混合 ~0.6 token/字符（编排路径已由 Python 侧 count_tokens 精确传 plan-subtask）。
@@ -451,6 +485,8 @@ pub async fn route(model: &str, user_text: &str, classifier: Option<&ModelSpec>)
         est_out_tokens: est_out,
         quality_override: &quality_override,
         budget_tier,
+        hit_rate: &hit_rate,
+        last_model_conv: last_model,
     };
 
     match plan(&input) {
@@ -517,12 +553,17 @@ pub fn plan_for_task(
     zr.load(db::list_provider_zones().unwrap_or_default());
 
     let mut quality_override = HashMap::new();
+    let mut hit_rate = HashMap::new();
     for m in models {
         if let Some(sc) = db::get_model_task_score(&m.name, task_type).ok().flatten() {
             if sc.sample_count >= 5 {
                 quality_override.insert(m.name.clone(), sc.ewma_quality.clamp(0.0, 1.0));
             }
         }
+    }
+    // PR-5 §5.1：真实缓存命中率喂 effective_input_cost
+    for (k, v) in db::model_cache_hit_rate(task_type) {
+        hit_rate.insert(k, v);
     }
 
     let band = match task_type {
@@ -543,6 +584,8 @@ pub fn plan_for_task(
         est_out_tokens,
         quality_override: &quality_override,
         budget_tier,
+        hit_rate: &hit_rate,
+        last_model_conv: None,
     };
     plan(&input)
 }
@@ -625,6 +668,8 @@ mod tests {
     struct Ctx {
         zones: ZoneResolver,
         quality: HashMap<String, f64>,
+        hit: HashMap<String, f64>,
+        sticky: Option<String>,
     }
 
     impl Ctx {
@@ -632,6 +677,8 @@ mod tests {
             Self {
                 zones: ZoneResolver::new(),
                 quality: HashMap::new(),
+                hit: HashMap::new(),
+                sticky: None,
             }
         }
     }
@@ -657,6 +704,8 @@ mod tests {
             est_out_tokens: 500,
             quality_override: &ctx.quality,
             budget_tier: "normal",
+            hit_rate: &ctx.hit,
+            last_model_conv: ctx.sticky.as_deref(),
         }
     }
 
@@ -980,5 +1029,80 @@ mod tests {
         };
         assert!(normal.candidates.iter().all(|c| c.capability_tier >= 3));
         assert!(tight.candidates.iter().any(|c| c.capability_tier == 2));
+    }
+
+    // ── PR-5 路由衔接：命中率期望单价 + 会话亲和 ──
+
+    #[test]
+    fn sticky_bonus_only_for_cache_sensitive_match() {
+        let models = registry();
+        let mut specs = prices();
+        specs.insert(
+            ("dashscope".into(), "qwen-plus".into()),
+            PriceSpec { cache_read_cost: Some(2.22e-8), ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7) },
+        );
+        let policy = RoutingPolicy::default();
+        let ctx = Ctx::new();
+        // 粘 qwen-plus + spec 缓存敏感 → +0.05
+        let m = models.iter().find(|x| x.name == "qwen-plus").unwrap();
+        let mut inp = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
+        inp.last_model_conv = Some("qwen-plus");
+        assert_eq!(sticky_bonus(&inp, m), 0.05);
+        // 粘其他模型 → 0
+        let mut inp2 = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
+        inp2.last_model_conv = Some("gpt-4o");
+        assert_eq!(sticky_bonus(&inp2, m), 0.0);
+        // 非缓存敏感（gpt spec cache_read None）→ 即使命中也 0
+        let g = models.iter().find(|x| x.name == "gpt-4o").unwrap();
+        let mut inp3 = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
+        inp3.last_model_conv = Some("gpt-4o");
+        assert_eq!(sticky_bonus(&inp3, g), 0.0);
+    }
+
+    #[test]
+    fn sticky_bonus_flips_near_tie() {
+        let models: Vec<Model> = registry()
+            .into_iter()
+            .filter(|m| m.name == "qwen-plus" || m.name == "gpt-4o")
+            .collect();
+        let mut specs = prices();
+        specs.insert(
+            ("dashscope".into(), "qwen-plus".into()),
+            PriceSpec { cache_read_cost: Some(2.22e-8), ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7) },
+        );
+        let policy = RoutingPolicy {
+            task_type: "general".into(),
+            min_capability_tier: 2,
+            cost_weight: 0.0,
+            quality_weight: 1.0,
+            latency_weight: 0.0,
+            ..Default::default()
+        };
+        let mut ctx = Ctx::new();
+        ctx.quality.insert("qwen-plus".into(), 0.56);
+        ctx.quality.insert("gpt-4o".into(), 0.60);
+        // 无粘性 → 质量稍高的 gpt-4o
+        let no_sticky = plan(&base_input(&models, &specs, "general", "medium", &policy, 100, &ctx)).unwrap();
+        assert_eq!(no_sticky.primary, "gpt-4o");
+        // 粘上一轮所用 qwen-plus → +0.05 翻转为它（缓存敏感才粘）
+        ctx.sticky = Some("qwen-plus".into());
+        let sticky = plan(&base_input(&models, &specs, "general", "medium", &policy, 100, &ctx)).unwrap();
+        assert_eq!(sticky.primary, "qwen-plus");
+    }
+
+    #[test]
+    fn hit_rate_lowers_estimated_cost_in_candidates() {
+        let models: Vec<Model> = registry().into_iter().filter(|m| m.name == "qwen-plus").collect();
+        let mut specs = prices();
+        specs.insert(
+            ("dashscope".into(), "qwen-plus".into()),
+            PriceSpec { cache_read_cost: Some(2.22e-8), ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7) },
+        );
+        let policy = RoutingPolicy { task_type: "general".into(), min_capability_tier: 2, ..Default::default() };
+        let mut ctx = Ctx::new();
+        let no_hit = plan(&base_input(&models, &specs, "general", "medium", &policy, 1000, &ctx)).unwrap();
+        ctx.hit.insert("qwen-plus".into(), 0.9);
+        let hit = plan(&base_input(&models, &specs, "general", "medium", &policy, 1000, &ctx)).unwrap();
+        assert!(hit.candidates[0].est_cost < no_hit.candidates[0].est_cost);
     }
 }
