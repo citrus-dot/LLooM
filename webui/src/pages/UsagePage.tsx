@@ -3,9 +3,12 @@ import { Row, Col, Card, Statistic, Table, Progress, Tag, Space, message, Button
 import { PlusOutlined } from '@ant-design/icons';
 import { getStats, getUsage, getBudgets, setBudget, checkBudget, getModels, UsageRow, Budget, Model } from '../api';
 
+const CNY_PER_USD = 7.2;
+
 export default function UsagePage() {
   const [stats, setStats] = useState<any>(null);
   const [usage, setUsage] = useState<UsageRow[]>([]);
+  const [totalCacheSaved, setTotalCacheSaved] = useState(0);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [budgetSpent, setBudgetSpent] = useState<Record<string, number>>({});
   const [models, setModels] = useState<Model[]>([]);
@@ -19,6 +22,7 @@ export default function UsagePage() {
       const [st, u, b, m] = await Promise.all([getStats(), getUsage(), getBudgets(), getModels()]);
       setStats(st);
       setUsage(u.usage);
+      setTotalCacheSaved(u.total_cache_saved ?? 0);
       setBudgets(b.budgets);
       setModels(m.models);
       // Real spend per budget via check API.
@@ -67,6 +71,11 @@ export default function UsagePage() {
     { title: '输出 tokens', dataIndex: 'total_output_tokens', key: 'out' },
     { title: '请求数', dataIndex: 'request_count', key: 'req' },
     { title: '缓存命中', dataIndex: 'cache_hits', key: 'cache', render: (v: number) => (v ? <Tag color="green">{v}</Tag> : '-') },
+    {
+      title: '缓存节省',
+      key: 'saved',
+      render: (_: unknown, r: UsageRow) => (r.cache_saved ? `¥${(r.cache_saved * CNY_PER_USD).toFixed(2)}` : '-'),
+    },
     { title: '花费', dataIndex: 'total_cost', key: 'cost', render: (v: number) => `$${v.toFixed(6)}` },
   ];
 
@@ -85,6 +94,20 @@ export default function UsagePage() {
         <Col span={6}><Card><Statistic title="语义缓存" value={stats?.cache_enabled ? '✓' : '✗'} /></Card></Col>
         <Col span={6}><Card><Statistic title="累计花费" value={stats?.total_spend ?? 0} precision={6} prefix="$" /></Card></Col>
       </Row>
+
+      <Card
+        size="small"
+        style={{ borderColor: '#a0d911', background: '#fcffe6' }}
+      >
+        <Statistic
+          title="缓存为您节省"
+          value={totalCacheSaved * CNY_PER_USD}
+          precision={2}
+          prefix="¥"
+          suffix="（语义缓存命中省下的费用）"
+          valueStyle={{ color: '#7cb305' }}
+        />
+      </Card>
 
       <Row gutter={16}>
         <Col span={12}>

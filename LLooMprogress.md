@@ -1,7 +1,7 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-08-27** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：P1.a/b/c/d 落地（P1 阶段完成，随本阶段审查后统一推送）
+> 最新已提交：P1.a/b/c/d 落地；当前工作区为 **P2 定价刷新 + 定价页/徽标**（P2 阶段，待本阶段审查后统一推送）
 
 ---
 
@@ -64,8 +64,8 @@
 | 文档 | 编写时间 | 提交状态 | 内容范围 | 落地状态 |
 |---|---|---|---|---|
 | [`CONTEXT-PLAN.md`](./CONTEXT-PLAN.md) | 2026-08-24 | **已提交**（a2b8bb5）| 上下文优化：SQLite 对话存储、预算上下文、两层缓存、原子写、两阶段落盘 | Phase 1 + 部分 Phase 4 已落地（追加端点存在于 server.rs）|
-| [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **未提交**（工作区 M）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（未提交）；PR-5/PR-8 待办；WebUI 定价页/探针视图待做 |
-| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4/v5 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/b/c/d/e/f/g 全部落地**（09480fa、8dddc59、50ec431、d6912b9）；P1+ 待办 |
+| [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **未提交**（工作区 M）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（未提交）；PR-6/7 前端定价页+探针视图已落地；**P2.a 定价刷新 + P2.c 缓存节省已追加落地**；PR-5/PR-8 待办 |
+| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4/v5 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/b/c/d/e/f/g 全部落地**（09480fa、8dddc59、50ec431、d6912b9）；P1.a/b/c/d 全部落地（P1 阶段完成）；**P2.a 定价刷新 + P2.c 定价页/徽标已落地**（P2 阶段完成） |
 
 > 三份计划文档是详细设计与落地顺序的权威来源。本进度文档只做索引与高层同步，不重复其细节。
 
@@ -102,6 +102,12 @@
 - P1.d（工作区）：`server.rs` `POST/GET /api/routing/shadow`（采样 `routing.shadow_ratio` 默认 0.10、基线 `routing.shadow_baseline` 否则能力档最高、FNV-1a 哈希防重、成本走 `priced_usage` 真源、结果落 `routing_calibration`）+ `db::insert_routing_calibration/count_routing_calibration` + `config.rs::shadow_ratio`；`scripts/aiq_replay.py` 离线 AIQ 重放（三条线成本—质量、AIQ 预算积分、质量回填写库）
 - 冒烟：`cargo test` 54 全绿（新增 EWMA 累计+保守期解除、迁移幂等修 scale 单测）；AIQ 脚本 3 样本冒烟出 AIQ + 95% 节省 + 调参建议
 
+**2026-08-27 落地（ROUTING-PLAN P2 定价刷新 + WebUI；PR-6/7 前端；P2 阶段完成）**：
+- P2.a 定价刷新：`server.rs` `pricing_refresh_loop` 24h 后台 job（jsdelivr 主源 + ghproxy 回退，断网失败静默保留本地值）+ `POST /api/pricing/refresh`（手动触发）、`POST /api/pricing/specs/{provider}/{model}/accept`（采纳转 manual，此后不被覆盖）；`pricing.rs::parse_remote_prices` 纯函数解析（跳过非 provider/model 键、负价，离线单测）+ `db::refresh_price_spec`（COALESCE 保 cache_read，不覆盖 manual）
+- P2.c WebUI 定价页：新增 `PricingPage.tsx`（price_source 徽标 manual/overlay/litellm_remote…、`price_stale` 黄点、手工改价强制转 manual、采纳建议价、探针统计卡 + 近 30 天校准曲线），路由/导航接入（定价页）；`api.ts` 增 `listPriceSpecs/updatePriceSpec/acceptPriceSpec/refreshPricing/listPriceCalibration/getProbeStats/setProbeBudget`
+- P2.c 缓存节省：`usage_records.cache_saved_cost` 列 + `UsageExtra` 透传 + `get_usage_stats` SUM 聚合；用量页「缓存为您节省 ¥X」卡片 + 「缓存节省」列（CNY 展示）
+- 冒烟：`cargo test` 57 全绿（新增 parse_remote_*、cache_saved_cost 聚合）；`tsc --noEmit` + `vite build` 全过
+
 **过往已实现并验证**（见 memory / 历史 commit）：
 - 编辑对话名称（`rename_conversation`，PUT `/api/conversations/{id}`）
 - 三大安全修复：SQL 注入列名白名单、路径穿越 id 白名单、密钥脱敏
@@ -127,22 +133,23 @@
 按优先级：`🔥` 高/安全，`⚡` 体验，`🔧` 优化。
 
 ### 来自 PRICING-PLAN.md
-- [ ] 🔶 **PR-5 路由衔接**：`effective_input_cost` 进 `plan()` 评分（依赖 ROUTING-PLAN P0.d）
-- [ ] 🔶 **PR-6 WebUI 定价页**：`GET /api/pricing/specs` 等后端已就绪，前端定价/校准视图未做
-- [ ] 🔶 **PR-7 探针视图**：`GET /api/probe/stats` 后端已就绪，用量页探针视图未做
+- [ ] 🔶 **PR-5 路由衔接**：`effective_input_cost` 进 `plan()` 评分（依赖 ROUTING-PLAN P0.d，P0.d 已完成，此项留待与 P3 路由联动一并处理）
+- [x] ✅ **PR-6 WebUI 定价页**：`GET /api/pricing/specs` 等后端 + PricingPage 前端均已落地（2026-08-27）
+- [x] ✅ **PR-7 探针视图**：`GET /api/probe/stats` 后端 + 用量页/定价页探针视图均已落地（2026-08-27）
 - [ ] ⏳ **PR-8 峰谷调度**：可延迟任务挪谷时（依赖 ROUTING-PLAN P4）
 
-### 来自 ROUTING-PLAN.md（v3，P0 阶段已于 2026-08-26 全部完成）
+### 来自 ROUTING-PLAN.md（v3，P0/P1/P2 阶段均已完结）
 - [x] ✅ **P0.a 量纲写入断言**（09480fa）
 - [x] ✅ **P0.b/c 元数据列 + 策略/审计表**（8dddc59）
 - [x] ✅ **P0.d 路由重构**：`plan()` 评分路由已替换全部硬编码（chat 路径），11 单测 + 冒烟过（8dddc59）
 - [x] ✅ **P0.e 增删模型自动打标**：`metadata.rs` 五级兜底已在 `insert_model` 自动回填并标需校准（d6912b9）
 - [x] ✅ **P0.f 消除 Python 真源**：`plan_decision` + assignments 下发，`ai_service.py` 无模型名字面量（50ec431）
 - [x] ✅ **P0.g 信号层正规化**：`SignalSet`/难度带/reask/LLM 判定，阈值走 settings KV，有单测（d6912b9）
-- [x] ✅ **P1.a 用量落库补全**（2026-08-27）：`usage_records` 加 `latency_ms`/`request_id`；chat 落耗时+请求号（失败不写 usage，归 `routing_decisions.outcome`）；编排按 `task_done` 逐角色(task_type)记账、model 兜底 unknown；迁移清旧脏数据
-- [x] ✅ **P1.b 推荐分配**（2026-08-27）：`migrate_db` 按 §P1.b 表为新库预置 `pinned_model` 推荐主选（INSERT OR IGNORE），既有库仅回填 `pinned_model IS NULL` 行（settings `migration_policy_v1_p1b` 一次性标记），绝不覆盖用户钦定模型
-- [x] ✅ **P1.c 成效分**（2026-08-27）：`metadata.rs::cold_start_quality` overlay 按 task_type 榜单折算分冷启动；`db::upsert_model_task_score_signal` 在线 EWMA`ewma←ασ+(1-α)ewma`（α 读 `signal.ewma_alpha` 默认 0.15），输入 σ 不 clamp、结果 clamp [0,1]；按信号自增 success/fail/escalation，`sample_count≥20` 解除保守期；server.rs chat 落 Success、orchestrate 按 task_done error 落 Success/SubtaskFail（model/role≠unknown 才打点）
-- [x] ✅ **P1.d 影子评测 + AIQ 重放**（2026-08-27）：`POST/GET /api/routing/shadow` 采样（`routing.shadow_ratio` 默认 0.10）双跑「路由选择 × 旗舰基线」落 `routing_calibration`；**请求热路径（chat/orchestrate）已按 shadow_ratio 概率接入 `maybe_shadow_sample` 后台自动采样**（复用 `run_shadow_pair`，tokio spawn 不阻塞响应）；`scripts/aiq_replay.py` 离线对比全弱/当前/全强三条成本—质量线，输出 RouterBench 式 AIQ；冒烟过
+- [x] ✅ **P1.a 用量落库补全**（2026-08-27）
+- [x] ✅ **P1.b 推荐分配**（2026-08-27）
+- [x] ✅ **P1.c 成效分**（2026-08-27）
+- [x] ✅ **P1.d 影子评测 + AIQ 重放**（2026-08-27，热路径自动采样已接入）
+- [x] ✅ **P2.a 定价刷新 + P2.c 定价页/徽标**（2026-08-27）：24h 刷新 job + 手动触发 + 采纳转 manual；WebUI PricingPage（specs/徽标/改价/采纳/校准）；用量页缓存节省卡片 + 探针视图
 - [ ] 🔧 **P3 健康感知与故障转移**、**P4 编排升级**、**P5 预算联动**
 
 ### 来自 CONTEXT-PLAN.md

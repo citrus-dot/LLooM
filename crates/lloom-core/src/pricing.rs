@@ -109,6 +109,60 @@ fn default_half() -> f64 {
     0.5
 }
 
+// ── 远端价格刷新（P2.a，纯解析无副作用）──
+
+/// 一次远端刷新取回的单条价（litellm model_prices 文件，主键 (provider, model)）。
+#[derive(Debug, Clone, Default)]
+pub struct RemotePrice {
+    pub input_cost: f64,
+    pub output_cost: f64,
+    pub cache_read_cost: Option<f64>,
+}
+
+/// 解析 litellm 官方 `model_prices_and_context_window.json` 文本 → 远端价表。
+/// 仅收录形如 `provider/model` 的 key（裸 model 名无法归真源 provider，跳过）；
+/// 单价缺或不正（<=0）跳过。cache_read 缺则 None（刷新用 COALESCE 不破坏原值）。
+/// 纯函数，离线单测。
+pub fn parse_remote_prices(raw: &str) -> HashMap<(String, String), RemotePrice> {
+    let mut out = HashMap::new();
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return out;
+    };
+    let Some(obj) = root.as_object() else {
+        return out;
+    };
+    for (key, v) in obj {
+        let Some(io) = v.as_object() else {
+            continue;
+        };
+        let Some((prov, model)) = key.split_once('/') else {
+            continue;
+        };
+        if prov.is_empty() || model.is_empty() {
+            continue;
+        }
+        let n = |k: &str| io.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0);
+        let input = n("input_cost_per_token");
+        let output = n("output_cost_per_token");
+        if input <= 0.0 || output <= 0.0 {
+            continue;
+        }
+        let cache_read = io
+            .get("cache_read_input_token_cost")
+            .and_then(|x| x.as_f64())
+            .filter(|c| *c >= 0.0);
+        out.insert(
+            (prov.to_string(), model.to_string()),
+            RemotePrice {
+                input_cost: input,
+                output_cost: output,
+                cache_read_cost: cache_read,
+            },
+        );
+    }
+    out
+}
+
 /// 生效档的抽象：有阶梯走 Tier，无阶梯回落 Flat（避免借用 self 的生存期问题）
 enum BandRef<'a> {
     Tier(&'a TierBand),
@@ -616,5 +670,41 @@ mod tests {
             + 500.0 * 3e-6                     // output
             + 50.0 * 3e-6;                     // reasoning
         assert!((cost - expected).abs() < 1e-9, "cost={cost} expected={expected}");
+    }
+
+    // ── P2.a 远端价格解析 ──
+
+    #[test]
+    fn parse_remote_provider_model_keys() {
+        let raw = r#"{
+            "dashscope/qwen-max": {"input_cost_per_token": 0.0000026, "output_cost_per_token": 0.0000086, "cache_read_input_token_cost": 0.00000052},
+            "openai/gpt-4o": {"input_cost_per_token": 0.0000025, "output_cost_per_token": 0.00001},
+            "gpt-4o-mini": {"input_cost_per_token": 0.00000015}
+        }"#;
+        let m = parse_remote_prices(raw);
+        assert_eq!(m.len(), 2, "裸 model 名应跳过：{m:?}");
+        let qw = m.get(&("dashscope".into(), "qwen-max".into())).unwrap();
+        assert!((qw.input_cost - 0.0000026).abs() < 1e-12);
+        assert_eq!(qw.cache_read_cost, Some(0.00000052));
+        let gpt = &m[&("openai".into(), "gpt-4o".into())];
+        assert_eq!(gpt.cache_read_cost, None);
+    }
+
+    #[test]
+    fn parse_remote_skips_bad_values() {
+        let raw = r#"{
+            "dashscope/qwen": {"input_cost_per_token": -1e-6, "output_cost_per_token": 0.0000026},
+            "dashscope/qwen-ok": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.0},
+            "dashscope/qwen-good": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002}
+        }"#;
+        let m = parse_remote_prices(raw);
+        assert_eq!(m.len(), 1);
+        assert!(m.contains_key(&("dashscope".into(), "qwen-good".into())));
+    }
+
+    #[test]
+    fn parse_remote_invalid_json_empty() {
+        assert!(parse_remote_prices("not json").is_empty());
+        assert!(parse_remote_prices("[1,2]").is_empty());
     }
 }

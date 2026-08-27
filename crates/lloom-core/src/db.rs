@@ -219,6 +219,8 @@ pub fn migrate_db(conn: &Connection) -> Result<()> {
         // P1.a：延迟与请求号，串联 chat/orchestrate 的用量行
         ("latency_ms", "ALTER TABLE usage_records ADD COLUMN latency_ms REAL"),
         ("request_id", "ALTER TABLE usage_records ADD COLUMN request_id TEXT"),
+        // P2.b：语义缓存命中省下的金额（命中时 act_cost 置 0，本列存「若未命中本应花费」）
+        ("cache_saved_cost", "ALTER TABLE usage_records ADD COLUMN cache_saved_cost REAL DEFAULT 0"),
     ];
     for (col, ddl) in add_cols {
         if !cols.iter().any(|c| c == col) {
@@ -658,6 +660,8 @@ pub struct UsageExtra {
     pub zone_multiplier: f64,
     pub conversation_id: Option<String>,
     pub field_missing: bool,
+    /// P2.b 语义缓存命中省下的金额（≈ 未命中时应花的 act_cost）。非命中恒 0。
+    pub cache_saved_cost: f64,
 }
 
 /// Insert one usage_records row. `latency_ms`/`request_id` (P1.a) are optional
@@ -692,7 +696,7 @@ pub fn insert_usage(
     ];
     if let Some(e) = extra {
         cols.extend(["cached_tokens", "reasoning_tokens", "est_cost", "act_cost",
-                     "zone_multiplier", "conversation_id", "field_missing"]);
+                     "zone_multiplier", "conversation_id", "field_missing", "cache_saved_cost"]);
         vals.push(rusqlite::types::Value::Integer(e.cached_tokens));
         vals.push(rusqlite::types::Value::Integer(e.reasoning_tokens));
         vals.push(rusqlite::types::Value::Real(e.est_cost));
@@ -703,6 +707,7 @@ pub fn insert_usage(
             None => rusqlite::types::Value::Null,
         });
         vals.push(rusqlite::types::Value::Integer(if e.field_missing { 1 } else { 0 }));
+        vals.push(rusqlite::types::Value::Real(e.cache_saved_cost));
     }
     cols.extend(["latency_ms", "request_id"]);
     vals.push(match latency_ms {
@@ -736,7 +741,8 @@ pub fn get_usage_stats(
                 SUM(output_tokens) as total_output_tokens,
                 SUM(cost) as total_cost,
                 COUNT(*) as request_count,
-                SUM(cache_hit) as cache_hits
+                SUM(cache_hit) as cache_hits,
+                SUM(cache_saved_cost) as cache_saved
          FROM usage_records WHERE 1=1",
     );
     let mut vals: Vec<rusqlite::types::Value> = Vec::new();
@@ -763,6 +769,7 @@ pub fn get_usage_stats(
             total_cost: row.get("total_cost")?,
             request_count: row.get("request_count")?,
             cache_hits: row.get("cache_hits")?,
+            cache_saved: row.get("cache_saved").unwrap_or(0.0),
         })
     })?;
     let mut out = Vec::new();
@@ -1023,6 +1030,49 @@ pub fn upsert_price_spec(
     Ok(())
 }
 
+/// P2.a 刷新更新：仅覆盖 `price_source != 'manual'` 的行（manual 为人工锚定，永不覆盖），
+/// 覆盖后 source 标 `litellm_remote`、`price_stale=0`。cache_read 为 None 时保持原值（COALESCE）。
+/// 返回是否命中更新（false = 行不存在或属 manual）。
+pub fn refresh_price_spec(
+    provider: &str,
+    model: &str,
+    input_cost: f64,
+    output_cost: f64,
+    cache_read_cost: Option<f64>,
+) -> Result<bool> {
+    let conn = open()?;
+    let n = conn.execute(
+        "UPDATE price_specs SET
+            input_cost      = COALESCE(?3, input_cost),
+            output_cost     = COALESCE(?4, output_cost),
+            cache_read_cost = COALESCE(?5, cache_read_cost),
+            price_source    = 'litellm_remote',
+            price_updated_at = CURRENT_TIMESTAMP,
+            price_stale     = 0,
+            stale_reason    = NULL,
+            effective_from  = COALESCE(effective_from, CURRENT_DATE)
+         WHERE provider = ?1 AND model = ?2 AND price_source != 'manual'",
+        params![provider, model, input_cost, output_cost, cache_read_cost],
+    )?;
+    Ok(n > 0)
+}
+
+/// P2.a 采纳刷新价：把指定行强制转正为 `manual`（人工确认远端价可信，此后不被刷新覆盖），
+/// 价格保持现值不变。返回是否命中（行不存在则 false）。
+pub fn accept_price_spec(provider: &str, model: &str) -> Result<bool> {
+    let conn = open()?;
+    let n = conn.execute(
+        "UPDATE price_specs SET
+            price_source    = 'manual',
+            price_updated_at = CURRENT_TIMESTAMP,
+            price_stale     = 0,
+            stale_reason    = NULL
+         WHERE provider = ?1 AND model = ?2",
+        params![provider, model],
+    )?;
+    Ok(n > 0)
+}
+
 // ── Routing policy / score / audit (ROUTING-PLAN P0.c) ──
 
 use crate::models::{ModelTaskScore, QualitySignalKind, RoutingPolicy};
@@ -1162,6 +1212,17 @@ pub fn insert_routing_calibration(
         ],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// P1.d：同一 (task_type, query_hash) 是否已有样本——重放去重，避免相同 query 重复膨胀样本数。
+pub fn routing_calibration_exists(task_type: &str, query_hash: &str) -> Result<bool> {
+    let conn = open()?;
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM routing_calibration WHERE task_type = ?1 AND query_hash = ?2",
+        params![task_type, query_hash],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
 }
 
 /// P1.d：已采集的影子样本数（AIQ 重放/判定需要足够样本才有统计意义）。
@@ -1713,6 +1774,7 @@ mod migration_tests {
             Some(&UsageExtra {
                 cached_tokens: 0, reasoning_tokens: 0, est_cost: 0.0, act_cost: 1.11e-5,
                 zone_multiplier: 1.0, conversation_id: None, field_missing: false,
+                cache_saved_cost: 0.0,
             }),
         )
         .unwrap();
@@ -1729,6 +1791,29 @@ mod migration_tests {
         assert_eq!(rid.as_deref(), Some("chat-smoke-1"));
         assert_eq!(tt.as_deref(), Some("coding"));
         drop(conn4);
+
+        // P2.b 冒烟：cache_saved_cost 列存在 + 命中行的节省可被聚合读出
+        let p2_cols = table_columns(&open().unwrap(), "usage_records").unwrap();
+        assert!(p2_cols.contains(&"cache_saved_cost".to_string()), "missing P2.b cache_saved_cost column");
+        insert_usage(
+            "qwen-plus-test", "default", 200, 40, 0.0,
+            Some("coding"), true, None, Some("chat-cache-smoke"),
+            Some(&UsageExtra {
+                cached_tokens: 0, reasoning_tokens: 0, est_cost: 0.0, act_cost: 0.0,
+                zone_multiplier: 1.0, conversation_id: None, field_missing: false,
+                cache_saved_cost: 3.33e-05,
+            }),
+        )
+        .unwrap();
+        let saved_sum: f64 = get_usage_stats(None, None, None)
+            .unwrap()
+            .iter()
+            .map(|s| s.cache_saved)
+            .sum();
+        assert!(
+            saved_sum >= 3.33e-05,
+            "cache_saved_cost 应被 SUM 聚合读出，got {saved_sum}"
+        );
 
         // P1.b 冒烟：推荐主选已 seed；聚合不钦定（按评分择优）；用户钦定不被一次性回填覆盖
         let pin = |tt: &str| -> Option<String> {

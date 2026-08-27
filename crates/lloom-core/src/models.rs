@@ -116,6 +116,9 @@ pub struct UsageStats {
     pub total_cost: f64,
     pub request_count: i64,
     pub cache_hits: i64,
+    /// P2.b 语义缓存命中累计省下的金额（USD）。
+    #[serde(default)]
+    pub cache_saved: f64,
 }
 
 // ── Budget ──

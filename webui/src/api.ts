@@ -34,6 +34,8 @@ export interface UsageStats {
   model_spend: UsageRow[];
   routing_stats: Record<string, number>;
   cache_enabled: boolean;
+  /** P2.b 累计缓存节省金额（USD）。*/
+  total_cache_saved?: number;
 }
 
 export interface UsageRow {
@@ -43,6 +45,8 @@ export interface UsageRow {
   total_cost: number;
   request_count: number;
   cache_hits: number;
+  /** P2.b 该模型缓存命中累计节省。*/
+  cache_saved?: number;
 }
 
 export interface Budget {
@@ -216,6 +220,88 @@ export function cacheFeedback(
   return jpost('/api/cache/feedback', { sim, decision, correct });
 }
 
+// ── Pricing (PriceSpec) + probe (PRICING-PLAN §10) ──
+
+export interface PriceSpec {
+  provider: string;
+  model: string;
+  input_cost: number;
+  output_cost: number;
+  cache_read_cost: number | null;
+  cache_write_cost: number | null;
+  reasoning_cost: number | null;
+  tiered: TierBand[] | null;
+  zone_ref: string | null;
+  batch_multiplier: number;
+  price_source: string;
+  price_stale: boolean;
+  effective_from: string | null;
+}
+
+export interface TierBand {
+  max_input: number;
+  input_cost: number;
+  output_cost: number;
+  cache_read_cost: number | null;
+  cache_write_cost: number | null;
+  reasoning_cost: number | null;
+}
+
+export interface CalibrationRow {
+  provider: string;
+  model: string;
+  as_of: string;
+  calls: number;
+  est_cost: number;
+  act_cost: number;
+  input_side_ratio: number;
+  cache_hit_rate: number;
+  out_in_ratio: number;
+  field_missing_count: number;
+}
+
+export interface ProbeStats {
+  monthly_limit_usd: number;
+  monthly_limit_cny: number;
+  spend_usd: number;
+  rounds: number;
+  hit_verifications: number;
+  hit_failures: number;
+  failures: number;
+}
+
+export function listPriceSpecs(staleOnly = false): Promise<PriceSpec[]> {
+  return jget(`/api/pricing/specs${staleOnly ? '?stale=true' : ''}`);
+}
+
+export function updatePriceSpec(
+  provider: string,
+  model: string,
+  body: Partial<PriceSpec>,
+): Promise<{ ok: boolean; provider: string; model: string }> {
+  return jput(`/api/pricing/specs/${encodeURIComponent(provider)}/${encodeURIComponent(model)}`, body);
+}
+
+export function acceptPriceSpec(provider: string, model: string): Promise<{ ok: boolean; provider: string; model: string }> {
+  return jpost(`/api/pricing/specs/${encodeURIComponent(provider)}/${encodeURIComponent(model)}/accept`);
+}
+
+export function refreshPricing(): Promise<{ ok: boolean; updated: number; remote_total: number; manual_kept: number }> {
+  return jpost('/api/pricing/refresh');
+}
+
+export function listPriceCalibration(days = 30): Promise<CalibrationRow[]> {
+  return jget(`/api/pricing/calibration?days=${days}`);
+}
+
+export function getProbeStats(): Promise<ProbeStats> {
+  return jget('/api/probe/stats');
+}
+
+export function setProbeBudget(monthlyLimitCny: number): Promise<{ ok: boolean; monthly_limit_usd: number }> {
+  return jput('/api/probe/budget', { monthly_limit_cny: monthlyLimitCny });
+}
+
 // ── Model endpoints ──
 
 export function getModels(): Promise<{ models: Model[] }> {
@@ -240,7 +326,7 @@ export function getStats(): Promise<UsageStats> {
   return jget('/api/stats');
 }
 
-export function getUsage(): Promise<{ usage: UsageRow[]; total_spend: number }> {
+export function getUsage(): Promise<{ usage: UsageRow[]; total_spend: number; total_cache_saved?: number }> {
   return jget('/api/usage');
 }
 

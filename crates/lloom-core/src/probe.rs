@@ -267,6 +267,7 @@ fn record_probe_usage(m: &Model, usage: &pricing::UsageDetail, hit: bool) -> f64
             zone_multiplier: zm,
             conversation_id: Some(format!("probe:{}:{}", m.provider, m.name)),
             field_missing: usage.field_missing,
+            cache_saved_cost: 0.0,
         }),
     );
     act_cost
@@ -292,6 +293,7 @@ fn record_probe_failure(m: &Model) {
             zone_multiplier: 1.0,
             conversation_id: Some(format!("probe:{}:{}", m.provider, m.name)),
             field_missing: true,
+            cache_saved_cost: 0.0,
         }),
     );
 }

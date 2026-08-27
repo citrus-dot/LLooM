@@ -208,7 +208,8 @@ async fn get_usage(Query(q): Query<Value>) -> Result<Json<Value>> {
     let since = q.get("since").and_then(|v| v.as_str());
     let stats = db::get_usage_stats(model_name, user_id, since)?;
     let total = db::get_total_spend(user_id, model_name, since)?;
-    Ok(Json(json!({ "usage": stats, "total_spend": total })))
+    let total_cache_saved: f64 = stats.iter().map(|s| s.cache_saved).sum();
+    Ok(Json(json!({ "usage": stats, "total_spend": total, "total_cache_saved": total_cache_saved })))
 }
 
 async fn list_budgets() -> Result<Json<Value>> {
@@ -483,6 +484,7 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
                     zone_multiplier: zm,
                     conversation_id: None,
                     field_missing: res.usage.field_missing,
+                    cache_saved_cost: 0.0,
                 }),
             );
             // P1.c：正常完成信号 → 该 模型×任务 的 ewma_quality 上修（+0.7）
@@ -667,8 +669,10 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     field_missing: false,
                 };
                 let (mut act_cost, zm) = priced_usage(provider, &model, &usage_detail);
+                // P2.b 语义缓存命中省下的金额：未真正调用供应商费用为 0，但本应花费的 act_cost 保留，
+                // 用作「缓存为您节省 ¥X」的账实来源（cost 仍记 0）。
+                let cache_saved_cost = if is_hit { act_cost } else { 0.0 };
                 if is_hit {
-                    // 语义缓存命中：未真正调用供应商，费用为 0
                     act_cost = 0.0;
                 }
                 let _ = db::insert_usage(
@@ -689,6 +693,7 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                         zone_multiplier: zm,
                         conversation_id: conv_for_events.clone(),
                         field_missing: false,
+                        cache_saved_cost,
                     }),
                 );
                 // P1.c：按 task_done 是否带 error 下发成功/失败成效信号（skill/model-任务 打点）。
@@ -960,11 +965,13 @@ async fn open_web(Json(body): Json<Value>) -> Json<Value> {
 
 // ── Background jobs (PRICING-PLAN §6.2 / §7) ──
 
-/// 挂载后台任务：日级校准 job + 探针循环。在 main 启动 axum::serve 前调用。
+/// 挂载后台任务：日级校准 job + 探针循环 + 24h 定价刷新循环。
+/// 在 main 启动 axum::serve 前调用。
 pub fn spawn_background_jobs() -> Vec<tokio::task::JoinHandle<()>> {
     vec![
         tokio::spawn(calibration_job()),
         tokio::spawn(crate::probe::probe_loop()),
+        tokio::spawn(pricing_refresh_loop()),
     ]
 }
 
@@ -1092,6 +1099,90 @@ async fn pricing_calibration(Query(q): Query<HashMap<String, String>>) -> Result
     Ok(Json(serde_json::to_value(rows).unwrap_or_default()))
 }
 
+// ── P2.a 定价刷新（P2.a job + POST /api/pricing/refresh + accept） ──
+
+/// P2.a 刷新编排：拉 litellm 远端价格 → 解析 → 应用到本地「非 manual」行。
+/// 主源 jsdelivr，回退 ghproxy 镜像（本机网络受限）；全部不可达返回 Err（调用方静默，保留本地值）。
+/// 返回 (更新行数, 远端条数, 被保留的 manual 行数)。
+async fn run_pricing_refresh() -> std::result::Result<(usize, usize, usize), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let urls = [
+        "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json",
+        "https://mirror.ghproxy.com/https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+    ];
+    let mut raw: Option<String> = None;
+    for u in urls {
+        match client.get(u).send().await {
+            Ok(r) if r.status().is_success() => {
+                if let Ok(t) = r.text().await {
+                    raw = Some(t);
+                    break;
+                }
+            }
+            _ => continue,
+        }
+    }
+    let Some(raw) = raw else {
+        return Err("pricing refresh: all mirrors unreachable".into());
+    };
+    let remote = pricing::parse_remote_prices(&raw);
+    let remote_total = remote.len();
+    let specs = db::list_price_specs().map_err(|e| e.to_string())?;
+    let mut updated = 0usize;
+    let mut manual = 0usize;
+    for s in &specs {
+        if s.price_source == "manual" {
+            manual += 1;
+            continue;
+        }
+        if let Some(rp) = remote.get(&(s.provider.clone(), s.model.clone())) {
+            let hit = db::refresh_price_spec(
+                &s.provider,
+                &s.model,
+                rp.input_cost,
+                rp.output_cost,
+                rp.cache_read_cost,
+            )
+            .unwrap_or(false);
+            if hit {
+                updated += 1;
+            }
+        }
+    }
+    Ok((updated, remote_total, manual))
+}
+
+/// POST /api/pricing/refresh —— 手动触发刷新（不覆盖 manual；断网/镜像不可达返回错误但不动本地值）。
+async fn pricing_refresh() -> Result<Json<Value>> {
+    match run_pricing_refresh().await {
+        Ok((updated, remote_total, manual)) => Ok(Json(json!({
+            "ok": true, "updated": updated, "remote_total": remote_total, "manual_kept": manual
+        }))),
+        Err(e) => Err(AppError::Internal(e)),
+    }
+}
+
+/// POST /api/pricing/specs/{provider}/{model}/accept —— 采纳刷新价为 manual（此后不被刷新覆盖）。
+async fn pricing_accept(Path((provider, model)): Path<(String, String)>) -> Result<Json<Value>> {
+    if !db::accept_price_spec(&provider, &model)? {
+        return Err(AppError::NotFound(format!("price spec {provider}/{model} not found")));
+    }
+    Ok(Json(json!({ "ok": true, "provider": provider, "model": model })))
+}
+
+/// P2.a 后台 24h 刷新 job：周期拉远端价；断网失败静默（保留本地值，不影响主流程）。
+async fn pricing_refresh_loop() {
+    let mut int = tokio::time::interval(std::time::Duration::from_secs(86400));
+    int.tick().await; // 首个周期：启动后 24h 才首次触发
+    loop {
+        int.tick().await;
+        let _ = run_pricing_refresh().await;
+    }
+}
+
 /// GET /api/probe/stats —— 探针月消耗/预算/命中验证。
 async fn probe_stats() -> Result<Json<Value>> {
     let s = db::probe_stats()?;
@@ -1147,6 +1238,8 @@ pub fn build_router(state: AppState) -> Router {
         // Pricing + probes (PRICING-PLAN §10)
         .route("/api/pricing/specs", get(pricing_specs))
         .route("/api/pricing/specs/{provider}/{model}", put(pricing_spec_update))
+        .route("/api/pricing/specs/{provider}/{model}/accept", post(pricing_accept))
+        .route("/api/pricing/refresh", post(pricing_refresh))
         .route("/api/pricing/calibration", get(pricing_calibration))
         .route("/api/probe/stats", get(probe_stats))
         .route("/api/probe/budget", put(probe_budget_update))
@@ -1260,6 +1353,7 @@ async fn run_shadow_pair(
     task_type: &str,
     query: &str,
     source: &str,
+    dedup: bool,
 ) -> std::result::Result<ShadowSample, String> {
     if models.is_empty() {
         return Err("无可用模型".to_string());
@@ -1317,7 +1411,12 @@ async fn run_shadow_pair(
     } else {
         task_type.to_string()
     };
-    let qhash = shadow_hash(&t);
+    // 查询指纹值对真实 query，而非 task_type——否则同任务所有样本同哈希，"防重"失效。
+    // 自动采样 dedup=true（避免相同 query 重复膨胀样本数）；手动端点 dedup=false（白名单式审计可重测）。
+    let qhash = shadow_hash(query);
+    if dedup && db::routing_calibration_exists(&t, &qhash).unwrap_or(false) {
+        return Err("该 query 已有影子样本（去重，避免重复膨胀样本数）".to_string());
+    }
     let _ = db::insert_routing_calibration(&t, &qhash, &routed_model, &baseline_model, routed_cost, baseline_cost, source);
 
     Ok(ShadowSample {
@@ -1346,7 +1445,7 @@ fn maybe_shadow_sample(models: Vec<Model>, task_type: String, query: String) {
         return;
     }
     tokio::spawn(async move {
-        let _ = run_shadow_pair(models, &task_type, &query, "shadow").await;
+        let _ = run_shadow_pair(models, &task_type, &query, "shadow", true).await;
     });
 }
 
@@ -1360,7 +1459,7 @@ async fn routing_shadow(Json(req): Json<ShadowBody>) -> Json<Value> {
         Err(e) => return fail(&e.to_string()),
     };
     let task_type = req.task_type.unwrap_or_default();
-    match run_shadow_pair(models, &task_type, &req.query, "shadow").await {
+    match run_shadow_pair(models, &task_type, &req.query, "shadow", false).await {
         Ok(r) => Json(json!({
             "ok": true,
             "task_type": r.task_type,
