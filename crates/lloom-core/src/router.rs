@@ -200,9 +200,39 @@ pub struct PlanOutcome {
     pub candidates: Vec<Candidate>,
 }
 
+/// P5.a：剩余预算比 r → 预算档（ROUTING-PLAN §P5.a）。纯函数，可单测。
+/// r>50% normal；20<r≤50% throttle；5<r≤20% tight；r≤5% protect。
+pub fn budget_tier_from_ratio(r: f64) -> &'static str {
+    if r > 0.5 {
+        "normal"
+    } else if r > 0.2 {
+        "throttle"
+    } else if r > 0.05 {
+        "tight"
+    } else {
+        "protect"
+    }
+}
+
+/// P5.a：预算档对 cost_weight 的放大系数（normal=×1，throttle=×1.5，tight=×2.5）。
+/// protect 不再依赖 cost 评分（仅本地候选，见 plan() 门槛）。
+fn tier_cost_multiplier(tier: &str) -> f64 {
+    match tier {
+        "throttle" => 1.5,
+        "tight" => 2.5,
+        _ => 1.0,
+    }
+}
+
 /// 门槛（gate）+ 评分（score）。全量候选淘汰时返回带诊断的 NoCandidates。
 pub fn plan(input: &PlanInput) -> Result<PlanOutcome, PlanError> {
-    let tier_req = band_tier(input.band).max(input.policy.min_capability_tier);
+    // P5.a tight：复杂任务降一档（只降需求能力档，band 报告仍保留原值）。
+    let req_band = if input.budget_tier == "tight" && input.band == "hard" {
+        "medium"
+    } else {
+        input.band
+    };
+    let tier_req = band_tier(req_band).max(input.policy.min_capability_tier);
     let cap = input.policy.max_cost_per_request;
 
     let mut rejected: Vec<String> = Vec::new();
@@ -224,11 +254,17 @@ pub fn plan(input: &PlanInput) -> Result<PlanOutcome, PlanError> {
             ));
             continue;
         }
-        if let (Some(cap), Some(spec)) = (
-            cap,
-            input.price_specs.get(&(m.provider.clone(), m.name.clone())),
-        ) {
-            let ec = spec.est_cost(0.0, input.est_in_tokens, input.est_out_tokens, input.t_epoch_secs, input.zones);
+        let ec = input
+            .price_specs
+            .get(&(m.provider.clone(), m.name.clone()))
+            .map(|s| s.est_cost(0.0, input.est_in_tokens, input.est_out_tokens, input.t_epoch_secs, input.zones))
+            .unwrap_or(0.0);
+        // P5.a protect：仅本地免费或零成本模型（预算耗尽推本地 Ollama 的最后一档）。
+        if input.budget_tier == "protect" && m.is_local != 1 && ec > 0.0 {
+            rejected.push(format!("{}: protect 仅本地/零成本", m.name));
+            continue;
+        }
+        if let Some(cap) = cap {
             if ec > cap {
                 rejected.push(format!("{}: est ${ec:.4} > cap ${cap}", m.name));
                 continue;
@@ -322,7 +358,7 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
             let norm_cost = if ec + med_ec > 0.0 { ec / (ec + med_ec) } else { 0.0 };
             let norm_latency = 0.0; // P1.a latency 落库后接入
             let mut s = input.policy.quality_weight * q
-                - input.policy.cost_weight * norm_cost
+                - input.policy.cost_weight * tier_cost_multiplier(input.budget_tier) * norm_cost
                 - input.policy.latency_weight * norm_latency
                 + 0.05 * m.priority as f64;
             if m.needs_calibration != 0 && tier_req > 1 {
@@ -394,9 +430,14 @@ pub async fn route(model: &str, user_text: &str, classifier: Option<&ModelSpec>)
         }
     }
 
-    // est_in 粗估：中英混合 ~0.6 token/字符（P5.c tiktoken 预算器落地前）
+    // est_in 粗估：中英混合 ~0.6 token/字符（编排路径已由 Python 侧 count_tokens 精确传 plan-subtask）。
+    // est_out：P5.c 用该 task_type 历史 avg_out_tokens（冷启动 750），替换固定 500。
     let est_in = (user_text.chars().count() as f64 * 0.6) as i64;
-    let est_out = 500i64;
+    let est_out = db::task_avg_out_tokens(&task_type).round() as i64;
+    // P5.a：预算档由全局预算剩余比自动注入（无/未设全局预算 → normal）。
+    let budget_tier = db::global_budget_ratio()
+        .map(budget_tier_from_ratio)
+        .unwrap_or("normal");
 
     let input = PlanInput {
         task_type: &task_type,
@@ -409,7 +450,7 @@ pub async fn route(model: &str, user_text: &str, classifier: Option<&ModelSpec>)
         est_in_tokens: est_in,
         est_out_tokens: est_out,
         quality_override: &quality_override,
-        budget_tier: "normal",
+        budget_tier,
     };
 
     match plan(&input) {
@@ -837,5 +878,107 @@ mod tests {
             band_for("general", "先分析A和B的优缺点，然后对比方案，最后给出建议"),
             "hard"
         );
+    }
+
+    // ── P5 预算档 ──
+
+    #[test]
+    fn budget_tier_thresholds() {
+        assert_eq!(budget_tier_from_ratio(0.6), "normal");
+        assert_eq!(budget_tier_from_ratio(0.5), "throttle"); // 边界 r>0.5 才 normal
+        assert_eq!(budget_tier_from_ratio(0.3), "throttle");
+        assert_eq!(budget_tier_from_ratio(0.2), "tight"); // 边界 20<r≤50 结束
+        assert_eq!(budget_tier_from_ratio(0.1), "tight");
+        assert_eq!(budget_tier_from_ratio(0.05), "protect"); // 边界 r≤5%
+        assert_eq!(budget_tier_from_ratio(0.0), "protect");
+    }
+
+    #[test]
+    fn cost_multiplier_by_tier() {
+        assert_eq!(tier_cost_multiplier("normal"), 1.0);
+        assert_eq!(tier_cost_multiplier("protect"), 1.0);
+        assert_eq!(tier_cost_multiplier("throttle"), 1.5);
+        assert_eq!(tier_cost_multiplier("tight"), 2.5);
+    }
+
+    #[test]
+    fn protect_tier_forces_local_only() {
+        let models = registry();
+        let specs = prices();
+        let policy = RoutingPolicy {
+            task_type: "simple_qa".into(),
+            min_capability_tier: 1,
+            ..Default::default()
+        };
+        let ctx = Ctx::new();
+        let mut inp = base_input(&models, &specs, "simple_qa", "easy", &policy, 100, &ctx);
+        inp.budget_tier = "protect";
+        let out = plan(&inp).unwrap();
+        // protect：仅本地或零成本模型保留，其余被 reject → 只剩 qwen2.5-local
+        assert_eq!(out.primary, "qwen2.5-local");
+        assert!(out.candidates.iter().all(|c| c.est_cost == 0.0));
+    }
+
+    #[test]
+    fn throttle_shifts_to_cheaper_model() {
+        let specs = prices();
+        let policy = RoutingPolicy {
+            task_type: "general".into(),
+            min_capability_tier: 2,
+            cost_weight: 0.5,
+            quality_weight: 0.5,
+            latency_weight: 0.0,
+            ..Default::default()
+        };
+        // 两个 tier2 候选：qwen-plus（便宜、质量差）与 gpt-4o（贵、质量高）。
+        // 正常：质量主导 → gpt-4o；throttle 放大成本权重（×1.5）→ 翻转为便宜的 qwen-plus。
+        let models: Vec<Model> = registry()
+            .into_iter()
+            .filter(|m| m.name == "qwen-plus" || m.name == "gpt-4o")
+            .collect();
+        let mut ctx = Ctx::new();
+        ctx.quality.insert("qwen-plus".into(), 0.3);
+        ctx.quality.insert("gpt-4o".into(), 0.95);
+
+        let normal = {
+            let mut i = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
+            i.budget_tier = "normal";
+            plan(&i).unwrap()
+        };
+        let throttle = {
+            let mut i = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
+            i.budget_tier = "throttle";
+            plan(&i).unwrap()
+        };
+        assert_eq!(normal.primary, "gpt-4o", "normal 应选高质量昂贵模型");
+        assert_eq!(throttle.primary, "qwen-plus", "throttle 应翻转为便宜模型");
+    }
+
+    #[test]
+    fn tight_reduces_hard_band_to_medium() {
+        let models = registry();
+        let specs = prices();
+        let policy = RoutingPolicy {
+            task_type: "complex_reasoning".into(),
+            min_capability_tier: 2,
+            cost_weight: 0.5,
+            quality_weight: 0.5,
+            latency_weight: 0.0,
+            ..Default::default()
+        };
+        let ctx = Ctx::new();
+        // hard 带：normal 要求 tier≥3，tight 降为 tier≥2 → 便宜的 qwen-plus(tier2) 可入候选
+        let normal = {
+            let mut i = base_input(&models, &specs, "complex_reasoning", "hard", &policy, 100, &ctx);
+            i.budget_tier = "normal";
+            plan(&i).unwrap()
+        };
+        let tight = {
+            let mut i = base_input(&models, &specs, "complex_reasoning", "hard", &policy, 100, &ctx);
+            i.budget_tier = "tight";
+            plan(&i).unwrap()
+        };
+        assert!(normal.candidates.iter().all(|c| c.capability_tier >= 3));
+        assert!(tight.candidates.iter().any(|c| c.capability_tier == 2));
     }
 }

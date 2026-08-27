@@ -1009,17 +1009,20 @@ def _rust_base_url(req: OrchestrateRequest) -> str:
     return os.environ.get("LLOOM_ROUTER_URL", "http://localhost:7861").rstrip("/")
 
 
-def _plan_subtask(task_type: str, est_in: int, est_out: int, rust_base_url: str,
-                  budget_tier: str = "normal") -> dict:
+def _plan_subtask(task_type: str, est_in: int, rust_base_url: str,
+                  est_out: int | None = None, budget_tier: str | None = None) -> dict:
     """回调 Rust `POST /api/routing/plan-subtask`，拿 primary + fallback 链 + escalation 开关。
-    失败（网络/Rust 未启动）返回空 dict，调用方回落原有 assignments/selected_model，绝不死链。"""
+    失败（网络/Rust 未启动）返回空 dict，调用方回落原有 assignments/selected_model，绝不死链。
+    est_in 由调用方 tiktoken 精确分词传入；est_out/budget_tier 不传时 Rust 侧取真实均值/预算水位默认。"""
     try:
         payload = {
             "task_type": task_type,
             "est_in_tokens": max(int(est_in or 0), 0),
-            "est_out_tokens": max(int(est_out or 0), 0),
-            "budget_tier": budget_tier,
         }
+        if est_out is not None:
+            payload["est_out_tokens"] = max(int(est_out), 0)
+        if budget_tier is not None:
+            payload["budget_tier"] = budget_tier
         import urllib.request  # 标准库，避免新增 httpx 依赖
         body = json.dumps(payload).encode("utf-8")
         reqq = urllib.request.Request(
@@ -1673,9 +1676,9 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 user_content = f"前置任务结果：\n{context}\n\n当前任务：{task['description']}"
 
             # P4.a：每子任务按其 task_type 独立回调 Rust plan，拿 primary + fallback 链。
+            # P5.c：est_in 用 tiktoken 对真实输入（query+依赖上下文）精确分词，est_out/预算档交 Rust 默认。
             task_topic = task.get("task_type", "general")
-            plan_info = _plan_subtask(
-                task_topic, task.get("est_in", 0), task.get("est_out", 0), rust_base)
+            plan_info = _plan_subtask(task_topic, count_tokens(user_content), rust_base)
             candidate_names: list[str] = []
             if plan_info.get("primary"):
                 candidate_names.append(plan_info["primary"])

@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS budgets (
     scope_id TEXT NOT NULL,
     max_budget REAL NOT NULL,
     duration TEXT NOT NULL,
+    scope_task_type TEXT,
+    soft_limit_ratio REAL DEFAULT 0.8,
+    action_on_exceed TEXT DEFAULT 'degrade',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(scope, scope_id)
 );
@@ -229,6 +232,37 @@ pub fn migrate_db(conn: &Connection) -> Result<()> {
         }
     }
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_usage_req ON usage_records(request_id)")?;
+
+    // P5.b：预算模型扩展——scope 扩 user/model/task_type/global；新增紧凑对象列。
+    //     UNIQUE 仍为 (scope, scope_id)（改约束需重建表，现有库不迁移）；scope_task_type
+    //     作为附加维度保留（自动降档只用全局 scope=global）。
+    {
+        let budget_table_cols = table_columns(&conn, "budgets")?;
+        for (col, ddl) in [
+            ("scope_task_type", "ALTER TABLE budgets ADD COLUMN scope_task_type TEXT"),
+            (
+                "soft_limit_ratio",
+                "ALTER TABLE budgets ADD COLUMN soft_limit_ratio REAL DEFAULT 0.8",
+            ),
+            (
+                "action_on_exceed",
+                "ALTER TABLE budgets ADD COLUMN action_on_exceed TEXT DEFAULT 'degrade'",
+            ),
+        ] {
+            if !budget_table_cols.iter().any(|c| c == col) {
+                conn.execute_batch(ddl)?;
+            }
+        }
+    }
+
+    // P5.c：model_task_score 加 avg_out_tokens（真实 usage 滚动 EWMA，见 roll_avg_out_tokens）。
+    //     列默认 500 与历史固定 est_out 一致；冷启动由读侧判别（sample_count<20 → ×1.5）。
+    {
+        let score_table_cols = table_columns(&conn, "model_task_score")?;
+        if !score_table_cols.iter().any(|c| c == "avg_out_tokens") {
+            conn.execute_batch("ALTER TABLE model_task_score ADD COLUMN avg_out_tokens REAL DEFAULT 500")?;
+        }
+    }
 
     // 7. P1.a：清理遗留脏数据（早期编排展示性占位行：model='default'、cost=0）。
     //    一次性标记防重复跑；只清 cost=0 的占位，不动真实（可能 cost=0 的本地/缓存）成功账。
@@ -727,6 +761,13 @@ pub fn insert_usage(
     );
     let conn = open()?;
     conn.execute(&sql, rusqlite::params_from_iter(vals.iter().cloned()))?;
+    // P5.c：真实生成（非缓存命中）且 task_type 已知时，把实际输出 token 滚入该角色 avg_out_tokens。
+    //     缓存命中/探针（无 task_type）不入样本，避免拉低输出均值。
+    if !cache_hit && output_tokens > 0 {
+        if let Some(tt) = task_type {
+            let _ = roll_avg_out_tokens(model_name, tt, output_tokens);
+        }
+    }
     Ok(conn.last_insert_rowid())
 }
 
@@ -1303,12 +1344,70 @@ pub fn get_model_task_score(model_name: &str, task_type: &str) -> Result<Option<
             avg_latency_ms: row.get("avg_latency_ms")?,
             ewma_quality: row.get("ewma_quality")?,
             sample_count: row.get("sample_count")?,
+            avg_out_tokens: row.get("avg_out_tokens").unwrap_or(500.0),
         })),
         None => Ok(None),
     }
 }
 
+/// P5.c：真实 output_tokens 滚入 (model, task_type) 的 avg_out_tokens（EWMA，α 同 signal.ewma_alpha）。
+/// 仅由 insert_usage 在非缓存命中且 task_type 已知时调用——这是唯一能拿到真实输出 token 的入口。
+/// 行不存在则首样本直接写入；存在则 `avg_out ← (1-α)·avg_out + α·actual`，不触碰质量 sample_count。
+pub fn roll_avg_out_tokens(model_name: &str, task_type: &str, actual_out: i64) -> Result<()> {
+    if actual_out <= 0 {
+        return Ok(());
+    }
+    let alpha = get_setting("signal.ewma_alpha")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.15)
+        .clamp(0.01, 0.5);
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO model_task_score (model_name, task_type, avg_out_tokens, sample_count, updated_at)
+         VALUES (?1, ?2, ?3, 0, CURRENT_TIMESTAMP)
+         ON CONFLICT(model_name, task_type) DO UPDATE SET
+            avg_out_tokens = (?3) * ?4 + avg_out_tokens * ?5,
+            updated_at = CURRENT_TIMESTAMP",
+        params![model_name, task_type, actual_out as f64, alpha, 1.0 - alpha],
+    )?;
+    Ok(())
+}
+
+/// P5.c：某 task_type 的保守输出 token 预估——将有充分样本（sample_count≥20）的模型的
+/// avg_out_tokens 取平均作「真实均值」；无充分样本（冷启动）返回 500×1.5=750。
+/// 门槛是硬上限语义：估低只少拦、不误拦；冷启动走高估系数更安全。
+pub fn task_avg_out_tokens(task_type: &str) -> f64 {
+    let conn = match open() {
+        Ok(c) => c,
+        Err(_) => return 750.0,
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT COALESCE(AVG(avg_out_tokens), -1.0) FROM model_task_score
+         WHERE task_type = ?1 AND sample_count >= 20 AND avg_out_tokens > 0",
+    ) {
+        Ok(s) => s,
+        Err(_) => return 750.0,
+    };
+    match stmt.query_row(params![task_type], |r| r.get::<_, f64>(0)) {
+        Ok(v) if v > 0.0 => v,
+        _ => 750.0, // 冷启动
+    }
+}
+
+/// P5.b/P5.a：全局预算剩余比 r=(max-spent)/max（clamp [0,1]）；无全局预算返回 None（→ normal）。
+pub fn global_budget_ratio() -> Option<f64> {
+    let budget = get_budget("global", "global").ok().flatten()?;
+    if budget.max_budget <= 0.0 {
+        return None;
+    }
+    let spent = get_total_spend(None, None, None).unwrap_or(0.0);
+    Some(((budget.max_budget - spent) / budget.max_budget).clamp(0.0, 1.0))
+}
+
 /// P1.c 信号回填：`ewma_quality ← (1-α)·ewma + α·σ`，α 读 settings `signal.ewma_alpha`（默认 0.15）。
+///
 /// 副作用：按信号自增 success/fail/escalation 计数器；`sample_count>=20` 时解除模型保守期
 /// （`needs_calibration=0`，系统写，绕开 update_model 白名单）。
 ///
@@ -1592,12 +1691,34 @@ pub fn probe_stats() -> Result<ProbeStats> {
 
 // ── Budget ──
 
-pub fn upsert_budget(scope: &str, scope_id: &str, max_budget: f64, duration: &str) -> Result<()> {
+pub fn upsert_budget(
+    scope: &str,
+    scope_id: &str,
+    max_budget: f64,
+    duration: &str,
+    scope_task_type: Option<&str>,
+    soft_limit_ratio: Option<f64>,
+    action_on_exceed: Option<&str>,
+) -> Result<()> {
     let conn = open()?;
     conn.execute(
-        "INSERT INTO budgets (scope, scope_id, max_budget, duration) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(scope, scope_id) DO UPDATE SET max_budget = excluded.max_budget, duration = excluded.duration",
-        params![scope, scope_id, max_budget, duration],
+        "INSERT INTO budgets (scope, scope_id, max_budget, duration, scope_task_type, soft_limit_ratio, action_on_exceed)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(scope, scope_id) DO UPDATE SET
+            max_budget = excluded.max_budget,
+            duration = excluded.duration,
+            scope_task_type = COALESCE(excluded.scope_task_type, budgets.scope_task_type),
+            soft_limit_ratio = COALESCE(excluded.soft_limit_ratio, budgets.soft_limit_ratio),
+            action_on_exceed = COALESCE(excluded.action_on_exceed, budgets.action_on_exceed)",
+        params![
+            scope,
+            scope_id,
+            max_budget,
+            duration,
+            scope_task_type,
+            soft_limit_ratio.map(|v| v as f64),
+            action_on_exceed,
+        ],
     )?;
     Ok(())
 }
@@ -1613,6 +1734,9 @@ pub fn get_budget(scope: &str, scope_id: &str) -> Result<Option<Budget>> {
             scope_id: row.get("scope_id")?,
             max_budget: row.get("max_budget")?,
             duration: row.get("duration")?,
+            scope_task_type: row.get("scope_task_type").ok().flatten(),
+            soft_limit_ratio: row.get("soft_limit_ratio").ok().flatten(),
+            action_on_exceed: row.get("action_on_exceed").ok().flatten(),
         })),
         None => Ok(None),
     }
@@ -1637,6 +1761,9 @@ pub fn list_budgets() -> Result<Vec<Budget>> {
             scope_id: row.get("scope_id")?,
             max_budget: row.get("max_budget")?,
             duration: row.get("duration")?,
+            scope_task_type: row.get("scope_task_type").ok().flatten(),
+            soft_limit_ratio: row.get("soft_limit_ratio").ok().flatten(),
+            action_on_exceed: row.get("action_on_exceed").ok().flatten(),
         })
     })?;
     let mut out = Vec::new();

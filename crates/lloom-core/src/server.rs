@@ -217,7 +217,15 @@ async fn list_budgets() -> Result<Json<Value>> {
 }
 
 async fn set_budget(Json(req): Json<Budget>) -> Result<Json<Value>> {
-    db::upsert_budget(&req.scope, &req.scope_id, req.max_budget, &req.duration)?;
+    db::upsert_budget(
+        &req.scope,
+        &req.scope_id,
+        req.max_budget,
+        &req.duration,
+        req.scope_task_type.as_deref(),
+        req.soft_limit_ratio,
+        req.action_on_exceed.as_deref(),
+    )?;
     Ok(Json(json!({ "set": true })))
 }
 
@@ -1306,8 +1314,18 @@ struct PlanSubtaskRequest {
 }
 async fn rust_plan_subtask(Json(req): Json<PlanSubtaskRequest>) -> Result<Json<Value>> {
     let est_in = req.est_in_tokens.unwrap_or(500).max(0);
-    let est_out = req.est_out_tokens.unwrap_or(1000).max(0);
-    let tier = req.budget_tier.unwrap_or_else(|| "normal".to_string());
+    // P5.c：est_out 未显式传时用该角色真实均值（avg_out_tokens）；预算档未传时从全局水位注出。
+    let est_out = match req.est_out_tokens {
+        Some(v) => v.max(0),
+        None => db::task_avg_out_tokens(&req.task_type).round() as i64,
+    };
+    let tier = match req.budget_tier {
+        Some(t) => t,
+        None => db::global_budget_ratio()
+            .map(router::budget_tier_from_ratio)
+            .unwrap_or("normal")
+            .to_string(),
+    };
     let models = db::list_models(true)?;
 
     let outcome = match router::plan_for_task(&req.task_type, &models, est_in, est_out, &tier) {

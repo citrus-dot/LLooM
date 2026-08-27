@@ -131,6 +131,13 @@ pub struct Budget {
     pub scope_id: String,
     pub max_budget: f64,
     pub duration: String,
+    // P5.b 预算模型扩展（可空）
+    #[serde(default)]
+    pub scope_task_type: Option<String>,
+    #[serde(default)]
+    pub soft_limit_ratio: Option<f64>,
+    #[serde(default)]
+    pub action_on_exceed: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,6 +259,9 @@ pub struct ModelTaskScore {
     pub avg_latency_ms: f64,
     pub ewma_quality: f64,
     pub sample_count: i64,
+    // P5.c：该 (model, task_type) 真实 output_tokens 的 EWMA 滚动均值（默认 500=历史固定 est_out）。
+    #[serde(default)]
+    pub avg_out_tokens: f64,
 }
 
 /// P1.c 成效信号：枚举 → σ 值（EWMA 输入），并决定 success/fail/escalation 计数器自增方向。

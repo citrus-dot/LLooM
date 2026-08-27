@@ -328,7 +328,7 @@ CREATE TABLE IF NOT EXISTS model_task_score (
     model_name TEXT, task_type TEXT,
     success_count INTEGER DEFAULT 0, fail_count INTEGER DEFAULT 0,
     escalation_count INTEGER DEFAULT 0,
-    avg_cost REAL DEFAULT 0, avg_latency_ms REAL DEFAULT 0,
+    avg_cost REAL DEFAULT 0, avg_latency_ms REAL DEFAULT 0, avg_out_tokens REAL DEFAULT 500,
     ewma_quality REAL DEFAULT 0.6, sample_count INTEGER DEFAULT 0,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (model_name, task_type)
@@ -783,9 +783,24 @@ ALTER TABLE budgets ADD COLUMN action_on_exceed TEXT DEFAULT 'degrade';
 ```
 `scope` 扩 `user/model/task_type/global`（`scope_id` 复用）。
 
-#### P5.c　预估成本前置校验
-tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史 P50（`model_task_score.avg_*` 估），
-得 `est_cost` 参与 `max_cost_per_request` 门槛与 tier 判断。无价格数据时退化为 token 硬顶（token-only budget）。
+#### P5.c　预估成本前置校验（v3 落地：B 为主 + A 兜底，不引 Rust tiktoken）
+
+**问题**：`est_in` 粗估（chars×0.6，中文偏高/英文偏低 ~30%）、`est_out` 固定 500（coding/aggregate 实际常 1500+，低估 67%）。而 `out` 单价是 `in` 的 2.5×（qwen-plus）到 8×（deepseek-v3）——**est_out 误差被放大，`max_cost_per_request` 门槛在固定 500 下基本失效**。
+
+**方案**（B + A 复用，不选 C）：
+- **est_out 用 `model_task_score.avg_out_tokens`**（B 核心，修误差放大最严重的半边）：
+  - `model_task_score` 加列 `avg_out_tokens REAL DEFAULT 500`（幂等迁移，与 `avg_cost`/`avg_latency_ms` 同性质、同累积路径——`upsert_model_task_score_signal` 每次 success 顺带滚动均值 `avg_out ← α·actual_out + (1-α)·avg_out`，α=0.15）。
+  - 冷启动（`sample_count<20`）用 `500 × 1.5` 安全系数——门槛是「硬上限」语义，估低了只是少拦（不误拦），保守系数放输入侧更安全；样本足后用真实均值。
+- **est_in 复用 Python 侧 `count_tokens`**（已接 tiktoken cl100k + `tiktoken_cache/`，**不引 Rust 依赖**）：
+  - 编排路径（P4.a 回调在 Python 侧）：`plan-subtask` 入参的 `est_in_tokens` 由 Python 回调前 `count_tokens(query + 依赖上下文)` 算好传 Rust——精确分词，零新依赖。
+  - chat 路径（Rust `chat_stream` 前置校验）：退化用 `chars×0.6`（A 粗估）——chat 单模型直答，门槛意义弱，粗估够用。
+- **不选 C（tiktoken-rs）**：引 BPE 模型文件 + crate 依赖，且只修输入半边、不解决输出误差——Python 侧已有 tiktoken，复用即可，性价比最低。
+- **门槛兜底**：`max_cost_per_request` 在 `avg_out_tokens` 样本不足时用 `500×1.5` 保守估；`est_cost` 参与 `max_cost_per_request` 门槛与 tier 判断。无价格数据时退化为 token 硬顶（token-only budget）。
+
+**`model_task_score` 迁移**（幂等，加在 P0.c 建表后）：
+```sql
+ALTER TABLE model_task_score ADD COLUMN avg_out_tokens REAL DEFAULT 500;
+```
 
 ---
 
@@ -803,12 +818,12 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 | 8 | P2 定价刷新 + WebUI 徽标 | 手动刷新更新非 manual 来源；断网静默保持本地值 | ✅ 2026-08-27（P2）P2.a `server.rs` `pricing_refresh_loop` 24h 后台 job（jsdelivr 主源 + ghproxy 回退，断网失败静默保留本地值）+ `POST /api/pricing/refresh`（手动触发）、`POST /api/pricing/specs/{provider}/{model}/accept`（采纳转 manual，此后不被覆盖）；`pricing.rs::parse_remote_prices` 纯函数解析（跳过非 provider/model 键、负价），`db::refresh_price_spec`（COALESCE 保 cache_read，不覆盖 manual）；P2.c WebUI 新增 **PricingPage**（`price_source` 徽标 manual/overlay/litellm_remote…、`price_updated_at`、`price_stale` 黄点、手工改价强制转 manual、采纳建议价）+ 用量页「缓存为您节省 ¥X」卡片与「缓存节省」列（`cache_saved_cost` 聚合，CNY 展示）；PR-6 定价页 + PR-7 探针视图（`GET /api/probe/stats`）一并落地；57 单测 + tsc + vite build 全过 |
 | 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms | ✅ 2026-08-27（P3）新增 `health.rs` 状态机：滑窗（默认 5 内 ≥2 失败 degraded）/连续 ≥3 失败 down/成功永远向 up 收敛/熔断连续 ≥5 强制 down（阈值全走 settings `health.*` KV），状态变化才 `set_model_health` 落库 + `health_checked_at`；chat 路径 `chat_with_failover` 按 `primary + fallback_chain` 顺序重试（失败打健康哨点、跳升记 Escalation 成效信号、成功按实际响应模型计价），orchestrate 按 `task_done` 成功/失败喂哨点；后台 `health_probe_loop` 每 `health.probe_sec`（默认 60s）对 down/degraded 模型发最小请求主动探测恢复；`GET /api/routing/overhead`（count/avg/p95/max/slow，>100ms 记慢，`routing_decisions.routing_ms` 真源）；65 单测全绿（+7 health 状态机 +1 overhead 聚合）|
 | 10 | P4 编排升级 | 子任务失败自动降级重试成功；escalation 任务成本再降 ≥30%（相对序 7） | ✅ 2026-08-27（P4）P4.0 选 A 轻量回调：Rust 新增 `POST /api/routing/plan-subtask`（无状态 `plan_for_task(task_type, est_in, est_out, budget_tier)` 出 primary + fallback 链 + escalation_enabled）`router.rs::plan_for_task` 为 `plan()` 参数化封装，`plan_decision` 复用其默认参；Python `orchestrate_stream` 每子任务按其 `task_type` 回调拿 plan，primary→fallback_chain 逐个降级重试（记 `retry_count`），失败绝不美化；质量信号（非空/长度/失败哨兵）不达标 + `escalation_enabled` → 升档强模型重试一次（`_strongest_model` 用单价 in+out 作强档代理，「先轻量档→零成本判质→升强档」，无更高价则不开）；SSE 契约：`task_done` 透传 `escalated_from`/`retry_count`/`tier_bumped`，`result` 透传 `escalations`/`tier_bumped`；Rust 侧对 `escalated_from` 记 Escalation 成效信号（P3 同语义），final 模型记 Success；`decompose`/`simple_qa` routing_policy 种子 `escalation_enabled=1`；P4.d 汇总与轻量路径均走 Rust `plan_decision(aggregate/general)`（assignments 常已含，P4.a 统一入口可选）。顺带修复两处既有 bug（见 v8 注记）：① SCHEMA `idx_usage_req` 引用仅靠 migrate ALTER 才加的 `request_id` → 旧库升级路径断裂，改为 migrate_db 内 ALTER 后幂等建索引（真实旧库冒烟验证）；② 升档助手曾依赖 Python `ModelSpec` 不存在的 `capability_tier`/`quality_score` → 运行时崩溃，改单价代理。`cargo build` 无警告、全量测试 65 全绿；plan-subtask 冒烟 simple_qa→qwen2.5-local/fallback[deepseek-v3,qwen-plus]、coding→deepseek-v3/fallback[qwen3-max,qwen3.6-plus]、aggregate 走 plan 均正确；≥30% 成本指标待影子真实样本验收 |
-| 11 | P5 预算联动 | 预算近耗尽→逐档降级至只走本地 | ⏳ 待办 |
+| 11 | P5 预算联动 | 预算近耗尽→逐档降级至只走本地 | ✅ 2026-08-27（P5）P5.a 预算档进入决策链：`budget_tier_from_ratio(r)`（normal>0.5 / throttle>0.2 / tight>0.05 / protect≤0.05）+ `tier_cost_multiplier`（throttle×1.5/tight×2.5）注入 `plan()` 评分（cost_weight 倍率）；tight 复杂任务降一档（`band==hard`→medium，tier_req 放松）；protect 仅 `is_local=1` 或零成本模型（其余 reject 并给出 `protect 仅本地/零成本` 明确报告），预算耗尽推本地 Ollama；P5.b 预算模型扩展（幂等迁移加 `scope_task_type`/`soft_limit_ratio`/`action_on_exceed`，`Budget` 结构/`upsert_budget`/list/get 同步）；P5.c 预估成本前置校验（B+A 复用，不引 Rust tiktoken）：`model_task_score` 加 `avg_out_tokens REAL DEFAULT 500`（幂等），`insert_usage` 对非缓存命中把真实输出 token 滚入 EWMA（`roll_avg_out_tokens`，α 同 `signal.ewma_alpha`），`task_avg_out_tokens` 冷启动（sample<20）返回 500×1.5=750 保守点，样本足用真实均值；`global_budget_ratio()` 从 global 预算水位算 r，`route()` 热路径动态注档；`POST /api/routing/plan-subtask` 服务端补默认（est_out 缺省用 `task_avg_out_tokens` 真实均值、budget_tier 缺省从 `global_budget_ratio` 注出）；Python orchestrate 回调前用 tiktoken `count_tokens(query+依赖上下文)` 精确传 `est_in`（est_out/预算档交 Rust 默认，`_plan_subtask` 改可选参）；70 单测全绿（+5 预算档：边界阈值/成本倍率/protect 过滤/throttle 换选/tight 降档）+ build 无警告 + plan-subtask 端点冒烟（simple_qa→qwen2.5-local、coding→deepseek-v3、complex_reasoning+protect 非本地全 reject 报明确错误） |
 | 12 | P1.d AIQ 重放 | 离线重放输出成本—质量曲线；调参有数据依据 | ✅ 2026-08-27（P1.d）`POST/GET /api/routing/shadow` 采样双跑「路由选择 × 旗舰基线」（基线用 settings `routing.shadow_baseline` 钦定否则取能力档最高，采样率 `routing.shadow_ratio` 默认 0.10 可零成本关），FNV-1a 查询哈希防重，成本走 `priced_usage` 真源、结果落 `routing_calibration` 只导路由结果；`scripts/aiq_replay.py` 离线重放对比全弱基线/当前策略/全强基线三条成本—质量线，输出 AIQ（RouterBench 预算积分）与相对全强成本节省、质量缺失时从 `models`/`model_task_score` 回填并写库；**已在 chat/orchestrate 请求热路径按 `shadow_ratio` 概率接入 `maybe_shadow_sample` 后台自动采样**（抽取复用 `run_shadow_pair`，tokio spawn 不阻塞响应/不改返回，`ratio=0` 零成本关）；冒烟 3 样本出 AIQ=0 且 95% 节省+调参建议 |
 
 **测试基建**：`router.rs` 已有 11 个单测（空候选/门槛/评分/回填链/pin/覆盖/band，2026-08-26）；`signals.rs`/`metadata.rs` 纯函数单测已补（2026-08-26，P0.g 7 个 + P0.e 6 个）。
 覆盖：空候选集、单模型、删主选后降级、阶梯价交叉点、预算各档、band 边界、reask 判定、保守期解除、
-健康状态机迁移、price drift 阈值、EWMA 信号累计 + 保守期解除、迁移幂等修 scale。测试共 **65** 项全绿（2026-08-27，P3 落地后）。
+健康状态机迁移、price drift 阈值、EWMA 信号累计 + 保守期解除、迁移幂等修 scale。测试共 **70** 项全绿（2026-08-27，P5 落地后，+5 预算档）。
 > **v5 注记（2026-08-26，commit d6912b9）**：P0.e/g 落地后 **P0 阶段全部勾选完成**——
 > 新增模型由 `metadata::resolve_and_fill` 自动打标入保守期，不再需要人工填元数据；
 > 信号层 `extract` 读 settings KV 输出难度带/reask/LLM 判定，路由决策（plan）与信号规范均已就绪。
