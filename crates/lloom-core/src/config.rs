@@ -58,6 +58,17 @@ pub fn log_dir() -> PathBuf {
     data_dir().join("logs")
 }
 
+/// P1.d 影子采样率（0..1，默认 0.10）：命中时对请求做「路由选择 × 强基线」双跑。
+/// 存 settings `routing.shadow_ratio`（可零成本关闭）。
+pub fn shadow_ratio() -> f64 {
+    crate::db::get_setting("routing.shadow_ratio")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.10)
+        .clamp(0.0, 1.0)
+}
+
 pub fn env_file_path() -> PathBuf {
     install_dir().join(".env")
 }

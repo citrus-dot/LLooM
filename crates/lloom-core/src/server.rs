@@ -485,6 +485,9 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
                     field_missing: res.usage.field_missing,
                 }),
             );
+            // P1.c：正常完成信号 → 该 模型×任务 的 ewma_quality 上修（+0.7）
+            db::upsert_model_task_score_signal(&res.model, &routing_task_type, QualitySignalKind::Success)
+                .ok();
             format!(
                 "data: {}\n\n",
                 json!({
@@ -684,6 +687,17 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                         field_missing: false,
                     }),
                 );
+                // P1.c：按 task_done 是否带 error 下发成功/失败成效信号（skill/model-任务 打点）。
+                // 模型解不出时（unknown）无真实归属，跳过打点避免误伤。
+                if model != "unknown" && role != "unknown" {
+                    let kind = if obj.get("error").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty())
+                    {
+                        QualitySignalKind::SubtaskFail
+                    } else {
+                        QualitySignalKind::Success
+                    };
+                    db::upsert_model_task_score_signal(&model, &role, kind).ok();
+                }
             }
         }
         let data = serde_json::to_string(&ev.data).unwrap_or_default();
@@ -1142,6 +1156,8 @@ pub fn build_router(state: AppState) -> Router {
         // Chat + orchestrate (SSE)
         .route("/api/chat/stream", post(chat_stream))
         .route("/api/orchestrate/stream", post(orchestrate_stream))
+        // P1.d 影子评测 + AIQ 重放数据源
+        .route("/api/routing/shadow", post(routing_shadow).get(routing_shadow_status))
         // Services (process management)
         .route("/api/services/status", get(services_status))
         .route("/api/services/{name}/start", post(service_start))
@@ -1201,6 +1217,114 @@ async fn cache_feedback(Json(req): Json<CacheFeedbackBody>) -> Json<Value> {
         "suggested": suggested,
         "auto_tune": auto,
     }))
+}
+
+// ── P1.d 影子评测（shadow evaluation）──
+
+#[derive(Deserialize)]
+struct ShadowBody {
+    query: String,
+    task_type: Option<String>,
+}
+
+/// P1.d FNV-1a（32 位）查询指纹，用作 routing_calibration.query_hash 去重的稳定键。
+fn shadow_hash(q: &str) -> String {
+    let mut h: u32 = 0x811c9dc5;
+    for b in q.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    format!("{:08x}", h)
+}
+
+/// 影子评测：对一条请求「现网路由选择」×「强模型基线」双跑。
+/// 基线默认取能力档最高（旗舰）的 active 模型，可经 settings `routing.shadow_baseline` 钦定；
+/// 结果落 `routing_calibration` 供 AIQ 离线重放调权。只导路由结果给前端（不双写 SSE）。
+async fn routing_shadow(Json(req): Json<ShadowBody>) -> Json<Value> {
+    let fail = |msg: &str| Json(json!({ "ok": false, "error": msg }));
+
+    let models = match db::list_models(true) {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => return fail("无可用模型，请先添加"),
+        Err(e) => return fail(&e.to_string()),
+    };
+
+    // 1) 现网路由：走真实 plan() 看「系统会选谁」；direct/未注册退回注册表首选。
+    let classifier = pick_classifier(&models);
+    let routing = router::route("auto", &req.query, classifier.as_ref()).await;
+    let routed_model = if models.iter().any(|m| m.name == routing.model) {
+        routing.model.clone()
+    } else {
+        models[0].name.clone()
+    };
+
+    // 2) 基线：settings 钦定（须已注册），否则取能力档最高者（旗舰）。
+    let explicit = db::get_setting("routing.shadow_baseline")
+        .ok()
+        .flatten()
+        .filter(|n| models.iter().any(|m| m.name == *n));
+    let baseline_model = explicit.unwrap_or_else(|| {
+        models
+            .iter()
+            .filter(|m| m.is_active != 0)
+            .max_by_key(|m| m.capability_tier)
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| models[0].name.clone())
+    });
+
+    // 3) 双跑（并行），成本统一走定价真源。
+    let routed_spec: Option<ModelSpec> = models.iter().find(|m| m.name == routed_model).map(ModelSpec::from);
+    let baseline_spec: Option<ModelSpec> = models.iter().find(|m| m.name == baseline_model).map(ModelSpec::from);
+    let (routed_cost, baseline_cost) = match (routed_spec, baseline_spec) {
+        (Some(r), Some(b)) => {
+            let msgs = vec![serde_json::json!({ "role": "user", "content": req.query })];
+            let (rr, br) = tokio::join!(
+                ai_client::chat(&r, &msgs, 500, 0.3),
+                ai_client::chat(&b, &msgs, 500, 0.3),
+            );
+            let cost_of = |res: &std::result::Result<ai_client::ChatResult, AppError>, model: &str| -> f64 {
+                match res {
+                    Ok(x) => {
+                        let (c, _) = priced_usage(model, &x.model, &x.usage);
+                        c
+                    }
+                    Err(_) => 0.0,
+                }
+            };
+            (cost_of(&rr, &routed_model), cost_of(&br, &baseline_model))
+        }
+        _ => return fail("路由/基线模型解析失败"),
+    };
+
+    let task_type = req.task_type.unwrap_or_else(|| routing.task_type.clone());
+    let qhash = shadow_hash(&task_type);
+    let _ = db::insert_routing_calibration(
+        &task_type,
+        &qhash,
+        &routed_model,
+        &baseline_model,
+        routed_cost,
+        baseline_cost,
+        "shadow",
+    );
+
+    Json(json!({
+        "ok": true,
+        "task_type": task_type,
+        "routed_model": routed_model,
+        "baseline_model": baseline_model,
+        "routed_cost": routed_cost,
+        "baseline_cost": baseline_cost,
+        "saved": (baseline_cost - routed_cost).max(0.0),
+    }))
+}
+
+/// 影子评测配置与已采集样本数（AIQ 重放入口）。
+async fn routing_shadow_status() -> Json<Value> {
+    let ratio = config::shadow_ratio();
+    let baseline = db::get_setting("routing.shadow_baseline").ok().flatten();
+    let samples = db::count_routing_calibration().unwrap_or(0);
+    Json(json!({ "ratio": ratio, "baseline": baseline, "samples": samples }))
 }
 
 async fn cache_threshold_get() -> Json<Value> {

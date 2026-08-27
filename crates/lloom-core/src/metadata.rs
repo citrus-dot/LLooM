@@ -158,6 +158,21 @@ fn fill_heuristic(m: &mut Model, tier_filled: bool, ctx_filled: bool, cost_fille
     m.needs_calibration = 1;
 }
 
+/// P1.c 冷启动：overlay `model_catalog.json[provider/name].quality_by_task[task_type]`
+/// 给出该模型在特定任务下的榜单折算分（按任务分别给分，coding 0.8 ≠ math 0.5 是正常态）。
+/// 文件缺失/无此条目 → None，由调用方回落 `quality_score`。测试可注入目录。
+pub fn cold_start_quality(m: &Model, task_type: &str) -> Option<f64> {
+    cold_start_quality_in(m, task_type, &config::data_dir())
+}
+
+pub fn cold_start_quality_in(m: &Model, task_type: &str, data_dir: &Path) -> Option<f64> {
+    let path = data_dir.join("model_catalog.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let root: Value = serde_json::from_str(&raw).ok()?;
+    let by_task = root.get(&overlay_key(m))?.get("quality_by_task")?;
+    by_task.get(task_type)?.as_f64()
+}
+
 /// P0.e 入口：给新增模型回填路由元数据（就地 mutate）。
 /// 调用点：`db::insert_model`。
 pub fn resolve_and_fill(m: &mut Model) -> FillReport {
@@ -273,5 +288,22 @@ mod tests {
         assert_eq!(m.input_cost_per_token, 1e-6);
         assert_eq!(m.output_cost_per_token, 2e-6);
         assert!(hits.tier && hits.cost);
+    }
+
+    #[test]
+    fn cold_start_quality_reads_overlay_per_task() {
+        // P1.c：冷启动按任务分别给分；缺失任务/无 overlay → None（回落 quality_score）
+        let dir = std::env::temp_dir().join(format!("lloom_metadata_cold_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("model_catalog.json"),
+            r#"{"dashscope/deepseek-v3": {"quality_by_task": {"coding": 0.8, "math_logic": 0.5}}}"#,
+        )
+        .unwrap();
+        let m = model("deepseek-v3", "dashscope", "");
+        assert_eq!(cold_start_quality_in(&m, "coding", &dir), Some(0.8), "coding 0.8");
+        assert_eq!(cold_start_quality_in(&m, "math_logic", &dir), Some(0.5), "math 0.5 ≠ coding");
+        assert_eq!(cold_start_quality_in(&m, "general", &dir), None, "未登记任务无冷启动分");
     }
 }

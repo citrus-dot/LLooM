@@ -1,8 +1,7 @@
 # LLooM v2 项目进度
 
-> 最后更新：**2026-08-26** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：`cab03c8`（"P1.a: persist latency_ms/request_id in usage_records, per-role orchestrate accounting"）
-> P0 阶段已全部完成并推送（`b09d229..0dc7d89`）；P1.a 已落地（cab03c8），待推送。
+> 最后更新：**2026-08-27** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
+> 最新已提交：P1.a/b/c/d 落地（P1 阶段完成，随本阶段审查后统一推送）
 
 ---
 
@@ -75,6 +74,7 @@
 ## 四、已落地功能进展（commit / 工作区视角）
 
 **已提交 commit 主线**（最新在前）：
+- `cab03c8`/`0b7820c` ROUTING P1.a：用量落库补全（usage_records 加 latency/request_id、编排逐角色记账）
 - `d6912b9` ROUTING P0.e/g：新增模型自动打标（metadata.rs 五级兜底）+ signals.rs 信号层正规化（难度带/reask/LLM 判定，阈值可配置）
 - `50ec431` ROUTING P0.f：消除 Python 模型真源（Rust 单一决策，orchestrate assignments 下发）
 - `8dddc59` ROUTING P0.b/c/d：models 元数据列+迁移回填、routing_policy/model_task_score/routing_decisions 三表、plan() 评分路由替换全部硬编码（chat 路径）
@@ -94,6 +94,13 @@
 - **P0.f（50ec431，2026-08-26）**：`router.rs` 新增 `plan_decision()`；`server.rs` 构造 assignments（general/decompose/aggregate）；`ai_client.rs` 写入请求体；`ai_service.py` 删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/`_select_model`，新增 `_assigned_model()`（优先 assignments、兜底 models[0]）。**「无字面量」验收**：`ai_service.py` 无模型名常量/偏好表，模型名仅来自 Rust assignments 或 models 全池。冒烟：轻量 + 复杂（分解→4 子任务→汇总）+ easy 路径全过，Python 无错误
 - **P0.e（d6912b9，2026-08-26）**：新增 `metadata.rs::resolve_and_fill`，`db::insert_model` 落库前五级打标（overlay 显式 > 启发式；不覆盖用户/overlay 显式值）：`flash/mini/1b 等`→轻量档、`max/r1 等`→旗舰档、本地端点置零成本+标 `is_local`、未显式上下文回填 32K、一律标 `needs_calibration` 进保守期。6 单测 + `insert_model` 注册冒烟过
 - **P0.g（d6912b9，2026-08-26）**：`signals.rs` 补 `SignalSet`/`extract`/`band_from`/`reask_decision`/`llm_classify_needed`，困难度=structure/complexity/context 加权，难度带 easy/medium/hard，权重与阈值走 settings KV 可调；顺带修复 CJK `\b` 词边界致 `工具` 不命中 tools 信号的 bug。7 单测过。**P0 阶段至此全部勾选完成**
+
+**2026-08-27 落地（ROUTING-PLAN P1.b/c/d + 既有 P1.a，P1 阶段完成）**：
+- P1.a（cab03c8/0b7820c）：`usage_records` 加 `latency_ms`/`request_id` + `idx_usage_req`，`insert_usage` 扩参（探针回兼容）；chat 落耗时+请求号（失败不写 usage 归 `routing_decisions.outcome`）；编排逐 `task_done` 按 role 建账（decompose/子任务自身/aggregate），model 兜底 unknown；迁移清 `default`+cost=0 旧脏数据
+- P1.b（工作区）：`migrate_db` 预置 `routing_policy.pinned_model` 推荐主选（新库 VALUES 带、既有库仅回填 NULL，settings `migration_policy_v1_p1b` 一次性标记）
+- P1.c（工作区）：`metadata.rs::cold_start_quality(_in)` overlay 按 task_type 榜单折算；`db::upsert_model_task_score_signal` 在线 EWMA（α=`signal.ewma_alpha` 默认 0.15，输入 σ 不 clamp、结果 clamp [0,1]）+ 按信号自增 success/fail/escalation + `sample_count≥20` 解除保守期；server.rs chat 落 Success、orchestrate 按 task_done error 下发 Success/SubtaskFail（model/role≠unknown 才打点）；`QualitySignalKind`（models.rs）8 信号 σ 值
+- P1.d（工作区）：`server.rs` `POST/GET /api/routing/shadow`（采样 `routing.shadow_ratio` 默认 0.10、基线 `routing.shadow_baseline` 否则能力档最高、FNV-1a 哈希防重、成本走 `priced_usage` 真源、结果落 `routing_calibration`）+ `db::insert_routing_calibration/count_routing_calibration` + `config.rs::shadow_ratio`；`scripts/aiq_replay.py` 离线 AIQ 重放（三条线成本—质量、AIQ 预算积分、质量回填写库）
+- 冒烟：`cargo test` 54 全绿（新增 EWMA 累计+保守期解除、迁移幂等修 scale 单测）；AIQ 脚本 3 样本冒烟出 AIQ + 95% 节省 + 调参建议
 
 **过往已实现并验证**（见 memory / 历史 commit）：
 - 编辑对话名称（`rename_conversation`，PUT `/api/conversations/{id}`）
@@ -133,7 +140,9 @@
 - [x] ✅ **P0.f 消除 Python 真源**：`plan_decision` + assignments 下发，`ai_service.py` 无模型名字面量（50ec431）
 - [x] ✅ **P0.g 信号层正规化**：`SignalSet`/难度带/reask/LLM 判定，阈值走 settings KV，有单测（d6912b9）
 - [x] ✅ **P1.a 用量落库补全**（2026-08-27）：`usage_records` 加 `latency_ms`/`request_id`；chat 落耗时+请求号（失败不写 usage，归 `routing_decisions.outcome`）；编排按 `task_done` 逐角色(task_type)记账、model 兜底 unknown；迁移清旧脏数据
-- [ ] 🔥 **P1.b 推荐分配**：各任务类型主选/降级链落 seed 策略（见 ROUTING-PLAN §P1.b 表）
+- [x] ✅ **P1.b 推荐分配**（2026-08-27）：`migrate_db` 按 §P1.b 表为新库预置 `pinned_model` 推荐主选（INSERT OR IGNORE），既有库仅回填 `pinned_model IS NULL` 行（settings `migration_policy_v1_p1b` 一次性标记），绝不覆盖用户钦定模型
+- [x] ✅ **P1.c 成效分**（2026-08-27）：`metadata.rs::cold_start_quality` overlay 按 task_type 榜单折算分冷启动；`db::upsert_model_task_score_signal` 在线 EWMA`ewma←ασ+(1-α)ewma`（α 读 `signal.ewma_alpha` 默认 0.15），输入 σ 不 clamp、结果 clamp [0,1]；按信号自增 success/fail/escalation，`sample_count≥20` 解除保守期；server.rs chat 落 Success、orchestrate 按 task_done error 落 Success/SubtaskFail（model/role≠unknown 才打点）
+- [x] ✅ **P1.d 影子评测 + AIQ 重放**（2026-08-27）：`POST/GET /api/routing/shadow` 采样（`routing.shadow_ratio` 默认 0.10）双跑「路由选择 × 旗舰基线」落 `routing_calibration`；`scripts/aiq_replay.py` 离线对比全弱/当前/全强三条成本—质量线，输出 RouterBench 式 AIQ；冒烟过
 - [ ] 🔧 **P3 健康感知与故障转移**、**P4 编排升级**、**P5 预算联动**
 
 ### 来自 CONTEXT-PLAN.md

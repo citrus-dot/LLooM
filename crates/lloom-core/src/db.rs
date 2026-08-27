@@ -204,8 +204,8 @@ pub fn init_db() -> Result<()> {
 /// 3. models → price_specs 投影（INSERT OR IGNORE）
 /// 4. 预置 deepseek 峰谷规则与 2026 节假日表（仅当缺失）
 /// 5. models 追加路由元数据列（P0.b）+ 一次性名称启发式回填（settings 标记）
-/// 6. routing_policy 种子策略（INSERT OR IGNORE 幂等，用户改过后不覆盖）
-fn migrate_db(conn: &Connection) -> Result<()> {
+/// 6. routing_policy 种子策略（INSERT OR IGNORE 幂等，用户改过后不覆盖）+ P1.b 推荐主选回填
+pub fn migrate_db(conn: &Connection) -> Result<()> {
     // 1. usage_records 追加列
     let cols = table_columns(conn, "usage_records")?;
     let add_cols: &[(&str, &str)] = &[
@@ -372,19 +372,50 @@ fn migrate_db(conn: &Connection) -> Result<()> {
     }
 
     // 6. P0.c 种子路由策略（INSERT OR IGNORE：仅补缺，不覆盖用户改动）
+    //    + P1.b：按 §P1.b 表为各任务预置「推荐主选」 pinned_model（新库在 VALUES 里带）
     conn.execute_batch(
         "INSERT OR IGNORE INTO routing_policy
             (task_type, min_capability_tier, cost_weight, quality_weight, latency_weight,
              max_cost_per_request, pinned_model, fallback_depth, escalation_enabled)
          VALUES
-            ('simple_qa',       1, 0.7, 0.2, 0.1, NULL, NULL, 2, 0),
-            ('general',         2, 0.5, 0.4, 0.1, NULL, NULL, 2, 0),
-            ('coding',          3, 0.3, 0.6, 0.1, NULL, NULL, 2, 0),
-            ('math_logic',      3, 0.3, 0.6, 0.1, NULL, NULL, 2, 0),
-            ('complex_reasoning', 3, 0.2, 0.7, 0.1, NULL, NULL, 2, 0),
-            ('decompose',       1, 0.6, 0.3, 0.1, NULL, NULL, 1, 1),
-            ('aggregate',       2, 0.4, 0.5, 0.1, NULL, NULL, 2, 0)",
+            ('simple_qa',         1, 0.7, 0.2, 0.1, NULL, 'qwen2.5-local', 2, 0),
+            ('general',           2, 0.5, 0.4, 0.1, NULL, 'qwen-plus', 2, 0),
+            ('coding',            3, 0.3, 0.6, 0.1, NULL, 'deepseek-v3', 2, 0),
+            ('math_logic',        3, 0.3, 0.6, 0.1, NULL, 'deepseek-v3', 2, 0),
+            ('complex_reasoning', 3, 0.2, 0.7, 0.1, NULL, 'qwen3-max', 2, 0),
+            ('decompose',         1, 0.6, 0.3, 0.1, NULL, 'qwen-plus', 1, 1),
+            ('aggregate',         2, 0.4, 0.5, 0.1, NULL, NULL, 2, 0)",
     )?;
+
+    // 6b. P1.b 一次性：既有部署的 routing_policy seed 是 NULL pinned，不回填则推荐主选不生效。
+    //     只填「当前 pinned_model 为 NULL」的推荐行——绝不覆盖用户已主动钦定的模型；
+    //     新库经上面的 VALUES 已带值 → 此处 UPDATE 落空，天然幂等。
+    let p1b_seeded: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM settings WHERE key = 'migration_policy_v1_p1b'",
+        [],
+        |r| r.get(0),
+    )?;
+    if p1b_seeded == 0 {
+        let recs: &[(&str, &str)] = &[
+            ("simple_qa", "qwen2.5-local"),
+            ("general", "qwen-plus"),
+            ("decompose", "qwen-plus"),
+            ("coding", "deepseek-v3"),
+            ("math_logic", "deepseek-v3"),
+            ("complex_reasoning", "qwen3-max"),
+        ];
+        for (tt, m) in recs {
+            conn.execute(
+                "UPDATE routing_policy SET pinned_model = ?2, updated_at = CURRENT_TIMESTAMP
+                 WHERE task_type = ?1 AND pinned_model IS NULL",
+                params![tt, m],
+            )?;
+        }
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('migration_policy_v1_p1b', 'done')",
+            [],
+        )?;
+    }
 
     Ok(())
 }
@@ -398,6 +429,9 @@ fn table_columns(conn: &Connection, table: &str) -> rusqlite::Result<Vec<String>
 fn open_impl() -> Result<Connection> {
     let conn = Connection::open(crate::config::db_path())?;
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+    // WAL 只允许单写者；不加 busy_timeout 时并发写会立刻报 "database is locked"
+    // （路由回调 / 用量打点 / 信号回填常并发触发）。等待而非失败，避免瞬时锁竞争。
+    conn.busy_timeout(std::time::Duration::from_millis(3000))?;
     Ok(conn)
 }
 
@@ -469,7 +503,13 @@ pub fn insert_model(m: &Model) -> Result<i64> {
         ],
     );
     match res {
-        Ok(_) => Ok(conn.last_insert_rowid()),
+        Ok(_) => {
+            let id = conn.last_insert_rowid();
+            // P1.c：注册即有冷启动成效分——按 overlay quality_by_task / quality_score 预置各任务分。
+            // INSERT OR IGNORE 幂等；失败不阻塞注册（成效分由后续 EWMA 慢慢补齐）。
+            let _ = seed_cold_start_scores(&conn, &filled.name);
+            Ok(id)
+        }
         Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {
             Err(AppError::Conflict(m.name.clone()))
         }
@@ -985,7 +1025,7 @@ pub fn upsert_price_spec(
 
 // ── Routing policy / score / audit (ROUTING-PLAN P0.c) ──
 
-use crate::models::{ModelTaskScore, RoutingPolicy};
+use crate::models::{ModelTaskScore, QualitySignalKind, RoutingPolicy};
 
 fn routing_policy_from_row(row: &rusqlite::Row) -> rusqlite::Result<RoutingPolicy> {
     Ok(RoutingPolicy {
@@ -1095,6 +1135,42 @@ pub fn update_routing_decision_outcome(id: i64, outcome: &str) -> Result<()> {
     Ok(())
 }
 
+/// P1.d 影子评测记录：一条「路由选择 × 强模型基线」双跑结果，供离线 AIQ 重放。
+/// quality 两列留给裁判/离线脚本回填（开放式生成无结构化信号时不回填，判 NULL）。
+pub fn insert_routing_calibration(
+    task_type: &str,
+    query_hash: &str,
+    routed_model: &str,
+    baseline_model: &str,
+    routed_cost: f64,
+    baseline_cost: f64,
+    source: &str,
+) -> Result<i64> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO routing_calibration (task_type, query_hash, routed_model, baseline_model,
+                                          routed_cost, baseline_cost, source)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            task_type,
+            query_hash,
+            routed_model,
+            baseline_model,
+            routed_cost,
+            baseline_cost,
+            source,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// P1.d：已采集的影子样本数（AIQ 重放/判定需要足够样本才有统计意义）。
+pub fn count_routing_calibration() -> Result<i64> {
+    let conn = open()?;
+    let c = conn.query_row("SELECT COUNT(*) FROM routing_calibration", [], |r| r.get::<_, i64>(0))?;
+    Ok(c)
+}
+
 pub fn get_model_task_score(model_name: &str, task_type: &str) -> Result<Option<ModelTaskScore>> {
     let conn = open()?;
     let mut stmt = conn.prepare(
@@ -1117,24 +1193,99 @@ pub fn get_model_task_score(model_name: &str, task_type: &str) -> Result<Option<
     }
 }
 
-/// 信号回填：ewma_quality ← (1-α)·ewma + α·σ，α=0.15；首样本直接写 σ。
-/// 供 P1.c 信号层接线（成功/失败/升级）调用，P0.d 阶段不接线。
+/// P1.c 信号回填：`ewma_quality ← (1-α)·ewma + α·σ`，α 读 settings `signal.ewma_alpha`（默认 0.15）。
+/// 副作用：按信号自增 success/fail/escalation 计数器；`sample_count>=20` 时解除模型保守期
+/// （`needs_calibration=0`，系统写，绕开 update_model 白名单）。
+///
+/// 注意：σ 可能为负（失败/点踩），**只在写入后 clamp 结果**到 [0,1]（读侧合法性），
+/// 不能 clamp 输入信号——否则负反馈会被误当作 0 丢弃，模型永远学不坏。
 pub fn upsert_model_task_score_signal(
     model_name: &str,
     task_type: &str,
-    signal: f64,
+    kind: QualitySignalKind,
 ) -> Result<()> {
+    let alpha = get_setting("signal.ewma_alpha")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.15)
+        .clamp(0.01, 0.5);
+    let sigma = kind.value();
+    let (success, fail, escalation) = match kind {
+        QualitySignalKind::Success => (1, 0, 0),
+        QualitySignalKind::Escalation => (0, 0, 1),
+        QualitySignalKind::SubtaskFail
+        | QualitySignalKind::ModelRegen
+        | QualitySignalKind::Reask
+        | QualitySignalKind::Dislike
+        | QualitySignalKind::ParseFail => (0, 1, 0),
+        // 点赞不改变成败计数（与成败正交的独立信号）
+        QualitySignalKind::Like => (0, 0, 0),
+    };
+
     let conn = open()?;
+    // 首样本直接写 σ（clamp 到 [0,1] 保证读侧合法）；后续走 EWMA。
+    // `ewma_quality` 读写均 clamp：MIN/MAX 在此作为标量函数（非聚合）。
     conn.execute(
-        "INSERT INTO model_task_score (model_name, task_type, ewma_quality, sample_count, updated_at)
-         VALUES (?1, ?2, ?3, 1, CURRENT_TIMESTAMP)
+        "INSERT INTO model_task_score (model_name, task_type, success_count, fail_count,
+            escalation_count, ewma_quality, sample_count, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, CURRENT_TIMESTAMP)
          ON CONFLICT(model_name, task_type) DO UPDATE SET
-            ewma_quality = ewma_quality * 0.85 + ?3 * 0.15,
-            sample_count = sample_count + 1,
-            updated_at = CURRENT_TIMESTAMP",
-        params![model_name, task_type, signal.clamp(0.0, 1.0)],
+            ewma_quality    = MIN(1.0, MAX(0.0, ewma_quality * ?7 + ?8 * ?9)),
+            success_count   = success_count + ?3,
+            fail_count      = fail_count + ?4,
+            escalation_count = escalation_count + ?5,
+            sample_count    = sample_count + 1,
+            updated_at      = CURRENT_TIMESTAMP",
+        params![
+            model_name,
+            task_type,
+            success,
+            fail,
+            escalation,
+            sigma.clamp(0.0, 1.0),
+            1.0 - alpha,
+            sigma,
+            alpha,
+        ],
     )?;
+
+    // 保守期解除：sample>=20 的模型在复杂任务上不再扣分（P0.d 的 needs_calibration 罚分）。
+    let sample: i64 = conn.query_row(
+        "SELECT sample_count FROM model_task_score WHERE model_name = ?1 AND task_type = ?2",
+        params![model_name, task_type],
+        |r| r.get(0),
+    )?;
+    if sample >= 20 {
+        conn.execute(
+            "UPDATE models SET needs_calibration = 0 WHERE name = ?1 AND needs_calibration = 1",
+            params![model_name],
+        )?;
+    }
     Ok(())
+}
+
+/// P1.c 冷启动：为模型在各任务类型预置 `model_task_score` 行，`ewma_quality` 用 overlay
+/// `quality_by_task` 的榜单折算分（按任务分别给分，如 coding 0.8 ≠ math 0.5），缺省回落
+/// 模型 `quality_score`。`INSERT OR IGNORE` 幂等——只补缺，不覆盖任何已在线学习的成效分。
+fn seed_cold_start_scores(conn: &Connection, model_name: &str) -> Result<usize> {
+    let m = get_model(model_name)?;
+    let tasks: Vec<String> = conn
+        .prepare("SELECT task_type FROM routing_policy WHERE task_type IS NOT NULL")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut seeded = 0usize;
+    for t in tasks {
+        let cold = crate::metadata::cold_start_quality(&m, &t).unwrap_or(m.quality_score);
+        let inserted = conn.execute(
+            "INSERT OR IGNORE INTO model_task_score
+                (model_name, task_type, ewma_quality, sample_count, updated_at)
+             VALUES (?1, ?2, ?3, 0, CURRENT_TIMESTAMP)",
+            params![model_name, t, cold.clamp(0.0, 1.0)],
+        )?;
+        seeded += inserted as usize;
+    }
+    Ok(seeded)
 }
 
 /// 按日聚合用量（PRICING-PLAN §6.2 校准燃料）。排除探针记账（task_type='probe'）。
@@ -1401,9 +1552,14 @@ fn json_to_sqlite(v: &serde_json::Value) -> rusqlite::types::Value {
 #[cfg(test)]
 mod migration_tests {
     use super::*;
-    use std::sync::Once;
+    use std::sync::{Mutex, Once};
 
     static SETUP: Once = Once::new();
+
+    // DB 集成测试共享同一个 LLOOM_DATA_DIR 文件；SQLite `PRAGMA journal_mode=WAL`
+    // 改变 journal 时不走 busy handler，并发写者会立刻 SQLITE_BUSY。串行化两个
+    // 真写库测试，避免并行竞争的瞬时锁失败。
+    static DB_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_data_dir() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("lloom_migration_test_{}", std::process::id()))
@@ -1433,6 +1589,7 @@ mod migration_tests {
     /// 投影后的 PriceSpec 参与实际成本计算。
     #[test]
     fn migration_is_idempotent_and_fixes_scale() {
+        let _guard = DB_LOCK.lock().unwrap();
         setup();
         let dir = test_data_dir();
         // 旧库：SCHEMA 建表，不设 migration 标记
@@ -1573,6 +1730,132 @@ mod migration_tests {
         assert_eq!(tt.as_deref(), Some("coding"));
         drop(conn4);
 
+        // P1.b 冒烟：推荐主选已 seed；聚合不钦定（按评分择优）；用户钦定不被一次性回填覆盖
+        let pin = |tt: &str| -> Option<String> {
+            open().unwrap()
+                .query_row(
+                    "SELECT pinned_model FROM routing_policy WHERE task_type = ?1",
+                    [tt],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(pin("coding").as_deref(), Some("deepseek-v3"), "coding 推荐主选");
+        assert_eq!(pin("complex_reasoning").as_deref(), Some("qwen3-max"), "复杂推理 ≤32K 推荐主选");
+        assert_eq!(pin("general").as_deref(), Some("qwen-plus"));
+        assert!(pin("aggregate").is_none(), "聚合应按评分择优，不钦定");
+        // 用户钦定 general --> 自定义模型，重新 init_db 不得覆盖
+        open().unwrap()
+            .execute(
+                "UPDATE routing_policy SET pinned_model = 'custom-llm' WHERE task_type = 'general'",
+                [],
+            )
+            .unwrap();
+        init_db().unwrap();
+        assert_eq!(pin("general").as_deref(), Some("custom-llm"), "用户钦定应保留");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1.c：upsert_model_task_score_signal 的 EWMA 行为。
+    /// 验证：①首样本直接写 σ；②负信号被采用（非 clamp 成 0），按公式拉低；
+    /// ③success/fail/escalation 计数器各自自增；④sample≥20 系统写解除保守期；⑤α 从 settings 可调。
+    #[test]
+    fn ewma_signal_accumulates_and_releases_calibration() {
+        // 本用例自己建独立 data dir（不共享 migration 测试的目录）：migration 用例需要
+        // "纯净旧库" 才测得出 ÷10 路径，共享会让两个断言互相污染。DB_LOCK 已把两个
+        // 写库测试串行化，故在此安全地覆盖全局 env、用毕还原。
+        let _guard = DB_LOCK.lock().unwrap();
+        let dir_text = format!("lloom_ewma_test_{}", std::process::id());
+        let dir = std::env::temp_dir().join(&dir_text);
+        let _ = std::fs::remove_dir_all(&dir);
+        let prev = std::env::var("LLOOM_DATA_DIR").ok();
+        std::env::set_var("LLOOM_DATA_DIR", &dir);
+
+        // 确保 schema 存在（settings/routing_policy/model_task_score），init_db 幂等
+        init_db().unwrap();
+        // 固定默认 α，避免其它用例残留的自定义 α 污染本用例
+        set_setting("signal.ewma_alpha", "0.15").unwrap();
+        // 唯一模型名 + 前置清理，避免与历史数据纠缠（用完立即 drop，防 SQLite 写锁）
+        let model_name = format!("p1c-ewma-{}", std::process::id());
+        let conn = open().unwrap();
+        conn.execute("DELETE FROM model_task_score WHERE model_name = ?1", params![model_name]).unwrap();
+        conn.execute("DELETE FROM models WHERE name = ?1", params![model_name]).unwrap();
+        conn.execute(
+            "INSERT INTO models
+                (name, provider, litellm_model, capability_tier, needs_calibration, is_active)
+             VALUES (?1, 'test', ?1, 2, 1, 1)",
+            params![model_name],
+        )
+        .unwrap();
+        drop(conn);
+
+        // ① 首样本 Success → ewma 直接写 σ=0.7，success_count=1
+        upsert_model_task_score_signal(&model_name, "general", QualitySignalKind::Success).unwrap();
+        let row = get_model_task_score(&model_name, "general").unwrap().unwrap();
+        assert_eq!(row.sample_count, 1);
+        assert!((row.ewma_quality - 0.7).abs() < 1e-9, "首样本直接写 σ，得 {}", row.ewma_quality);
+        assert_eq!(row.success_count, 1);
+        assert_eq!(row.fail_count, 0);
+
+        // ② SubtaskFail(−0.5)：ewma = 0.7·0.85 + (−0.5)·0.15 = 0.52；负信号被采用
+        upsert_model_task_score_signal(&model_name, "general", QualitySignalKind::SubtaskFail).unwrap();
+        let row = get_model_task_score(&model_name, "general").unwrap().unwrap();
+        let expect = 0.7 * 0.85 + (-0.5) * 0.15;
+        assert!(
+            (row.ewma_quality - expect).abs() < 1e-9,
+            "负信号应参与 EWMA：{} != {expect}（若被误 clamp 则为 0.595）",
+            row.ewma_quality
+        );
+        assert_eq!(row.sample_count, 2);
+        assert_eq!(row.fail_count, 1);
+        assert_eq!(row.escalation_count, 0);
+
+        // ③ Escalation 只加 escalation_count，不扰动成败计数
+        upsert_model_task_score_signal(&model_name, "general", QualitySignalKind::Escalation).unwrap();
+        let row = get_model_task_score(&model_name, "general").unwrap().unwrap();
+        assert_eq!(row.escalation_count, 1);
+        assert_eq!(row.success_count, 1);
+        assert_eq!(row.fail_count, 1);
+        assert_eq!(row.sample_count, 3);
+
+        // ④ 补足样本到 ≥20 → 解除保守期（needs_calibration 由系统写 0）
+        for _ in 0..17 {
+            upsert_model_task_score_signal(&model_name, "general", QualitySignalKind::Success).unwrap();
+        }
+        let row = get_model_task_score(&model_name, "general").unwrap().unwrap();
+        assert!(row.sample_count >= 20, "样本数 {}", row.sample_count);
+        assert_eq!(get_model(&model_name).unwrap().needs_calibration, 0, "sample>=20 应解除保守期");
+
+        // ⑤ α 可调：设 α=0.5，一次 Success 后新值 = 0.5·旧值 + 0.5·0.7
+        set_setting("signal.ewma_alpha", "0.5").unwrap();
+        let before = get_model_task_score(&model_name, "general").unwrap().unwrap().ewma_quality;
+        upsert_model_task_score_signal(&model_name, "general", QualitySignalKind::Success).unwrap();
+        let after = get_model_task_score(&model_name, "general").unwrap().unwrap().ewma_quality;
+        assert!(
+            (after - (before * 0.5 + 0.7 * 0.5)).abs() < 1e-9,
+            "α=0.5 公式：{after} != {}", before * 0.5 + 0.7 * 0.5
+        );
+
+        // P1.d：影子评测记录往返（插入 + 计数）——复用同一独立库，规避额外写库测试
+        let cal_id = insert_routing_calibration(
+            "coding",
+            "abc123",
+            "deepseek-v3",
+            "qwen3-max",
+            1.7e-5,
+            2.2e-5,
+            "shadow",
+        )
+        .unwrap();
+        assert!(cal_id > 0, "影子记录插入应返回自增 id");
+        assert_eq!(count_routing_calibration().unwrap(), 1, "影子样本数应为 1");
+
+        // 还原全局 env，并按序清理锁（guard 兜底解锁）
+        match prev {
+            Some(v) => std::env::set_var("LLOOM_DATA_DIR", v),
+            None => std::env::remove_var("LLOOM_DATA_DIR"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

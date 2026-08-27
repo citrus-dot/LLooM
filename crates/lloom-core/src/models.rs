@@ -251,6 +251,49 @@ pub struct ModelTaskScore {
     pub sample_count: i64,
 }
 
+/// P1.c 成效信号：枚举 → σ 值（EWMA 输入），并决定 success/fail/escalation 计数器自增方向。
+///
+/// σ 值约定（ROUTING-PLAN §P1.c）：
+/// 正常完成 +0.7、子任务失败 −0.5、cascade 升级 −0.4、重生成/切模型 −0.6、
+/// reask 隐式不满 −0.4、点赞 +1.0、点踩 −1.0、结构化解析失败 −0.3。
+/// 负信号会把 ewma_quality 向下拉，最终结果被 clamp 到 [0,1]（读侧合法性），
+/// 输入 σ 本身**不做** clamp——否则负反馈会被误丢弃。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QualitySignalKind {
+    /// 正常完成（chat 成功 / task_done 无 error）：+0.7
+    Success,
+    /// 子任务失败（task_done.error 非空）：−0.5
+    SubtaskFail,
+    /// cascade 升级（回退链重试命中）：−0.4
+    Escalation,
+    /// 重生成 / 切模型重问（同对话短间隔新请求 + 不同模型）：−0.6
+    ModelRegen,
+    /// reask 隐式不满（同对话相似度>阈值且间隔短）：−0.4
+    Reask,
+    /// 点赞（cache_feedback correct=true）：+1.0
+    Like,
+    /// 点踩（cache_feedback correct=false）：−1.0
+    Dislike,
+    /// 结构化解析失败（JSON schema 校验失败）：−0.3
+    ParseFail,
+}
+
+impl QualitySignalKind {
+    /// 该信号在 EWMA 公式 `ewma ← (1-α)·ewma + α·σ` 中的 σ 值。
+    pub fn value(self) -> f64 {
+        match self {
+            Self::Success => 0.7,
+            Self::SubtaskFail => -0.5,
+            Self::Escalation => -0.4,
+            Self::ModelRegen => -0.6,
+            Self::Reask => -0.4,
+            Self::Like => 1.0,
+            Self::Dislike => -1.0,
+            Self::ParseFail => -0.3,
+        }
+    }
+}
+
 // ── Env / Config ──
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

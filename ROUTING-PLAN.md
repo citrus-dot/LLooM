@@ -769,19 +769,24 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 | 4 | P0.d 评分 plan() + router 单测 | 删任一模型自动改选；不再返回未注册名；空候选集明确报错；阶梯价交叉单测过 | ✅ 2026-08-26（8dddc59）11 个单测 + 冒烟；阶梯价交叉单测随 P2 tiered 数据补（现 spec 平价）|
 | 5 | P0.e 五级打标 | 新增未知模型→元数据自动填充、标 needs_calibration、不接复杂任务 | ✅ 2026-08-26（d6912b9）新增 `metadata.rs::resolve_and_fill`（overlay 显式 > 启发式，不覆盖用户/overlay 显式值），`db::insert_model` 落库前自动打标（能力档/上下文/本地端点置零成本/needs_calibration）；6 单测 + 注册冒烟过 |
 | 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；signals 可配置有单测 | ✅ 2026-08-26 P0.f（50ec431）删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/`_select_model`，Python 读 `assignments` 兜底 `models[0]`；P0.g（d6912b9）`signals.rs` 补 `SignalSet`/`extract`/band/reask/LLM 判定，阈值走 settings KV；7 单测过 |
-| 7 | P1.b/c 成效分 + 推荐分配 | 影子评测下内部分解路径成本降 ≥60%，质量无显著回退 | ⏳ 待办 |
+| 7 | P1.b/c 成效分 + 推荐分配 | 影子评测下内部分解路径成本降 ≥60%，质量无显著回退 | ✅ 2026-08-27（P1.b/c）P1.b `migrate_db` 按 §P1.b 表为新库预置 `pinned_model` 推荐主选（INSERT OR IGNORE）+ 既有库仅回填 NULL（settings 标记 `migration_policy_v1_p1b`，绝不覆盖用户钦定）；P1.c `metadata.rs::cold_start_quality` overlay 按 task_type 榜单折算分 + `db::upsert_model_task_score_signal` 线上 EWMA（α 读 `signal.ewma_alpha` 默认 0.15，输入 σ 不 clamp、结果 clamp）并按信号自增 success/fail/escalation、`sample_count≥20` 解除保守期；server.rs chat 落 Success、orchestrate 按 task_done error 落 Success/SubtaskFail（model/role≠unknown 才打点）；≥60% 指标待影子真实样本验收 |
 | 8 | P2 定价刷新 + WebUI 徽标 | 手动刷新更新非 manual 来源；断网静默保持本地值 | ⏳ 待办 |
 | 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms | ⏳ 待办（fallback_chain 已产出，未接重试）|
 | 10 | P4 编排升级 | 子任务失败自动降级重试成功；escalation 任务成本再降 ≥30%（相对序 7） | ⏳ 待办 |
 | 11 | P5 预算联动 | 预算近耗尽→逐档降级至只走本地 | ⏳ 待办 |
-| 12 | P1.d AIQ 重放 | 离线重放输出成本—质量曲线；调参有数据依据 | ⏳ 待办 |
+| 12 | P1.d AIQ 重放 | 离线重放输出成本—质量曲线；调参有数据依据 | ✅ 2026-08-27（P1.d）`POST/GET /api/routing/shadow` 采样双跑「路由选择 × 旗舰基线」（基线用 settings `routing.shadow_baseline` 钦定否则取能力档最高，采样率 `routing.shadow_ratio` 默认 0.10 可零成本关），FNV-1a 查询哈希防重，成本走 `priced_usage` 真源、结果落 `routing_calibration` 只导路由结果；`scripts/aiq_replay.py` 离线重放对比全弱基线/当前策略/全强基线三条成本—质量线，输出 AIQ（RouterBench 预算积分）与相对全强成本节省、质量缺失时从 `models`/`model_task_score` 回填并写库；冒烟 3 样本出 AIQ=0 且 95% 节省+调参建议 |
 
 **测试基建**：`router.rs` 已有 11 个单测（空候选/门槛/评分/回填链/pin/覆盖/band，2026-08-26）；`signals.rs`/`metadata.rs` 纯函数单测已补（2026-08-26，P0.g 7 个 + P0.e 6 个）。
 覆盖：空候选集、单模型、删主选后降级、阶梯价交叉点、预算各档、band 边界、reask 判定、保守期解除、
-健康状态机迁移、price drift 阈值。测试共 52 项全绿（2026-08-26）。
+健康状态机迁移、price drift 阈值、EWMA 信号累计 + 保守期解除、迁移幂等修 scale。测试共 **54** 项全绿（2026-08-27，P1.b/c/d 落地后）。
 > **v5 注记（2026-08-26，commit d6912b9）**：P0.e/g 落地后 **P0 阶段全部勾选完成**——
 > 新增模型由 `metadata::resolve_and_fill` 自动打标入保守期，不再需要人工填元数据；
 > 信号层 `extract` 读 settings KV 输出难度带/reask/LLM 判定，路由决策（plan）与信号规范均已就绪。
+> **v6 注记（2026-08-27，P1 阶段）**：**P1.a/b/c/d 全部落地并勾选完成**。
+> P1.a 用量落库（latency/request_id/逐角色）、P1.b 推荐分配（pinned_model 种子预填）、
+> P1.c 成效分（overlay 冷启动 + 在线 EWMA + 信号打点 + 保守期解除）、P1.d 影子评测 + AIQ 重放
+> 均已实现；EWMA 输入 σ 不 clamp、结果 clamp 到 [0,1]，杜绝「模型永远学不坏」。54 单测全绿。
+> 「影子样本成本降 ≥60%」属需真实数据的验收指标，P4 编排升级前可在现网采集 shadow 样本后复验。
 
 ---
 
