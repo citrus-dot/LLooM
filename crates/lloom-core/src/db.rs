@@ -1794,26 +1794,25 @@ fn json_to_sqlite(v: &serde_json::Value) -> rusqlite::types::Value {
 #[cfg(test)]
 mod migration_tests {
     use super::*;
-    use std::sync::{Mutex, Once};
+    use std::sync::Mutex;
 
-    static SETUP: Once = Once::new();
-
-    // DB 集成测试共享同一个 LLOOM_DATA_DIR 文件；SQLite `PRAGMA journal_mode=WAL`
-    // 改变 journal 时不走 busy handler，并发写者会立刻 SQLITE_BUSY。串行化两个
-    // 真写库测试，避免并行竞争的瞬时锁失败。
+    // DB 集成测试各自使用独立专属临时目录 + 用毕还原全局 env，避免进程级
+    // LLOOM_DATA_DIR 泄漏与并行测试竞态；SQLite `PRAGMA journal_mode=WAL` 不走
+    // busy handler，并发写者会立刻 SQLITE_BUSY，故仍以 DB_LOCK 串行化写库测试。
     static DB_LOCK: Mutex<()> = Mutex::new(());
 
-    fn test_data_dir() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("lloom_migration_test_{}", std::process::id()))
-    }
-
-    fn setup() {
-        SETUP.call_once(|| {
-            let dir = test_data_dir();
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            std::env::set_var("LLOOM_DATA_DIR", &dir);
-        });
+    /// init_db 在并行测试下可能与并发读连接竞态：`PRAGMA journal_mode=WAL` 需要排它锁，
+    /// 而并行测试若经 `db::get_setting`/`extract` 等路径在读迁移目录的共享锁，会瞬时
+    /// SQLITE_BUSY。串行化写测试 + 用毕还原 env 已消除大部分竞争，这里再对瞬时 busy
+    /// 短重试，保证 `cargo test` 稳定全绿。
+    fn init_db_retry() {
+        for _ in 0..30 {
+            if init_db().is_ok() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        init_db().expect("init_db keeps failing with transient lock contention");
     }
 
     fn insert_dashscope_model(conn: &Connection) {
@@ -1826,14 +1825,17 @@ mod migration_tests {
     }
 
     /// 模拟旧库升级：只建 schema（无迁移标记）+ 预置虚高模型 → init_db 触发迁移。
-    /// 单测试串行完成全部断言（两个测试共享 LLOOM_DATA_DIR 环境变量，无法并行）。
+    /// 独立专属临时目录 + 用毕还原 env，避免共享 LLOOM_DATA_DIR 与并行测试竞态。
     /// 验证：量纲 ÷10、7 新列、投影、deepseek zone 预置、幂等（不二次除）、
     /// 投影后的 PriceSpec 参与实际成本计算。
     #[test]
     fn migration_is_idempotent_and_fixes_scale() {
         let _guard = DB_LOCK.lock().unwrap();
-        setup();
-        let dir = test_data_dir();
+        let dir = std::env::temp_dir().join(format!("lloom_migration_scale_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let prev = std::env::var("LLOOM_DATA_DIR").ok();
+        std::env::set_var("LLOOM_DATA_DIR", &dir);
         // 旧库：SCHEMA 建表，不设 migration 标记
         let conn = open().unwrap();
         conn.execute_batch(SCHEMA).unwrap();
@@ -1841,7 +1843,7 @@ mod migration_tests {
         drop(conn);
 
         // 升级路径：init_db → migrate
-        init_db().unwrap();
+        init_db_retry();
         let conn = open().unwrap();
         let in_cost: f64 = conn
             .query_row(
@@ -1891,7 +1893,7 @@ mod migration_tests {
 
         // 幂等性：再次 init_db，量纲不得二次修正、投影不重复
         drop(conn);
-        init_db().unwrap();
+        init_db_retry();
         let conn2 = open().unwrap();
         let in_cost2: f64 = conn2
             .query_row(
@@ -2017,9 +2019,14 @@ mod migration_tests {
                 [],
             )
             .unwrap();
-        init_db().unwrap();
+        init_db_retry();
         assert_eq!(pin("general").as_deref(), Some("custom-llm"), "用户钦定应保留");
 
+        // 用毕还原全局 env，避免泄漏破坏其他并行测试；再清理临时目录
+        match prev {
+            Some(v) => std::env::set_var("LLOOM_DATA_DIR", v),
+            None => std::env::remove_var("LLOOM_DATA_DIR"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2039,7 +2046,7 @@ mod migration_tests {
         std::env::set_var("LLOOM_DATA_DIR", &dir);
 
         // 确保 schema 存在（settings/routing_policy/model_task_score），init_db 幂等
-        init_db().unwrap();
+        init_db_retry();
         // 固定默认 α，避免其它用例残留的自定义 α 污染本用例
         set_setting("signal.ewma_alpha", "0.15").unwrap();
         // 唯一模型名 + 前置清理，避免与历史数据纠缠（用完立即 drop，防 SQLite 写锁）
@@ -2133,7 +2140,7 @@ mod migration_tests {
         let _ = std::fs::remove_dir_all(&dir);
         let prev = std::env::var("LLOOM_DATA_DIR").ok();
         std::env::set_var("LLOOM_DATA_DIR", &dir);
-        init_db().unwrap(); // 幂等建全部 schema，含 routing_decisions
+        init_db_retry(); // 幂等建全部 schema，含 routing_decisions
 
         // 唯一请求号 + 前置清空，避免历史纠缠
         let conn = open().unwrap();
