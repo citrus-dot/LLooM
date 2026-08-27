@@ -1,7 +1,7 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-08-27** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：P1.a/b/c/d 落地；当前工作区为 **P2 定价刷新 + 定价页/徽标**（P2 阶段，待本阶段审查后统一推送）
+> 最新已提交：P2 定价刷新 + 定价页/徽标（694f0a9）；当前工作区为 **P3 健康感知/fallback/overhead**（待审查后统一推送）
 
 ---
 
@@ -40,6 +40,7 @@
 - **`probe.rs`**（b09d229 已提交）— 常开探针：ProbeBudget 预算状态机 + 探针循环
 - **`signals.rs`**（b09d229 起步，d6912b9 补全 P0.g）— 信号层：`prefix_stability` + `SignalSet`（困难度/难度带/reask/LLM 判定）
 - **`metadata.rs`**（d6912b9 已提交）— P0.e 模型元数据五级打标：`resolve_and_fill`（overlay > 启发式，供 `insert_model` 自动回填）
+- **`health.rs`**（P3，2026-08-27）— 健康状态机：滑窗 degraded/连续失败 down/熔断/成功恢复，`set_model_health` 持久化
 
 ---
 
@@ -65,7 +66,7 @@
 |---|---|---|---|---|
 | [`CONTEXT-PLAN.md`](./CONTEXT-PLAN.md) | 2026-08-24 | **已提交**（a2b8bb5）| 上下文优化：SQLite 对话存储、预算上下文、两层缓存、原子写、两阶段落盘 | Phase 1 + 部分 Phase 4 已落地（追加端点存在于 server.rs）|
 | [`PRICING-PLAN.md`](./PRICING-PLAN.md) | 2026-08-24 编写，持续更新 | **未提交**（工作区 M）| 定价表系统 PriceSpec（分项×时段×阶梯×来源）、pricing.rs 引擎、校准 job、探针系统 | 后端 PR-1~PR-7 已落地（未提交）；PR-6/7 前端定价页+探针视图已落地；**P2.a 定价刷新 + P2.c 缓存节省已追加落地**；PR-5/PR-8 待办 |
-| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4/v5 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/b/c/d/e/f/g 全部落地**（09480fa、8dddc59、50ec431、d6912b9）；P1.a/b/c/d 全部落地（P1 阶段完成）；**P2.a 定价刷新 + P2.c 定价页/徽标已落地**（P2 阶段完成） |
+| [`ROUTING-PLAN.md`](./ROUTING-PLAN.md) | v3（2026-08-24）+ v4–v7 注记 | **已提交** | 路由重构：消除硬编码、注册表驱动、信号—投影—决策管线、预算联动 | **P0.a/b/c/d/e/f/g 全部落地**（09480fa、8dddc59、50ec431、d6912b9）；P1.a/b/c/d 全部落地（P1 阶段完成）；**P2.a 定价刷新 + P2.c 定价页/徽标已落地**；**P3 健康感知 + fallback + overhead 已落地** |
 
 > 三份计划文档是详细设计与落地顺序的权威来源。本进度文档只做索引与高层同步，不重复其细节。
 
@@ -101,6 +102,15 @@
 - P1.c（工作区）：`metadata.rs::cold_start_quality(_in)` overlay 按 task_type 榜单折算；`db::upsert_model_task_score_signal` 在线 EWMA（α=`signal.ewma_alpha` 默认 0.15，输入 σ 不 clamp、结果 clamp [0,1]）+ 按信号自增 success/fail/escalation + `sample_count≥20` 解除保守期；server.rs chat 落 Success、orchestrate 按 task_done error 下发 Success/SubtaskFail（model/role≠unknown 才打点）；`QualitySignalKind`（models.rs）8 信号 σ 值
 - P1.d（工作区）：`server.rs` `POST/GET /api/routing/shadow`（采样 `routing.shadow_ratio` 默认 0.10、基线 `routing.shadow_baseline` 否则能力档最高、FNV-1a 哈希防重、成本走 `priced_usage` 真源、结果落 `routing_calibration`）+ `db::insert_routing_calibration/count_routing_calibration` + `config.rs::shadow_ratio`；`scripts/aiq_replay.py` 离线 AIQ 重放（三条线成本—质量、AIQ 预算积分、质量回填写库）
 - 冒烟：`cargo test` 54 全绿（新增 EWMA 累计+保守期解除、迁移幂等修 scale 单测）；AIQ 脚本 3 样本冒烟出 AIQ + 95% 节省 + 调参建议
+
+**2026-08-27 落地（ROUTING-PLAN P3 健康感知 + fallback + overhead；P3 阶段完成）**：
+- `health.rs`（新增）：纯 Rust 健康状态机——滑窗（默认 5 内 ≥2 失败 = degraded）、连续 ≥3 失败 = down、成功永远向 up 收敛（unknown→up/degraded→up/down→up）、熔断连续 ≥5 强制 down；阈值全走 settings `health.*` KV 可运行时调；**仅状态变化才 `set_model_health` 落库**（含 `health_checked_at`），非热路径写
+- db.rs：`set_model_health`（UPDATE models）+ `routing_overhead_report`（count/avg/P95/max/slow，`routing_decisions.routing_ms` 真源）
+- server.rs chat 故障转移：`chat_with_failover` 按 `primary + fallback_chain` 顺序重试——失败打健康哨点、跳升记 `Escalation` 成效信号、成功按实际响应模型（`used_model`）计价落库；orchestrate 按 `task_done` 成功/失败喂健康哨点（仅 model≠unknown）
+- server.rs 后台 `health_probe_loop`：每 `health.probe_sec`（默认 60s）对 down/degraded 模型发最小请求主动探测恢复 → 已挂载 `spawn_background_jobs`
+- `GET /api/routing/overhead`（?days=N，0 全部；>100ms 记 slow；`fast_path_healthy` 标注快路径健康度）
+- config.rs：`health_fail_window/degraded_fails/down_consecutive/circuit_threshold/probe_sec` 五键，默认 5/2/3/5/60
+- 冒烟：`cargo test` 65 全绿（+7 health 状态机 +1 overhead 聚合）；`cargo build` 无警告
 
 **2026-08-27 落地（ROUTING-PLAN P2 定价刷新 + WebUI；PR-6/7 前端；P2 阶段完成）**：
 - P2.a 定价刷新：`server.rs` `pricing_refresh_loop` 24h 后台 job（jsdelivr 主源 + ghproxy 回退，断网失败静默保留本地值）+ `POST /api/pricing/refresh`（手动触发）、`POST /api/pricing/specs/{provider}/{model}/accept`（采纳转 manual，此后不被覆盖）；`pricing.rs::parse_remote_prices` 纯函数解析（跳过非 provider/model 键、负价，离线单测）+ `db::refresh_price_spec`（COALESCE 保 cache_read，不覆盖 manual）
@@ -150,7 +160,8 @@
 - [x] ✅ **P1.c 成效分**（2026-08-27）
 - [x] ✅ **P1.d 影子评测 + AIQ 重放**（2026-08-27，热路径自动采样已接入）
 - [x] ✅ **P2.a 定价刷新 + P2.c 定价页/徽标**（2026-08-27）：24h 刷新 job + 手动触发 + 采纳转 manual；WebUI PricingPage（specs/徽标/改价/采纳/校准）；用量页缓存节省卡片 + 探针视图
-- [ ] 🔧 **P3 健康感知与故障转移**、**P4 编排升级**、**P5 预算联动**
+- [x] ✅ **P3 健康感知 + fallback + overhead**（2026-08-27）：`health.rs` 状态机（滑窗 degraded/连续失败 down/熔断/成功恢复）；chat `chat_with_failover` 按 fallback 链重试；后台 `health_probe_loop` 主动探测；`GET /api/routing/overhead`（count/avg/p95/max/slow）
+- [ ] 🔧 **P4 编排升级**、**P5 预算联动**
 
 ### 来自 CONTEXT-PLAN.md
 - [ ] ⚡ **Phase 2 上下文架构迁移**：前端只发 (conversation_id, query)，Rust 构建历史

@@ -1185,6 +1185,59 @@ pub fn update_routing_decision_outcome(id: i64, outcome: &str) -> Result<()> {
     Ok(())
 }
 
+/// P3：写入模型健康状态与检查时刻。仅状态变化由 `health.rs` 触发，非热路径。
+pub fn set_model_health(name: &str, state: &str) -> Result<()> {
+    let conn = open()?;
+    conn.execute(
+        "UPDATE models SET health_state = ?2, health_checked_at = CURRENT_TIMESTAMP WHERE name = ?1",
+        params![name, state],
+    )?;
+    Ok(())
+}
+
+/// P3：routing overhead 聚合报告（routing_decisions.routing_ms）。
+/// days=0 表示全部；返回 (条数, 均值ms, P95ms, maxms, 慢决策条数)。
+/// （快路径 >10ms / 全路径 >100ms 视为实现 bug 上报；阈值由调用方解释。）
+pub fn routing_overhead_report(days: i64) -> Result<(i64, f64, f64, f64, i64)> {
+    let conn = open()?;
+    let where_clause = if days > 0 {
+        format!("WHERE created_at >= datetime('now', '-{days} days') AND routing_ms IS NOT NULL")
+    } else {
+        "WHERE routing_ms IS NOT NULL".to_string()
+    };
+    let (count, avg, max): (i64, f64, f64) = conn.query_row(
+        &format!(
+            "SELECT COUNT(*), COALESCE(AVG(routing_ms),0), COALESCE(MAX(routing_ms),0)
+             FROM routing_decisions {where_clause}"
+        ),
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    // P95（近似）：取降序第 ceil(0.95*count) 个值
+    let p95: f64 = if count > 0 {
+        let nth = ((count as f64) * 0.95).ceil().max(1.0) as i64;
+        let idx = (nth - 1).max(0);
+        conn.query_row(
+            &format!(
+                "SELECT routing_ms FROM routing_decisions {where_clause}
+                 ORDER BY routing_ms DESC LIMIT 1 OFFSET ?1"
+            ),
+            params![idx],
+            |r| r.get::<_, f64>(0),
+        )
+        .unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    // 慢决策（>100ms）条数 —— 快路径超限的实现在调用方以断言/告警呈现
+    let slow: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM routing_decisions {where_clause} AND routing_ms > 100.0"),
+        [],
+        |r| r.get(0),
+    )?;
+    Ok((count, avg, p95, max, slow))
+}
+
 /// P1.d 影子评测记录：一条「路由选择 × 强模型基线」双跑结果，供离线 AIQ 重放。
 /// quality 两列留给裁判/离线脚本回填（开放式生成无结构化信号时不回填，判 NULL）。
 pub fn insert_routing_calibration(
@@ -1937,6 +1990,43 @@ mod migration_tests {
         assert_eq!(count_routing_calibration().unwrap(), 1, "影子样本数应为 1");
 
         // 还原全局 env，并按序清理锁（guard 兜底解锁）
+        match prev {
+            Some(v) => std::env::set_var("LLOOM_DATA_DIR", v),
+            None => std::env::remove_var("LLOOM_DATA_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P3：routing_overhead_report 聚合（count/avg/p95/max/slow），独立数据目录。
+    #[test]
+    fn routing_overhead_report_aggregates() {
+        let _guard = DB_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("lloom_oh_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let prev = std::env::var("LLOOM_DATA_DIR").ok();
+        std::env::set_var("LLOOM_DATA_DIR", &dir);
+        init_db().unwrap(); // 幂等建全部 schema，含 routing_decisions
+
+        // 唯一请求号 + 前置清空，避免历史纠缠
+        let conn = open().unwrap();
+        conn.execute("DELETE FROM routing_decisions", []).unwrap();
+        for (i, ms) in [2.0f64, 3.0, 4.0, 5.0, 6.0, 150.0].iter().enumerate() {
+            insert_routing_decision(
+                &format!("oh-req-{}", i), "chat", "medium", "", "", "m", "", *ms,
+            )
+            .unwrap_or_else(|e| panic!("insert failed: {e}"));
+        }
+        drop(conn);
+
+        let (count, avg, p95, max, slow) = routing_overhead_report(0).unwrap();
+        assert_eq!(count, 6, "条数=6");
+        let expected_avg = (2.0 + 3.0 + 4.0 + 5.0 + 6.0 + 150.0) / 6.0;
+        assert!((avg - expected_avg).abs() < 1e-9, "avg={avg}");
+        assert!((max - 150.0).abs() < 1e-9, "max={max}");
+        assert_eq!(slow, 1, "仅 150>100 记慢");
+        // P95：降序 [150,6,5,4,3,2]，第 ceil(0.95*6)=6 个 = 2.0
+        assert!((p95 - 2.0).abs() < 1e-9, "p95={p95}");
+
         match prev {
             Some(v) => std::env::set_var("LLOOM_DATA_DIR", v),
             None => std::env::remove_var("LLOOM_DATA_DIR"),

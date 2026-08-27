@@ -771,14 +771,14 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 | 6 | P0.f+g 消除 Python 真源 + 信号正规化 | `ai_service.py` 无模型名字面量；signals 可配置有单测 | ✅ 2026-08-26 P0.f（50ec431）删 `TASK_MODEL_PREFERENCE`/`DECOMPOSER_PREFERENCE`/`_select_model`，Python 读 `assignments` 兜底 `models[0]`；P0.g（d6912b9）`signals.rs` 补 `SignalSet`/`extract`/band/reask/LLM 判定，阈值走 settings KV；7 单测过 |
 | 7 | P1.b/c 成效分 + 推荐分配 | 影子评测下内部分解路径成本降 ≥60%，质量无显著回退 | ✅ 2026-08-27（P1.b/c）P1.b `migrate_db` 按 §P1.b 表为新库预置 `pinned_model` 推荐主选（INSERT OR IGNORE）+ 既有库仅回填 NULL（settings 标记 `migration_policy_v1_p1b`，绝不覆盖用户钦定）；P1.c `metadata.rs::cold_start_quality` overlay 按 task_type 榜单折算分 + `db::upsert_model_task_score_signal` 线上 EWMA（α 读 `signal.ewma_alpha` 默认 0.15，输入 σ 不 clamp、结果 clamp）并按信号自增 success/fail/escalation、`sample_count≥20` 解除保守期；server.rs chat 落 Success、orchestrate 按 task_done error 落 Success/SubtaskFail（model/role≠unknown 才打点）；≥60% 指标待影子真实样本验收 |
 | 8 | P2 定价刷新 + WebUI 徽标 | 手动刷新更新非 manual 来源；断网静默保持本地值 | ✅ 2026-08-27（P2）P2.a `server.rs` `pricing_refresh_loop` 24h 后台 job（jsdelivr 主源 + ghproxy 回退，断网失败静默保留本地值）+ `POST /api/pricing/refresh`（手动触发）、`POST /api/pricing/specs/{provider}/{model}/accept`（采纳转 manual，此后不被覆盖）；`pricing.rs::parse_remote_prices` 纯函数解析（跳过非 provider/model 键、负价），`db::refresh_price_spec`（COALESCE 保 cache_read，不覆盖 manual）；P2.c WebUI 新增 **PricingPage**（`price_source` 徽标 manual/overlay/litellm_remote…、`price_updated_at`、`price_stale` 黄点、手工改价强制转 manual、采纳建议价）+ 用量页「缓存为您节省 ¥X」卡片与「缓存节省」列（`cache_saved_cost` 聚合，CNY 展示）；PR-6 定价页 + PR-7 探针视图（`GET /api/probe/stats`）一并落地；57 单测 + tsc + vite build 全过 |
-| 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms | ⏳ 待办（fallback_chain 已产出，未接重试）|
+| 9 | P3 健康 + fallback + overhead | 停 Ollama/错 key→自动降级；routing_ms 快路径 <10ms | ✅ 2026-08-27（P3）新增 `health.rs` 状态机：滑窗（默认 5 内 ≥2 失败 degraded）/连续 ≥3 失败 down/成功永远向 up 收敛/熔断连续 ≥5 强制 down（阈值全走 settings `health.*` KV），状态变化才 `set_model_health` 落库 + `health_checked_at`；chat 路径 `chat_with_failover` 按 `primary + fallback_chain` 顺序重试（失败打健康哨点、跳升记 Escalation 成效信号、成功按实际响应模型计价），orchestrate 按 `task_done` 成功/失败喂哨点；后台 `health_probe_loop` 每 `health.probe_sec`（默认 60s）对 down/degraded 模型发最小请求主动探测恢复；`GET /api/routing/overhead`（count/avg/p95/max/slow，>100ms 记慢，`routing_decisions.routing_ms` 真源）；65 单测全绿（+7 health 状态机 +1 overhead 聚合）|
 | 10 | P4 编排升级 | 子任务失败自动降级重试成功；escalation 任务成本再降 ≥30%（相对序 7） | ⏳ 待办 |
 | 11 | P5 预算联动 | 预算近耗尽→逐档降级至只走本地 | ⏳ 待办 |
 | 12 | P1.d AIQ 重放 | 离线重放输出成本—质量曲线；调参有数据依据 | ✅ 2026-08-27（P1.d）`POST/GET /api/routing/shadow` 采样双跑「路由选择 × 旗舰基线」（基线用 settings `routing.shadow_baseline` 钦定否则取能力档最高，采样率 `routing.shadow_ratio` 默认 0.10 可零成本关），FNV-1a 查询哈希防重，成本走 `priced_usage` 真源、结果落 `routing_calibration` 只导路由结果；`scripts/aiq_replay.py` 离线重放对比全弱基线/当前策略/全强基线三条成本—质量线，输出 AIQ（RouterBench 预算积分）与相对全强成本节省、质量缺失时从 `models`/`model_task_score` 回填并写库；**已在 chat/orchestrate 请求热路径按 `shadow_ratio` 概率接入 `maybe_shadow_sample` 后台自动采样**（抽取复用 `run_shadow_pair`，tokio spawn 不阻塞响应/不改返回，`ratio=0` 零成本关）；冒烟 3 样本出 AIQ=0 且 95% 节省+调参建议 |
 
 **测试基建**：`router.rs` 已有 11 个单测（空候选/门槛/评分/回填链/pin/覆盖/band，2026-08-26）；`signals.rs`/`metadata.rs` 纯函数单测已补（2026-08-26，P0.g 7 个 + P0.e 6 个）。
 覆盖：空候选集、单模型、删主选后降级、阶梯价交叉点、预算各档、band 边界、reask 判定、保守期解除、
-健康状态机迁移、price drift 阈值、EWMA 信号累计 + 保守期解除、迁移幂等修 scale。测试共 **57** 项全绿（2026-08-27，P2 落地后）。
+健康状态机迁移、price drift 阈值、EWMA 信号累计 + 保守期解除、迁移幂等修 scale。测试共 **65** 项全绿（2026-08-27，P3 落地后）。
 > **v5 注记（2026-08-26，commit d6912b9）**：P0.e/g 落地后 **P0 阶段全部勾选完成**——
 > 新增模型由 `metadata::resolve_and_fill` 自动打标入保守期，不再需要人工填元数据；
 > 信号层 `extract` 读 settings KV 输出难度带/reask/LLM 判定，路由决策（plan）与信号规范均已就绪。
@@ -787,6 +787,10 @@ tiktoken 算输入（`tiktoken_cache/` 已有），输出用该 task_type 历史
 > P1.c 成效分（overlay 冷启动 + 在线 EWMA + 信号打点 + 保守期解除）、P1.d 影子评测 + AIQ 重放
 > 均已实现；EWMA 输入 σ 不 clamp、结果 clamp 到 [0,1]，杜绝「模型永远学不坏」。54 单测全绿。
 > 「影子样本成本降 ≥60%」属需真实数据的验收指标，P4 编排升级前可在现网采集 shadow 样本后复验。
+> **v7 注记（2026-08-27，P3 阶段）**：**P3 健康感知 + fallback 故障转移 + overhead 报告已落地并勾选完成**。
+> P3 新增 `health.rs` 状态机（滑窗 degraded/连续失败 down/熔断+成功恢复）、`chat_with_failover` 主链+fallback 重试、
+> 后台 `health_probe_loop` 主动探测、`/api/routing/overhead` 端点；65 单测全绿。`plan()` 的 `health_state=="down"` 硬门
+> 已在 P0.d 产出、P3 补全了状态写入与持久化回路。下一阶段 P4 编排升级（子任务失败降级重试）需等减法合并后启动。
 
 ---
 

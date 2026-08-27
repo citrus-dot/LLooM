@@ -69,6 +69,60 @@ pub fn shadow_ratio() -> f64 {
         .clamp(0.0, 1.0)
 }
 
+// ── P3 健康感知（ROUTING-PLAN §P3）──
+// 阈值全部走 settings KV，可在设置页运行时调整；默认值对应「滑窗 5 内 ≥2 失败降级、
+// 连续 3 失败宕机、连续 5 失败熔断」的自适应口径。
+
+/// 滑窗大小（保留最近 n 次 outcomes）。默认 5。
+pub fn health_fail_window() -> i64 {
+    crate::db::get_setting("health.fail_window")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(5)
+        .clamp(1, 1000)
+}
+
+/// 滑窗内达到该失败数 → degraded。默认 2。
+pub fn health_degraded_fails() -> u32 {
+    crate::db::get_setting("health.degraded_fails")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(2)
+        .clamp(1, 1000)
+}
+
+/// 连续失败达该数 → down（状态机转移）。默认 3。
+pub fn health_down_consecutive() -> u32 {
+    crate::db::get_setting("health.down_consecutive")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(3)
+        .clamp(1, 10000)
+}
+
+/// 熔断阈值：连续失败达该数强制 down（安全网，通常 ≥ down_consecutive）。默认 5。
+pub fn health_circuit_threshold() -> u32 {
+    crate::db::get_setting("health.circuit_threshold")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(5)
+        .clamp(1, 10000)
+}
+
+/// 主动探测间隔（秒）：对 `down`/`degraded` 模型发最小请求试探。默认 60。
+pub fn health_probe_sec() -> u64 {
+    crate::db::get_setting("health.probe_sec")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60)
+        .clamp(5, 86400)
+}
+
 pub fn env_file_path() -> PathBuf {
     install_dir().join(".env")
 }

@@ -360,6 +360,52 @@ async fn update_conversation_message(
 
 // ── Chat / Orchestrate (SSE) ──
 
+/// P3：按 `primary` + `fallback_chain` 顺序故障转移。成功即返回，对失败模型打健康哨点；
+/// 只有实际「跳升」到下一个候选时才给失败模型记 Escalation 成效信号（降级已有代价）。
+async fn chat_with_failover(
+    models: &[Model],
+    task_type: &str,
+    primary: &str,
+    fallback_chain: &[String],
+    messages: &[Value],
+) -> Result<(ai_client::ChatResult, String)> {
+    let mut try_names: Vec<String> = Vec::with_capacity(1 + fallback_chain.len());
+    try_names.push(primary.to_string());
+    try_names.extend(fallback_chain.iter().cloned());
+    try_names.dedup();
+
+    let mut first_err: Option<String> = None;
+    let mut idx = 0usize;
+    while idx < try_names.len() {
+        let name = &try_names[idx];
+        let Some(m) = models.iter().find(|m| m.name == *name) else {
+            idx += 1;
+            continue;
+        };
+        let spec = ModelSpec::from(m);
+        match ai_client::chat(&spec, messages, 500, 0.3).await {
+            Ok(res) => {
+                crate::health::record_outcome(name, true);
+                // 跳升到非主选：给所有先前失败模型记一次 escalation（副作用小，但真实代价信号）
+                for failed in try_names.iter().take(idx) {
+                    if failed != name {
+                        let _ = db::upsert_model_task_score_signal(failed, task_type, QualitySignalKind::Escalation);
+                    }
+                }
+                return Ok((res, name.clone()));
+            }
+            Err(e) => {
+                crate::health::record_outcome(name, false);
+                if first_err.is_none() {
+                    first_err = Some(e.to_string());
+                }
+                idx += 1;
+            }
+        }
+    }
+    Err(AppError::AiService(first_err.unwrap_or_else(|| "所有候选模型均调用失败".into())))
+}
+
 async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
     let user_text = security::extract_user_text(&req.messages);
     let sec = security::check(&user_text, true, true);
@@ -404,9 +450,8 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
 
     // P0.d：路由结果必须落在注册表内；direct 未注册 / plan 无候选 → 明确报错，
     // 不再伪造空 spec 继续调用。
-    let routed_model: Option<&Model> = models.iter().find(|m| m.name == routing.model);
-    let (provider, spec): (&str, ModelSpec) = match routed_model {
-        Some(m) => (m.provider.as_str(), ModelSpec::from(m)),
+    let primary_provider: &str = match models.iter().find(|m| m.name == routing.model) {
+        Some(m) => m.provider.as_str(),
         None => {
             let detail = if let Some(d) = routing.method.strip_prefix("plan_error:") {
                 format!("路由失败：{d}")
@@ -454,20 +499,34 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
         })
     );
 
-    // Direct async AI call (reqwest is async; safe on the tokio executor)
+    // P3：按 primary + fallback_chain 故障转移（失败自动打健康哨点并跳升重试）
     let chat_start = std::time::Instant::now();
-    let tail = match ai_client::chat(&spec, &processed_messages, 500, 0.3).await {
-        Ok(res) => {
+    let tail = match chat_with_failover(
+        &models,
+        &routing_task_type,
+        &routing.model,
+        &routing.fallback_chain,
+        &processed_messages,
+    )
+    .await
+    {
+        Ok((res, used_model)) => {
             if decision_id > 0 {
                 let _ = db::update_routing_decision_outcome(decision_id, "success");
             }
+            // 实际响应模型的 provider 可能因 fallback 与主选不同（逐模型定位真源）
+            let provider = models
+                .iter()
+                .find(|m| m.name == used_model)
+                .map(|m| m.provider.as_str())
+                .unwrap_or(primary_provider);
             // PRICING-PLAN §4.2/§6.1：Rust 单一计价真源，按真实 usage 分项计算并落库。
             // （PR-5 落地前 est_cost 传 0；task_type 用路由分类结果）
             // P1.a：只记成功路径；失败/重试走 routing_decisions.outcome。
             let latency_ms = chat_start.elapsed().as_secs_f64() * 1000.0;
-            let (act_cost, zm) = priced_usage(provider, &res.model, &res.usage);
+            let (act_cost, zm) = priced_usage(provider, &used_model, &res.usage);
             let _ = db::insert_usage(
-                &res.model,
+                &used_model,
                 "default",
                 res.usage.prompt_tokens,
                 res.usage.completion_tokens,
@@ -488,7 +547,7 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
                 }),
             );
             // P1.c：正常完成信号 → 该 模型×任务 的 ewma_quality 上修（+0.7）
-            db::upsert_model_task_score_signal(&res.model, &routing_task_type, QualitySignalKind::Success)
+            db::upsert_model_task_score_signal(&used_model, &routing_task_type, QualitySignalKind::Success)
                 .ok();
             // P1.d：按 shadow_ratio 概率后台采样双跑，积累 AIQ 成本—质量样本（不改返回）。
             maybe_shadow_sample(models.clone(), routing_task_type.clone(), user_text.clone());
@@ -696,6 +755,11 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                         cache_saved_cost,
                     }),
                 );
+                // P3：按 task_done 成功/失败喂健康哨点（模型可达性，无 role 归属冲突）
+                if model != "unknown" {
+                    let ok = obj.get("error").and_then(|v| v.as_str()).is_none_or(|s| s.is_empty());
+                    crate::health::record_outcome(&model, ok);
+                }
                 // P1.c：按 task_done 是否带 error 下发成功/失败成效信号（skill/model-任务 打点）。
                 // 模型解不出时（unknown）无真实归属，跳过打点避免误伤。
                 if model != "unknown" && role != "unknown" {
@@ -972,6 +1036,7 @@ pub fn spawn_background_jobs() -> Vec<tokio::task::JoinHandle<()>> {
         tokio::spawn(calibration_job()),
         tokio::spawn(crate::probe::probe_loop()),
         tokio::spawn(pricing_refresh_loop()),
+        tokio::spawn(health_probe_loop()), // P3 主动探测
     ]
 }
 
@@ -1215,6 +1280,75 @@ async fn probe_budget_update(Json(body): Json<ProbeBudgetBody>) -> Json<Value> {
     Json(json!({ "ok": true, "monthly_limit_usd": crate::probe::budget().monthly_limit_usd() }))
 }
 
+/// P3：routing overhead 报告——快速路径 time-to-decision 的预算与实现健康度。
+/// 快路径 >10ms / 全路径 >100ms 视为实现 bug（此处标注 slow 供告警/CI 断言）。
+#[derive(Deserialize)]
+struct OverheadQuery {
+    days: Option<i64>,
+}
+async fn routing_overhead(Query(q): Query<OverheadQuery>) -> Result<Json<Value>> {
+    let days = q.days.unwrap_or(0);
+    if days < 0 || days > 90 {
+        return Err(AppError::InvalidRequest("days 需在 [0,90]".into()));
+    }
+    let (count, avg, p95, max, slow) = db::routing_overhead_report(days)?;
+    // 纯规则型快路径（method != LLM search）应 < 10ms；含 LLM 分类的全路径 < 100ms。
+    let fast_path_healthy = avg < 10.0; // 全量均值近似快路径，详细按 method 留后续拆
+    Ok(Json(json!({
+        "days": days,
+        "count": count,
+        "avg_ms": avg,
+        "p95_ms": p95,
+        "max_ms": max,
+        "slow_count": slow,
+        "fast_path_healthy": fast_path_healthy,
+        "note": "快路径>10ms / 全路径>100ms 视为实现 bug",
+    })))
+}
+
+/// P3：主动探测——对 `down`/`degraded` 模型每 `health.probe_sec` 发最小请求试探恢复。
+/// 探针成功 → `down`→`up`（状态机驱动），失败保持，不阻塞主流程。
+async fn health_probe_loop() {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(config::health_probe_sec()));
+    ticker.tick().await; // 启动后首个周期才执行
+    loop {
+        ticker.tick().await;
+        // 重新读间隔（运行时调整生效）
+        let secs = config::health_probe_sec();
+        if secs != ticker.period().as_secs() {
+            ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
+            ticker.tick().await;
+        }
+        probe_down_models().await;
+    }
+}
+
+async fn probe_down_models() {
+    let models = match db::list_models(true) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[health] list_models failed: {e}");
+            return;
+        }
+    };
+    for m in models.iter().filter(|m| m.health_state == "down" || m.health_state == "degraded") {
+        // 最小试探：1 token、低温度、仅确认可达（不产生有意义的答复）。
+        let spec = ai_client::ModelSpec::from(m);
+        let probe_msg = serde_json::json!([{
+            "role": "user",
+            "content": "ping"
+        }]);
+        let ok = match ai_client::chat(&spec, &[probe_msg], 1, 0.0).await {
+            Ok(_) => true,
+            Err(_) => false,
+        };
+        let state = crate::health::record_outcome(&m.name, ok);
+        if ok {
+            eprintln!("[health] probe recovered {} → {state}", m.name);
+        }
+    }
+}
+
 // ── Router ──
 
 pub fn build_router(state: AppState) -> Router {
@@ -1257,6 +1391,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/orchestrate/stream", post(orchestrate_stream))
         // P1.d 影子评测 + AIQ 重放数据源
         .route("/api/routing/shadow", post(routing_shadow).get(routing_shadow_status))
+        .route("/api/routing/overhead", get(routing_overhead))
         // Services (process management)
         .route("/api/services/status", get(services_status))
         .route("/api/services/{name}/start", post(service_start))
