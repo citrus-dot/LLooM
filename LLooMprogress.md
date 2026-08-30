@@ -1,7 +1,8 @@
 # LLooM v2 项目进度
 
-> 最后更新：**2026-08-27** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：**CONTEXT-PLAN 2–5 审计收尾**（本阶段：确认已落地 + 补 conversation 层 5 守护单测）；此前 PR-8 峰谷调度、P5 预算驱动、P4 编排智能升级（含 SCHEMA 修复）已提交
+> 最后更新：**2026-08-29** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
+> 最新已提交：**CONTEXT-PLAN 2–5 审计收尾**（488d156；内核 P0–P5 / PR-1~8 / Phase 1–5 全部完结）
+> **下一阶段权威计划：[`NEXT-PLAN.md`](./NEXT-PLAN.md)**（N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2）
 
 ---
 
@@ -185,10 +186,16 @@
 - [x] ✅ **Phase 4 缓存增强**：L1 精确缓存（SQLite `sha256(model|system|fingerprint|q)`）+ 上下文无关判别器（`_is_context_free` 启发式）+ `SemanticCache`/`ExactCache` 单例 + 5min 淘汰线程（TTL+LRU `LLOOM_CACHE_MAX_ENTRIES`）+ UsagePage 缓存节省卡
 - [x] ✅ **Phase 5 供应商前缀缓存（代码侧）**：`build_context` 固定 `[system][?summary][kept]` 前缀 + summary 块状更新，已为 DashScope 前缀缓存铺路；**账单侧命中核对留待办**（需 DashScope key）
 
+### 下一阶段（权威计划：[NEXT-PLAN.md](./NEXT-PLAN.md)，2026-08-29 起）
+- [ ] **N1 OpenAI 兼容代理**（本迭代主攻）：`/v1/chat/completions`（流/非流）+ `/v1/models` + Bearer 鉴权（`LLOOM_PROXY_TOKEN`）；**含 O2 收尾**（默认绑 `127.0.0.1`，`LLOOM_BIND` 可覆盖）
+- [ ] **N2 闭环评估**：AIQ 报告周期 job → `GET /api/routing/review` → WebUI「路由体检」卡片 → 一键采纳回写 `routing_policy`（Rust 侧网格搜索，单一真源）
+- [ ] **N3 信任与收尾**：a) O6 子任务并行（`asyncio.gather`）b) `/metrics` Prometheus 导出 c) 账单对账脚本（**阻塞：需真实账单导出**，脚本先行）
+- [ ] **搁置项·前置已就绪可解锁**：PRICING-PLAN §5.5 **batch 通道**（`batch_multiplier` 已预留 schema，前置 PR-8 峰谷调度已落地，远期实现）；N1 可选 `api_source` 列区分代理流量
+
 ### 历史遗留（LLooMprogress 原 TODO）
-- [ ] 🔧 **O2**：`main.rs` 绑定 `0.0.0.0`，建议改 `127.0.0.1`（本地工具；涉及局域网访问，需确认后再改）
+- [x] ✂️ **O2 绑定收窄**：已归并进 NEXT-PLAN **N1 配套收尾**（不再单列）
 - [ ] ⚡ **O5 复杂判定调优**：多对象比较检测 + 多模型轮询分配已落地，判定边界/过度触发仍需真实语料打磨
-- [ ] ⚡ **O6 子任务并行**：无依赖子任务改并行提速
+- [x] ✂️ **O6 子任务并行**：已归并进 NEXT-PLAN **N3.a**
 - [ ] 🔧 多模型拆分需配置「可用模型 + 有效 Key」才真正生效
 - [ ] 🔧 思考过程深度展示（可选）
 
@@ -246,12 +253,13 @@
 
 | 文件 | 用途 | 同步状态 |
 |---|---|---|
-| `LLooMprogress.md`（本文件）| 项目总进度、决策、待办、约束、文档索引 | 本次大幅更新至 2026-08-27，已同步至 08a1b50（P5）|
-| `ARCHITECTURE.md` | 分层架构、端点、数据流、技术栈 | 已补新模块/新路由（本次）|
-| `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）| 已补新模块/新路由（本次）|
-| `CONTEXT-PLAN.md` | 上下文优化方案（已落地部分）| 已提交，与 a2b8bb5 一致 |
-| `PRICING-PLAN.md` | 定价表系统详细设计与落地 | 已提交（694f0a9 等），P2.a/P2.c 已落地 |
-| `ROUTING-PLAN.md` | 路由重构方案（v3 + 注记至 P5）| 已提交，P0–P5 阶段全部落地状态已更新 |
+| `LLooMprogress.md`（本文件）| 项目总进度、决策、待办、约束、文档索引 | 更新至 2026-08-29，同步至 488d156 |
+| **`NEXT-PLAN.md`** | **下一阶段权威计划**：N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2 | 2026-08-29 纳入（本次提交）|
+| `ARCHITECTURE.md` | 分层架构、端点、数据流、技术栈 | 已同步至 488d156 |
+| `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）| 已同步至 488d156 |
+| `CONTEXT-PLAN.md` | 上下文优化方案（Phase 1–5 已全部落地）| 已提交，与 488d156 一致 |
+| `PRICING-PLAN.md` | 定价表系统详细设计与落地（PR-1~8 全部落地）| 已提交；§5.5 batch 通道为远期搁置项 |
+| `ROUTING-PLAN.md` | 路由重构方案（v3 + 注记至 P5，P0–P5 全部落地）| 已提交；遗留 3 个待真实样本复验的验收指标 |
 | `ROUTING-PLAN.md` 引用的外部研究 | Switchyard / vLLM Semantic Router / Router-R1 等 | 设计借鉴，不引入依赖 |
 
-> **接手检查清单**：① 读 CONTEXT/PRICING/ROUTING-PLAN 三份；② **P0–P5、PRICING-PLAN PR-1~PR-8、CONTEXT-PLAN Phase 1–5 已全部完成**，下一优先项见下方**待办/后端phase 5 账单核对（需 DashScope key）、O6 子任务并行、前缀缓存深挖**等（见规划交接）。每次 `cargo build`/`cargo test` 全绿再提交。
+> **接手检查清单**：① **先读 `NEXT-PLAN.md`**（下一阶段权威计划），再读 CONTEXT/PRICING/ROUTING-PLAN 三份（均已完结，作背景）；② 内核 P0–P5、PR-1~8、Phase 1–5 已全部完成；③ 下一优先项 = **N1 OpenAI 兼容代理**（含 O2 收尾）→ N2 → N3；搁置项与决策门见 NEXT-PLAN §五与本文待办区。每次 `cargo build`/`cargo test` 全绿 → 用户审查 → 才 push。
