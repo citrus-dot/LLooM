@@ -1,8 +1,9 @@
 # LLooM v2 项目进度
 
-> 最后更新：**2026-08-29** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
+> 最后更新：**2026-08-31** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
 > 最新已提交：**CONTEXT-PLAN 2–5 审计收尾**（488d156；内核 P0–P5 / PR-1~8 / Phase 1–5 全部完结）
 > **下一阶段权威计划：[`NEXT-PLAN.md`](./NEXT-PLAN.md)**（N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2）
+> **待办台账**：主线见上方「下一阶段」；**搁置项（B 类 14 条）/ 独立小项（C 类 7 条）见 [六、待办事项](#六待办事项todo) 末尾两张台账表**
 
 ---
 
@@ -190,14 +191,49 @@
 - [ ] **N1 OpenAI 兼容代理**（本迭代主攻）：`/v1/chat/completions`（流/非流）+ `/v1/models` + Bearer 鉴权（`LLOOM_PROXY_TOKEN`）；**含 O2 收尾**（默认绑 `127.0.0.1`，`LLOOM_BIND` 可覆盖）
 - [ ] **N2 闭环评估**：AIQ 报告周期 job → `GET /api/routing/review` → WebUI「路由体检」卡片 → 一键采纳回写 `routing_policy`（Rust 侧网格搜索，单一真源）
 - [ ] **N3 信任与收尾**：a) O6 子任务并行（`asyncio.gather`）b) `/metrics` Prometheus 导出 c) 账单对账脚本（**阻塞：需真实账单导出**，脚本先行）
-- [ ] **搁置项·前置已就绪可解锁**：PRICING-PLAN §5.5 **batch 通道**（`batch_multiplier` 已预留 schema，前置 PR-8 峰谷调度已落地，远期实现）；N1 可选 `api_source` 列区分代理流量
 
 ### 历史遗留（LLooMprogress 原 TODO）
 - [x] ✂️ **O2 绑定收窄**：已归并进 NEXT-PLAN **N1 配套收尾**（不再单列）
-- [ ] ⚡ **O5 复杂判定调优**：多对象比较检测 + 多模型轮询分配已落地，判定边界/过度触发仍需真实语料打磨
 - [x] ✂️ **O6 子任务并行**：已归并进 NEXT-PLAN **N3.a**
-- [ ] 🔧 多模型拆分需配置「可用模型 + 有效 Key」才真正生效
-- [ ] 🔧 思考过程深度展示（可选）
+- [ ] ⚡ **O5 复杂判定调优** → 已收编进下方 **C 类台账**（需标注语料）
+- [ ] 🔧 多模型拆分需配置「可用模型 + 有效 Key」才真正生效 → 见 **C 类台账**
+- [ ] 🔧 思考过程深度展示（可选）→ 见 **C 类台账**
+
+### 搁置项台账（B 类：条件触发，未触发不主动开工）
+
+> 原则：每条只记「名称 + 解锁条件 + 权威落点引用」，**正文与实现细节仍留在原计划文档**，此处不复制内容，避免第二真源。
+> 状态图例：`🔓` 前置已就绪可随时做 · `⏳` 阻塞中 · `🕐` 待触发/待数据 · `🚫` 现阶段明确不做
+
+| # | 搁置项 | 解锁条件（触发即做）| 权威落点 | 状态 |
+|---|---|---|---|---|
+| B1 | **batch 通道**（百炼 Batch 5 折，无缓存折扣、非实时）| ✅ **前置已全部就绪**（schema 预留 `batch_multiplier`，PR-8 峰谷调度已落地）；属「省钱」非「提能力」，建议排 N1 之后才有量可省 | `PRICING-PLAN.md:592` §5.5（schema 预留 `:170`）| 🔓 |
+| B2 | **账单对账**（N3.c）| 需 DashScope 真实账单导出（等 key / 账期）；脚本可先行 | `NEXT-PLAN.md:69` | ⏳ |
+| B3 | **G1 多租户** | 出现家庭之外的固定用户 → 触发则 SQLite 迁 PG + 鉴权/配额层（**架构级分叉，需单独立项**）| `NEXT-PLAN.md:77` | 🕐 |
+| B4 | **G2 MCP 接入** | 开始做 Agent 运行时 / 有外部智能体要消费 LLooM；作 server（暴露路由/缓存/定价为 MCP 工具）与作 client（编排消费 MCP 工具）**先后需定** | `NEXT-PLAN.md:78` | 🕐 |
+| B5 | **编排状态收归 Rust**（暂停/恢复/人工介入）| 出现该需求（与 G2 相关）；当前无此需求，B 方案够用 | `ROUTING-PLAN.md:711`、`NEXT-PLAN.md:84` | 🕐 |
+| B6 | function calling / tools、多模态、多 key 分租户 | **G1 之后**才展开 | `NEXT-PLAN.md:41` | 🚫 |
+| B7 | **验收① 阶梯价交叉单测** | 需真实阶梯价 spec 数据（现 spec 为平价，无真实阶梯）| `ROUTING-PLAN.md:814`（序 4）| 🕐 |
+| B8 | **验收② 影子样本成本降 ≥60%** | 需影子真实样本（随 N2 / N1 接入后现网流量自然达成）| `ROUTING-PLAN.md:817`（序 7）+ 注记 `:834` | 🕐 |
+| B9 | **验收③ escalation 再降 ≥30%** | 同 B8，需影子真实样本 | `ROUTING-PLAN.md:820`（序 10）+ 注记 `:848` | 🕐 |
+| B10 | **Router-R1 式 RL 路由** | 影子数据达**千级样本**再评估；当前「描述符评分 + EWMA + 影子评测」已覆盖其核心收益 | `ROUTING-PLAN.md:863`（风险注记 8）| 🕐 |
+| B11 | **Switchyard 引入** | 等其 **v1.0**（v0.2.0 前 API 破坏性变更）且走 libsy 库路径；当前只借鉴设计 | `ROUTING-PLAN.md:857`（风险注记 3）| 🕐 |
+| B12 | **BEST-Route 并行采样**（低置信请求并行采两轻量档 + 裁决）| 远期，待级联/裁判机制成熟 | `ROUTING-PLAN.md:213` | 🕐 |
+| B13 | **OpenRouter `usage.cost` 对账源** | 未来对账增强 | `ROUTING-PLAN.md:202` | 🕐 |
+| B14 | **L3 关键事实抽取**（摘要之上抽实体/偏好/约束）| 远期为超长项目型对话准备；L2 已落地，按需再加 | `CONTEXT-PLAN.md:126` | 🕐 |
+
+### 独立小项台账（C 类：无前置依赖，可随时插队）
+
+| # | 小项 | 完成路径（要点）| 权威落点 | 代价 |
+|---|---|---|---|---|
+| C1 | **思考过程深度展示** ⭐ 推荐先做 | `reasoning_tokens` 已落库（`db.rs:218` 幂等 ALTER、`:693`/`:734` 落库、`:1034` UsageExtra），`reasoning_cost` 见 `db.rs:119`；**只差三步**：AI 服务透传 `reasoning_content` → SSE 新事件 → WebUI 折叠展示 | `db.rs:218`、`PRICING-PLAN.md` 校准节 | **最低**（纯透传 + 前端）|
+| C2 | **est_input_cost 分列**（精确输入侧对账）| `db.rs` 幂等 ALTER 列表加两列（迁移框架已支持），对账从「总额口径」升级为「输入侧分项」| `PRICING-PLAN.md:36` | 低 |
+| C3 | **`api_source` 列**（区分代理流量）| 幂等加列，默认 `'webui'`；建议 **N1 时顺手做** | `NEXT-PLAN.md:34` | 低（随 N1）|
+| C4 | **O5 复杂判定调优** | ⚠️ **先统一入口**：现 `router.rs:86 is_complex`（正则）与 `signals.rs:234 complexity_score`（评分，`:322` 调用）**两处判定并存**，须合并后再调阈值；且需 50–100 条标注语料，否则是盲调 | `router.rs:86`、`signals.rs:234` | 中（**阻塞在语料**）|
+| C5 | 多模型拆分真正生效 | **非开发项（无代码改动）**：需在设置页配置「可用模型 + 有效 Key」才生效，属配置引导 | — | 配置 |
+| C6 | EWMA α 灵敏度调整 | 仅当出现**日级调价**时（当前 α=0.15 ≈ 10 天半衰，对周级调价够用）| `PRICING-PLAN.md:931` | 条件触发，**建议不动** |
+| C7 | 多时区 chrono | 仅当需多时区；当前纯标准库（+8 偏移 + Sakamoto + Hinnant）是**有意规避** crates.io 拉取风险 | `PRICING-PLAN.md:34` | 条件触发，**建议不动** |
+
+> **C 类建议顺序**：C1 → C2 → （N1 顺带 C3）。C4 等语料（可用 N1 接入后的真实流量自动采集）；C6/C7 条件未到不动。
 
 ---
 
@@ -241,7 +277,7 @@
 ## 九、开发环境
 
 - Python：`.venv/`（3.13.12），`pip install -e ".[dev]"`（清华镜像）。
-- Rust：`cargo build -p lloom-server`（⚠️ 当前未提交改动含新模块，提交前必须先 `cargo build` 验证编译）。
+- Rust：`cargo build -p lloom-server`（全部模块已提交；改动后仍须 `cargo build` + `cargo test` 全绿再提交）。
 - WebUI：`cd webui && npm install && npm run build`（根 `.npmrc` 已固定 npmmirror）。
 - TUI：`cd tui && bun install && bun run build`（需 `bun`，可走 npmmirror CDN 镜像）。
 - 端口：服务器 :7861、AI 服务 :7862、Ollama :11434。
@@ -253,7 +289,7 @@
 
 | 文件 | 用途 | 同步状态 |
 |---|---|---|
-| `LLooMprogress.md`（本文件）| 项目总进度、决策、待办、约束、文档索引 | 更新至 2026-08-29，同步至 488d156 |
+| `LLooMprogress.md`（本文件）| 项目总进度、决策、待办台账（主线 + B 类搁置 14 条 + C 类小项 7 条）、约束、文档索引 | 更新至 2026-08-31，同步至 488d156 |
 | **`NEXT-PLAN.md`** | **下一阶段权威计划**：N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2 | 2026-08-29 纳入（本次提交）|
 | `ARCHITECTURE.md` | 分层架构、端点、数据流、技术栈 | 已同步至 488d156 |
 | `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）| 已同步至 488d156 |
@@ -262,4 +298,4 @@
 | `ROUTING-PLAN.md` | 路由重构方案（v3 + 注记至 P5，P0–P5 全部落地）| 已提交；遗留 3 个待真实样本复验的验收指标 |
 | `ROUTING-PLAN.md` 引用的外部研究 | Switchyard / vLLM Semantic Router / Router-R1 等 | 设计借鉴，不引入依赖 |
 
-> **接手检查清单**：① **先读 `NEXT-PLAN.md`**（下一阶段权威计划），再读 CONTEXT/PRICING/ROUTING-PLAN 三份（均已完结，作背景）；② 内核 P0–P5、PR-1~8、Phase 1–5 已全部完成；③ 下一优先项 = **N1 OpenAI 兼容代理**（含 O2 收尾）→ N2 → N3；搁置项与决策门见 NEXT-PLAN §五与本文待办区。每次 `cargo build`/`cargo test` 全绿 → 用户审查 → 才 push。
+> **接手检查清单**：① **先读 `NEXT-PLAN.md`**（下一阶段权威计划），再读 CONTEXT/PRICING/ROUTING-PLAN 三份（均已完结，作背景）；② 内核 P0–P5、PR-1~8、Phase 1–5 已全部完成；③ 下一优先项 = **N1 OpenAI 兼容代理**（含 O2 收尾）→ N2 → N3；④ **全部待办看本文第六节末尾两张台账**：B 类 14 条（条件触发，未触发不动）+ C 类 7 条（无前置，可插队），每条含解锁条件与权威落点行号，不必全项目 grep。每次 `cargo build`/`cargo test` 全绿 → 用户审查 → 才 push。
