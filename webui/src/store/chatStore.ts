@@ -44,6 +44,8 @@ export interface DisplayMsg extends ChatMessage {
   inputTokens?: number;
   outputTokens?: number;
   cost?: number;
+  /** C1: reasoning model's chain-of-thought (collapsed in UI, persisted in meta). */
+  reasoning?: string;
 }
 
 export interface ConvState {
@@ -133,6 +135,7 @@ export async function selectConv(id: string) {
               cacheHit: meta.cache_hit,
               cacheSim: meta.cache_sim,
               plan: meta.plan,
+              reasoning: meta.reasoning,
             } as DisplayMsg;
           }),
           loading: false,
@@ -278,6 +281,7 @@ export async function send() {
   let errorMsg: string | null = null;
   let cached = false;
   let cacheSim: number | undefined;
+  let reasoning: string | undefined;
   let modelsUsed: string[] = [];
   let totalDuration = 0;
   let usage = { input_tokens: 0, output_tokens: 0, cost: 0, saved_cost: 0, model: '' };
@@ -396,6 +400,7 @@ export async function send() {
               plan: plan.sub_tasks.length ? { ...plan } : undefined,
               cacheHit: cached,
               cacheSim,
+              reasoning,
               status: 'done',
               model: meta.model,
               inputTokens: usage.input_tokens,

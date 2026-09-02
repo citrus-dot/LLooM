@@ -1148,6 +1148,7 @@ def _call_llm(
     context_free: bool = True,
     cache_hit_ref: list[bool] | None = None,
     usage_ref: dict | None = None,
+    reasoning_ref: list[str] | None = None,
 ) -> str:
     """Non-streaming LLM call with two-layer cache + real usage accounting.
 
@@ -1196,6 +1197,12 @@ def _call_llm(
     try:
         response = litellm.completion(**kwargs)
         content = response.choices[0].message.content or ""
+        # C1：思考过程透传 —— 推理系模型（qwen3 thinking / deepseek-r1 等）经
+        # litellm 把链式思考放在 message.reasoning_content；非推理模型缺省为 None。
+        if reasoning_ref is not None:
+            rc = getattr(response.choices[0].message, "reasoning_content", None)
+            if rc:
+                reasoning_ref.append(rc)
         usage = getattr(response, "usage", None)
         in_tok = getattr(usage, "prompt_tokens", 0) or 0
         out_tok = getattr(usage, "completion_tokens", 0) or 0
@@ -1243,11 +1250,15 @@ def _call_llm_stream(
     context_free: bool = True,
     cache_hit_ref: list[bool] | None = None,
     usage_ref: dict | None = None,
+    reasoning_ref: list[str] | None = None,
 ) -> Iterator[str]:
     """Streaming LLM call. Yields content deltas (str) as they arrive.
 
     Mirrors `_call_llm` but uses litellm's streaming mode so the orchestrator
     can forward tokens to the client incrementally (true SSE, not buffered).
+    Reasoning models additionally stream `delta.reasoning_content`; deltas are
+    accumulated (not yielded) and the joined text is appended to
+    `reasoning_ref` for the final `result` event (C1).
     """
     system_id = _system_id(messages)
     if cache_query and (exact is not None or sem is not None):
@@ -1290,6 +1301,8 @@ def _call_llm_stream(
         stream_options={"include_usage": True},
     )
     full: list[str] = []
+    reasoning_parts: list[str] = []
+    usage = None
     in_tok = 0
     out_tok = 0
     try:
@@ -1298,12 +1311,24 @@ def _call_llm_stream(
             if delta and delta.content:
                 full.append(delta.content)
                 yield delta.content
-            u = getattr(chunk, "usage", None)
-            if u is not None:
-                in_tok = getattr(u, "prompt_tokens", 0) or 0
-                out_tok = getattr(u, "completion_tokens", 0) or 0
+            # C1：思考增量只累积不下发（token 事件面向正文；思考随 result 一次性回传）
+            if delta is not None:
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    reasoning_parts.append(rc)
+            cu = getattr(chunk, "usage", None)
+            if cu is not None:
+                # 保留原始 usage 对象供末尾 _usage_detail 分项提取
+                # （既有 bug 修复：此前引用未定义的 `usage`，流式带 usage_ref 必抛
+                #  NameError，聚合阶段长期静默回退到子任务原文拼接）
+                usage = cu
+                in_tok = getattr(cu, "prompt_tokens", 0) or 0
+                out_tok = getattr(cu, "completion_tokens", 0) or 0
     except Exception as e:
         raise RuntimeError(f"LLM stream failed: {e}")
+
+    if reasoning_ref is not None and reasoning_parts:
+        reasoning_ref.append("".join(reasoning_parts))
 
     if usage_ref is not None:
         u = _usage_detail(usage)
@@ -1522,6 +1547,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             start = time.time()
             cache_hit: list[bool] = []
             usage: dict = {}
+            reasoning: list[str] = []
             parts: list[str] = []
             try:
                 for delta in _call_llm_stream(
@@ -1537,6 +1563,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                     context_free=context_free,
                     cache_hit_ref=cache_hit,
                     usage_ref=usage,
+                    reasoning_ref=reasoning,
                 ):
                     parts.append(delta)
                     yield _sse("token", {"id": 1, "model": model_name, "delta": delta})
@@ -1573,6 +1600,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 "ok": ok,
                 "cache_hit": hit,
                 "cache_sim": sim,
+                "reasoning": "".join(reasoning) or None,
             })
             return
 
@@ -1806,12 +1834,14 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 yield _sse("token", {"id": 0, "model": agg_model.name, "delta": chunk})
             agg_duration = 0.0
             agg_usage: dict = {}
+            agg_reasoning: list[str] = []
         else:
             summary_parts = [f"## 子任务 {t['id']}: {t['description']}\n\n{t['result']}" for t in sub_tasks]
             yield _sse("task_start", {"id": 0, "description": "汇总最终回答", "model": agg_model.name})
             start = time.time()
             agg_parts: list[str] = []
             agg_usage: dict = {}
+            agg_reasoning: list[str] = []
             try:
                 for delta in _call_llm_stream(
                     agg_model,
@@ -1830,6 +1860,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                     fingerprint=fingerprint,
                     context_free=context_free,
                     usage_ref=agg_usage,
+                    reasoning_ref=agg_reasoning,
                 ):
                     agg_parts.append(delta)
                     yield _sse("token", {"id": 0, "model": agg_model.name, "delta": delta})
@@ -1868,6 +1899,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             "escalations": p4_total_escalations,
             "tier_bumped": p4_tier_bumped,
             "sr_info": f"SR域分类: {req.sr_domain}" if req.sr_domain else "",
+            "reasoning": "".join(agg_reasoning) or None,
         })
 
     return StreamingResponse(gen(), media_type="text/event-stream")

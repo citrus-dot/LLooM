@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Avatar, Button, Input, Layout, List, Spin, Tag, Tooltip } from 'antd';
+import { Avatar, Button, Input, Layout, List, Spin, Tag, Tooltip, Collapse } from 'antd';
 import { PlusOutlined, SendOutlined, DeleteOutlined, EditOutlined, RobotOutlined, UserOutlined } from '@ant-design/icons';
 import {
   useChat,
@@ -294,6 +294,37 @@ export default function ChatPage() {
                       {m.plan && (
                         <div style={{ marginBottom: 8 }}>
                           <PlanCard plan={m.plan} />
+                        </div>
+                      )}
+                      {m.reasoning && (
+                        <div style={{ marginBottom: 8 }}>
+                          <Collapse
+                            size="small"
+                            items={[
+                              {
+                                key: 'reasoning',
+                                label: (
+                                  <span style={{ color: '#8a6d3b', fontSize: 12 }}>
+                                    💭 思考过程（{m.reasoning.length} 字）
+                                  </span>
+                                ),
+                                children: (
+                                  <div
+                                    style={{
+                                      whiteSpace: 'pre-wrap',
+                                      wordBreak: 'break-word',
+                                      fontSize: 12,
+                                      color: '#666',
+                                      maxHeight: 320,
+                                      overflowY: 'auto',
+                                    }}
+                                  >
+                                    {m.reasoning}
+                                  </div>
+                                ),
+                              },
+                            ]}
+                          />
                         </div>
                       )}
                       <div style={{ background: '#f6f8fa', padding: '8px 12px', borderRadius: 8 }}>
