@@ -236,8 +236,12 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
             &request_id,
             &routing.task_type,
             &routing.band,
-            &serde_json::to_string(&json!({ "method": routing.method, "api": "openai_compat" }))
-                .unwrap_or_default(),
+            &serde_json::to_string(&json!({
+                "method": routing.method,
+                "api": "openai_compat",
+                "budget_tier": routing.budget_tier,
+            }))
+            .unwrap_or_default(),
             &serde_json::to_string(&routing.fallback_chain).unwrap_or_default(),
             &routing.model,
             &routing.fallback_chain.join(","),

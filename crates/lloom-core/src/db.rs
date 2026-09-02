@@ -4,7 +4,7 @@
 use crate::error::{AppError, Result};
 use crate::models::{Budget, Model, UsageStats};
 use crate::pricing::{PriceSpec, TierBand, Zone};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -192,6 +192,18 @@ CREATE TABLE IF NOT EXISTS routing_calibration (
     routed_model TEXT, baseline_model TEXT,
     routed_cost REAL, baseline_cost REAL,
     routed_quality REAL, baseline_quality REAL, label INTEGER, source TEXT
+);
+CREATE TABLE IF NOT EXISTS policy_review (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    samples INTEGER,
+    weak_cost REAL, weak_quality REAL,
+    cur_cost REAL, cur_quality REAL,
+    strong_cost REAL, strong_quality REAL,
+    aiq REAL, saved_pct REAL,
+    conclusion TEXT,
+    budget_tiers_json TEXT DEFAULT '{}',
+    suggestions_json TEXT DEFAULT '[]'
 );
 "#;
 
@@ -1337,6 +1349,120 @@ pub fn count_routing_calibration() -> Result<i64> {
     Ok(c)
 }
 
+/// N2.b：全量影子样本（网格搜索重放输入）。
+pub fn list_routing_calibration() -> Result<Vec<crate::models::CalibrationRow>> {
+    let conn = open()?;
+    let mut stmt = conn.prepare(
+        "SELECT task_type, query_hash, routed_model, baseline_model,
+                routed_cost, baseline_cost, routed_quality, baseline_quality
+         FROM routing_calibration",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(crate::models::CalibrationRow {
+                task_type: r.get(0)?,
+                query_hash: r.get(1)?,
+                routed_model: r.get(2)?,
+                baseline_model: r.get(3)?,
+                routed_cost: r.get(4)?,
+                baseline_cost: r.get(5)?,
+                routed_quality: r.get(6)?,
+                baseline_quality: r.get(7)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// N2.a：写入一份路由体检报告（周期 job 幂等追加，latest 读最新）。
+#[allow(clippy::too_many_arguments)]
+pub fn insert_policy_review(
+    samples: i64,
+    weak_cost: f64,
+    weak_quality: f64,
+    cur_cost: f64,
+    cur_quality: f64,
+    strong_cost: f64,
+    strong_quality: f64,
+    aiq: f64,
+    saved_pct: f64,
+    conclusion: &str,
+    budget_tiers_json: &str,
+    suggestions_json: &str,
+) -> Result<i64> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO policy_review (samples, weak_cost, weak_quality, cur_cost, cur_quality,
+                                    strong_cost, strong_quality, aiq, saved_pct, conclusion,
+                                    budget_tiers_json, suggestions_json)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        params![
+            samples, weak_cost, weak_quality, cur_cost, cur_quality,
+            strong_cost, strong_quality, aiq, saved_pct, conclusion,
+            budget_tiers_json, suggestions_json,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// N2.a：最近一份路由体检报告（GET /api/routing/review 数据源）。
+pub fn latest_policy_review() -> Result<Option<crate::models::PolicyReview>> {
+    let conn = open()?;
+    let row = conn
+        .query_row(
+            "SELECT id, created_at, samples, weak_cost, weak_quality, cur_cost, cur_quality,
+                    strong_cost, strong_quality, aiq, saved_pct, conclusion,
+                    budget_tiers_json, suggestions_json
+             FROM policy_review ORDER BY id DESC LIMIT 1",
+            [],
+            |r| {
+                Ok(crate::models::PolicyReview {
+                    id: r.get(0)?,
+                    created_at: r.get(1)?,
+                    samples: r.get(2)?,
+                    weak_cost: r.get(3)?,
+                    weak_quality: r.get(4)?,
+                    cur_cost: r.get(5)?,
+                    cur_quality: r.get(6)?,
+                    strong_cost: r.get(7)?,
+                    strong_quality: r.get(8)?,
+                    aiq: r.get(9)?,
+                    saved_pct: r.get(10)?,
+                    conclusion: r.get(11)?,
+                    budget_tiers_json: r.get(12)?,
+                    suggestions_json: r.get(13)?,
+                })
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
+/// N2.a：近 N 天路由决策的预算档触发分布（signals_json.budget_tier 计数）。
+/// 旧记录无 budget_tier 字段 → 计入 "unknown"；无记录 → 空表。
+pub fn budget_tier_distribution(days: i64) -> Result<Vec<(String, i64)>> {
+    let conn = open()?;
+    let where_clause = if days > 0 {
+        format!("WHERE created_at >= datetime('now', '-{days} days')")
+    } else {
+        String::new()
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT signals_json FROM routing_decisions {where_clause}"
+    ))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut counts: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for row in rows {
+        let json = row?;
+        let tier = serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|v| v.get("budget_tier").and_then(|t| t.as_str()).map(String::from))
+            .unwrap_or_else(|| "unknown".to_string());
+        *counts.entry(tier).or_insert(0) += 1;
+    }
+    Ok(counts.into_iter().collect())
+}
+
 pub fn get_model_task_score(model_name: &str, task_type: &str) -> Result<Option<ModelTaskScore>> {
     let conn = open()?;
     let mut stmt = conn.prepare(
@@ -1841,15 +1967,19 @@ fn json_to_sqlite(v: &serde_json::Value) -> rusqlite::types::Value {
     }
 }
 
+/// 跨模块共享的 DB 测试锁：所有写库测试（db + review 等）都切全局 LLOOM_DATA_DIR，
+/// 必须同一把锁串行，否则并行测试会互踩 env 指向的库。
+#[cfg(test)]
+pub(crate) static TEST_DB_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod migration_tests {
     use super::*;
-    use std::sync::Mutex;
+    use super::TEST_DB_LOCK as DB_LOCK;
 
     // DB 集成测试各自使用独立专属临时目录 + 用毕还原全局 env，避免进程级
     // LLOOM_DATA_DIR 泄漏与并行测试竞态；SQLite `PRAGMA journal_mode=WAL` 不走
     // busy handler，并发写者会立刻 SQLITE_BUSY，故仍以 DB_LOCK 串行化写库测试。
-    static DB_LOCK: Mutex<()> = Mutex::new(());
 
     /// init_db 在并行测试下可能与并发读连接竞态：`PRAGMA journal_mode=WAL` 需要排它锁，
     /// 而并行测试若经 `db::get_setting`/`extract` 等路径在读迁移目录的共享锁，会瞬时

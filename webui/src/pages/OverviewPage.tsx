@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Row, Col, Card, Statistic, Table, Button, Tag, Space, message, Descriptions, Modal } from 'antd';
+import { Row, Col, Card, Statistic, Table, Button, Tag, Space, message, Descriptions, Modal, Collapse } from 'antd';
 import {
   PlayCircleOutlined,
   StopOutlined,
@@ -8,6 +8,7 @@ import {
   CloseCircleOutlined,
   FileTextOutlined,
   PoweroffOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import {
   getServicesStatus,
@@ -17,8 +18,13 @@ import {
   stopService,
   restartService,
   shutdownAll,
+  getRoutingReview,
+  refreshRoutingReview,
+  adoptRoutingSuggestion,
   ServiceStatus,
   UsageStats,
+  RoutingReview,
+  RoutingSuggestion,
 } from '../api';
 
 const SERVICE_KEY: Record<string, string> = {
@@ -31,6 +37,8 @@ export default function OverviewPage() {
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [logModal, setLogModal] = useState<{ name: string; content: string } | null>(null);
+  const [review, setReview] = useState<RoutingReview | null>(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
 
   const refresh = async () => {
     setLoading(true);
@@ -45,8 +53,48 @@ export default function OverviewPage() {
     }
   };
 
+  const refreshReview = async () => {
+    try {
+      setReview(await getRoutingReview());
+    } catch {
+      // 体检报告加载失败不阻塞页面其余部分
+    }
+  };
+
+  const handleReviewRefresh = async () => {
+    setReviewBusy(true);
+    try {
+      const r = await refreshRoutingReview();
+      if (r.ok) {
+        message.success('体检报告已生成');
+      } else {
+        message.warning(r.error ?? '生成失败');
+      }
+      await refreshReview();
+    } catch (e) {
+      message.error(`体检失败: ${e}`);
+    } finally {
+      setReviewBusy(false);
+    }
+  };
+
+  const handleAdopt = async (taskType?: string) => {
+    setReviewBusy(true);
+    try {
+      const r = await adoptRoutingSuggestion(taskType);
+      if (r.ok) {
+        message.success(taskType ? `已采纳 ${taskType} 的建议权重` : '已采纳全部建议权重');
+      }
+    } catch (e) {
+      message.error(`采纳失败: ${e}`);
+    } finally {
+      setReviewBusy(false);
+    }
+  };
+
   useEffect(() => {
     refresh();
+    refreshReview();
     const t = setInterval(refresh, 30000);
     return () => clearInterval(t);
   }, []);
@@ -172,6 +220,53 @@ export default function OverviewPage() {
     },
   ];
 
+  const suggestionColumns = [
+    { title: '任务', dataIndex: 'task_type', key: 'task_type', render: (t: string) => <Tag color="blue">{t}</Tag> },
+    {
+      title: '当前策略',
+      key: 'current',
+      render: (_: unknown, r: RoutingSuggestion) => (
+        <div style={{ fontSize: 12 }}>
+          <div>{r.current.model}（质量 {r.current.quality.toFixed(2)}）</div>
+          <div style={{ color: '#999' }}>
+            权重 cost {r.current.cost_weight} / quality {r.current.quality_weight}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: '建议改为',
+      key: 'suggested',
+      render: (_: unknown, r: RoutingSuggestion) => (
+        <div style={{ fontSize: 12 }}>
+          <div>
+            {r.suggested.model}（质量 {r.suggested.quality.toFixed(2)}）
+          </div>
+          <div style={{ color: '#999' }}>
+            权重 cost {r.suggested.cost_weight} / quality {r.suggested.quality_weight}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: '预计成本',
+      key: 'cost',
+      render: (_: unknown, r: RoutingSuggestion) => {
+        const pct = r.current.est_cost > 0 ? ((r.suggested.est_cost - r.current.est_cost) / r.current.est_cost) * 100 : 0;
+        return pct < 0 ? <Tag color="green">省 {(-pct).toFixed(1)}%</Tag> : <Tag color="orange">增 {pct.toFixed(1)}%</Tag>;
+      },
+    },
+    {
+      title: '操作',
+      key: 'action',
+      render: (_: unknown, r: RoutingSuggestion) => (
+        <Button size="small" type="primary" loading={reviewBusy} onClick={() => handleAdopt(r.task_type)}>
+          采纳
+        </Button>
+      ),
+    },
+  ];
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Row gutter={16}>
@@ -238,6 +333,101 @@ export default function OverviewPage() {
             {stats?.cache_enabled ? <Tag color="success">启用</Tag> : <Tag>未启用</Tag>}
           </Descriptions.Item>
         </Descriptions>
+      </Card>
+
+      <Card
+        title={
+          <Space>
+            <SafetyCertificateOutlined />
+            路由体检
+            {review?.ok && (
+              <span style={{ fontSize: 12, color: '#999' }}>
+                （{review.created_at} · 样本 {review.samples}）
+              </span>
+            )}
+          </Space>
+        }
+        extra={
+          <Space>
+            {(review?.suggestions?.length ?? 0) > 0 && (
+              <Button size="small" loading={reviewBusy} onClick={() => handleAdopt()}>
+                全部采纳
+              </Button>
+            )}
+            <Button size="small" icon={<ReloadOutlined />} loading={reviewBusy} onClick={handleReviewRefresh}>
+              立即体检
+            </Button>
+          </Space>
+        }
+      >
+        <Collapse
+          size="small"
+          items={[
+            {
+              key: 'review',
+              label: (
+                <Space size={16}>
+                  {review?.ok ? (
+                    <>
+                      <span>
+                        AIQ <b>{(review.aiq ?? 0).toFixed(3)}</b>
+                      </span>
+                      <span>相对全强节省 {(review.saved_pct ?? 0).toFixed(1)}%</span>
+                      <span style={{ color: '#999' }}>{review.conclusion}</span>
+                    </>
+                  ) : (
+                    <span style={{ color: '#faad14' }}>{review?.error ?? '暂无体检报告'}</span>
+                  )}
+                </Space>
+              ),
+              children: review?.ok ? (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Descriptions column={3} size="small" bordered>
+                    <Descriptions.Item label="全弱基线">
+                      ${review.weak?.cost.toFixed(6) ?? '-'} · 质量 {review.weak?.quality.toFixed(3) ?? '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="当前策略">
+                      ${review.current?.cost.toFixed(6) ?? '-'} · 质量 {review.current?.quality.toFixed(3) ?? '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="全强基线">
+                      ${review.strong?.cost.toFixed(6) ?? '-'} · 质量 {review.strong?.quality.toFixed(3) ?? '-'}
+                    </Descriptions.Item>
+                  </Descriptions>
+                  <div>
+                    预算档触发分布（近 7 天）：
+                    {Object.entries(review.budget_tiers ?? {}).length === 0 ? (
+                      <span style={{ color: '#999' }}> 暂无数据</span>
+                    ) : (
+                      Object.entries(review.budget_tiers ?? {}).map(([tier, n]) => (
+                        <Tag key={tier} style={{ marginLeft: 8 }}>
+                          {tier}: {n}
+                        </Tag>
+                      ))
+                    )}
+                  </div>
+                  {(review.suggestions?.length ?? 0) > 0 ? (
+                    <>
+                      <div style={{ fontWeight: 500 }}>权重建议（人工确认后生效，下一请求即用新权重）</div>
+                      <Table
+                        rowKey="task_type"
+                        size="small"
+                        columns={suggestionColumns}
+                        dataSource={review.suggestions}
+                        pagination={false}
+                      />
+                    </>
+                  ) : (
+                    <div style={{ color: '#999' }}>当前无权重调整建议（策略已无明显可优化空间，或影子样本不足）。</div>
+                  )}
+                </Space>
+              ) : (
+                <div style={{ color: '#999' }}>
+                  影子评测自动按比例采样；也可到 Models 页手动双跑采集（POST /api/routing/shadow），积累样本后点「立即体检」。
+                </div>
+              ),
+            },
+          ]}
+        />
       </Card>
 
       <Modal

@@ -23,6 +23,7 @@ pub mod openai_compat;
 pub mod pricing;
 pub mod probe;
 pub mod processes;
+pub mod review;
 pub mod router;
 pub mod security;
 pub mod server;

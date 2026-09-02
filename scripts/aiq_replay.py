@@ -11,10 +11,11 @@ RouterBench 式 AIQ = (当前策略质量 − 全弱质量) / (全强质量 − 
 无依赖，仅用 stdlib sqlite3。quality 缺失时从 models / model_task_score 回填并写库。
 
 用法：
-  python3 scripts/aiq_replay.py [--db PATH] [--ratio SAVE_RATIO]
+  python3 scripts/aiq_replay.py [--db PATH] [--ratio SAVE_RATIO] [--json]
 输出：
   - 三条线的样本数/总成本/平均质量
   - AIQ（成本区间内质量填充比）与当前策略相对全强的成本节省
+  - --json：机器可读报告（N2.a 周期 job 消费，数字与文本报告同源同值）
 """
 
 import argparse
@@ -41,7 +42,7 @@ def model_quality(conn, scores, name: str, task_type: str) -> float:
         if n >= 5:
             return ewma
     row = conn.execute(
-        "SELECT quality_score FROM models WHERE name = ?1", (name,)
+        "SELECT quality_score FROM models WHERE name = ?", (name,)
     ).fetchone()
     return row[0] if row else 0.0
 
@@ -49,7 +50,7 @@ def model_quality(conn, scores, name: str, task_type: str) -> float:
 def cost_rate(conn, name: str) -> float:
     """混合单价比率（输入 + 2×输出），用于排序弱/强。无价格 → 0（本地）按最便宜排。"""
     row = conn.execute(
-        "SELECT input_cost_per_token, output_cost_per_token FROM models WHERE name = ?1",
+        "SELECT input_cost_per_token, output_cost_per_token FROM models WHERE name = ?",
         (name,),
     ).fetchone()
     if not row:
@@ -64,24 +65,38 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="AIQ 离线重放：路由成本×成效曲线")
     ap.add_argument("--db", help="SQLite 库路径（默认 data/lloom.db）")
     ap.add_argument("--ratio", type=float, default=0.15, help="EWMA 样本权重，仅用于说明")
+    ap.add_argument("--json", action="store_true", help="输出机器可读 JSON（与文本报告数字一致）")
     args = ap.parse_args()
 
+    report = compute(args)
+    if report is None:
+        return 2 if not os.path.exists(resolve_db(args.db)) else 1
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+    else:
+        print_report(report, resolve_db(args.db))
+    return 0
+
+
+def compute(args) -> dict | None:
+    """计算三线成本/质量 + AIQ，返回 report dict；失败（无库/无样本）返回 None
+    （错误信息已打 stderr，exit code 由 main 按「库是否存在」区分）。"""
     db_path = resolve_db(args.db)
     if not os.path.exists(db_path):
         print(f"[aiq] 库不存在：{db_path}", file=sys.stderr)
-        return 2
+        return None
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
     cal = conn.execute(
-        "SELECT task_type, query_hash, routed_model, baseline_model,"
+        "SELECT id, task_type, query_hash, routed_model, baseline_model,"
         " routed_cost, baseline_cost, routed_quality, baseline_quality"
         " FROM routing_calibration"
     ).fetchall()
     if not cal:
         print("[aiq] routing_calibration 无样本——先用 POST /api/routing/shadow 采集。", file=sys.stderr)
-        return 1
+        return None
 
     # 归并按模型名取对应的质量/成本（先建映射，避免重复查询）
     models = conn.execute(
@@ -102,16 +117,7 @@ def main() -> int:
 
     model_names = {r["name"] for r in models}
 
-    def batch(acc):
-        cost = sum(c for _, _, _, _, c, *_ in acc if c is not None)
-        q = 0.0
-        n = 0
-        for row in acc:
-            pass
-        return cost, q
-
     # 逐样本算质量（回填 NULL 并写库）
-    updates = list(cal)
     routed_q_all, base_q_all = [], []
     routed_c, base_c = 0.0, 0.0
     for r in cal:
@@ -134,7 +140,7 @@ def main() -> int:
         base_c += r["baseline_cost"] or 0.0
     conn.commit()
 
-    n = max(len(cal), 1)
+    n = len(cal)
 
     # 全弱基线：样本域里各任务最便宜模型的成本等价重放。实际弱成本无法从影子样本直接得出，
     # 用「当前策略成本 × 弱/当前 价格比」估算（本地/最便宜 → 低成本）。
@@ -159,23 +165,36 @@ def main() -> int:
     aiq = max(0.0, min(1.0, aiq))
     saved_pct = (base_c - routed_c) / base_c * 100.0 if base_c > 0 else 0.0
 
-    print(f"\n[aiq] 影子样本：{n} 条  (db={db_path})")
-    print(f"[aiq] 全弱基线 Weak    : 成本 ${weak_c:.6f}  平均质量 {weak_q:.3f}")
-    print(f"[aiq] 当前策略 Current : 成本 ${routed_c:.6f}  平均质量 {cur_q:.3f}")
-    print(f"[aiq] 全强基线 Strong  : 成本 ${base_c:.6f}  平均质量 {strong_q:.3f}")
-    print(f"\n[aiq] AIQ = (当前−弱)/(强−弱) = {aiq:.3f}   （0~1，越高越接近全强质量）")
-    print(f"[aiq] 相对全强成本节省 = {saved_pct:.1f}%（付出质量代价换取的成本）")
-
     # 决策建议：AIQ 高说明路由聪明；成本节省高说明经济。二者失衡则提示调权重。
     if aiq >= 0.8 and saved_pct >= 40:
-        print("[aiq] 结论：路由既省又快还保质量，无需调整。")
+        conclusion = "路由既省又快还保质量，无需调整。"
     elif aiq >= 0.8 and saved_pct < 40:
-        print("[aiq] 结论：质量已接近全强但成本节省不足——可提高 cost_weight/下调 quality_weight。")
+        conclusion = "质量已接近全强但成本节省不足——可提高 cost_weight/下调 quality_weight。"
     elif aiq < 0.8 and saved_pct >= 40:
-        print("[aiq] 结论：省得多但质量掉损大——应提高 quality_weight 或提高 min_capability_tier。")
+        conclusion = "省得多但质量掉损大——应提高 quality_weight 或提高 min_capability_tier。"
     else:
-        print("[aiq] 结论：成本与质量大致平衡；建议增加影子样本后再判定。")
-    return 0
+        conclusion = "成本与质量大致平衡；建议增加影子样本后再判定。"
+
+    return {
+        "samples": n,
+        "weak": {"cost": weak_c, "quality": weak_q},
+        "current": {"cost": routed_c, "quality": cur_q},
+        "strong": {"cost": base_c, "quality": strong_q},
+        "aiq": round(aiq, 4),
+        "saved_pct": round(saved_pct, 2),
+        "conclusion": conclusion,
+    }
+
+
+def print_report(rep: dict, db_path: str) -> None:
+    n = rep["samples"]
+    print(f"\n[aiq] 影子样本：{n} 条  (db={db_path})")
+    print(f"[aiq] 全弱基线 Weak    : 成本 ${rep['weak']['cost']:.6f}  平均质量 {rep['weak']['quality']:.3f}")
+    print(f"[aiq] 当前策略 Current : 成本 ${rep['current']['cost']:.6f}  平均质量 {rep['current']['quality']:.3f}")
+    print(f"[aiq] 全强基线 Strong  : 成本 ${rep['strong']['cost']:.6f}  平均质量 {rep['strong']['quality']:.3f}")
+    print(f"\n[aiq] AIQ = (当前−弱)/(强−弱) = {rep['aiq']:.3f}   （0~1，越高越接近全强质量）")
+    print(f"[aiq] 相对全强成本节省 = {rep['saved_pct']:.1f}%（付出质量代价换取的成本）")
+    print(f"[aiq] 结论：{rep['conclusion']}")
 
 
 if __name__ == "__main__":

@@ -495,8 +495,12 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
             &request_id,
             &routing.task_type,
             &routing.band,
-            &serde_json::to_string(&json!({ "method": routing.method, "sr_domain": sr_domain }))
-                .unwrap_or_default(),
+            &serde_json::to_string(&json!({
+                "method": routing.method,
+                "sr_domain": sr_domain,
+                "budget_tier": routing.budget_tier,
+            }))
+            .unwrap_or_default(),
             &serde_json::to_string(&routing.fallback_chain).unwrap_or_default(),
             &routing.model,
             &routing.fallback_chain.join(","),
@@ -1067,6 +1071,7 @@ pub fn spawn_background_jobs() -> Vec<tokio::task::JoinHandle<()>> {
         tokio::spawn(crate::probe::probe_loop()),
         tokio::spawn(pricing_refresh_loop()),
         tokio::spawn(health_probe_loop()), // P3 主动探测
+        tokio::spawn(crate::review::aiq_report_loop()), // N2.a 路由体检（6h，首跑立即）
     ]
 }
 
@@ -1488,6 +1493,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/routing/shadow", post(routing_shadow).get(routing_shadow_status))
         .route("/api/routing/plan-subtask", post(rust_plan_subtask)) // P4.a Python 每子任务回调
         .route("/api/routing/overhead", get(routing_overhead))
+        // N2 闭环评估：报告读取 / 手动刷新 / 建议采纳（不自动生效）
+        .route("/api/routing/review", get(routing_review))
+        .route("/api/routing/review/refresh", post(routing_review_refresh))
+        .route("/api/routing/review/adopt", post(routing_review_adopt))
         // Services (process management)
         .route("/api/services/status", get(services_status))
         .route("/api/services/{name}/start", post(service_start))
@@ -1710,6 +1719,43 @@ async fn routing_shadow_status() -> Json<Value> {
     let baseline = db::get_setting("routing.shadow_baseline").ok().flatten();
     let samples = db::count_routing_calibration().unwrap_or(0);
     Json(json!({ "ratio": ratio, "baseline": baseline, "samples": samples }))
+}
+
+/// GET /api/routing/review —— 最近一份路由体检报告（N2.a：三线成本/质量、AIQ、
+/// 节省额、样本数、预算档触发分布、权重建议）。
+async fn routing_review() -> Result<Json<Value>> {
+    match db::latest_policy_review()? {
+        Some(r) => Ok(Json(json!({
+            "ok": true,
+            "id": r.id,
+            "created_at": r.created_at,
+            "samples": r.samples,
+            "weak": { "cost": r.weak_cost, "quality": r.weak_quality },
+            "current": { "cost": r.cur_cost, "quality": r.cur_quality },
+            "strong": { "cost": r.strong_cost, "quality": r.strong_quality },
+            "aiq": r.aiq,
+            "saved_pct": r.saved_pct,
+            "conclusion": r.conclusion,
+            "budget_tiers": serde_json::from_str::<Value>(&r.budget_tiers_json).unwrap_or(json!({})),
+            "suggestions": serde_json::from_str::<Value>(&r.suggestions_json).unwrap_or(json!([])),
+        }))),
+        None => Ok(Json(json!({
+            "ok": false,
+            "error": "暂无体检报告——POST /api/routing/review/refresh 立即生成（需影子样本）",
+        }))),
+    }
+}
+
+/// POST /api/routing/review/refresh —— 手动跑一轮体检（幂等追加一份报告）。
+async fn routing_review_refresh() -> Result<Json<Value>> {
+    Ok(Json(crate::review::run_review().await?))
+}
+
+/// POST /api/routing/review/adopt —— 采纳建议权重 → upsert routing_policy。
+/// body: {"task_type": "coding"} 采纳单个；{} 采纳全部。人工审查点，不自动生效。
+async fn routing_review_adopt(Json(body): Json<Value>) -> Result<Json<Value>> {
+    let tt = body.get("task_type").and_then(|v| v.as_str());
+    Ok(Json(crate::review::adopt_suggestions(tt)?))
 }
 
 async fn cache_threshold_get() -> Json<Value> {

@@ -210,6 +210,9 @@ pub struct RoutingDecision {
     /// 难度带 easy/medium/hard（投影层输出，P0.d 简版来自 task_type 映射）
     #[serde(default)]
     pub band: String,
+    /// N2.a：本次决策时的预算档（normal/throttle/tight/protect），落 signals_json 供体检分布
+    #[serde(default)]
+    pub budget_tier: String,
     /// 候补链（P3 故障转移按序重试；本阶段仅审计透传）
     #[serde(default)]
     pub fallback_chain: Vec<String>,
@@ -245,6 +248,41 @@ impl Default for RoutingPolicy {
             escalation_enabled: 0,
         }
     }
+}
+
+/// N2.a 路由体检报告（policy_review 表行）。三线成本/质量来自 aiq_replay.py 重放，
+/// suggestions_json 为 N2.b 网格搜索产出的权重建议（供 adopt 端点人工采纳）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyReview {
+    pub id: i64,
+    pub created_at: String,
+    pub samples: i64,
+    pub weak_cost: f64,
+    pub weak_quality: f64,
+    pub cur_cost: f64,
+    pub cur_quality: f64,
+    pub strong_cost: f64,
+    pub strong_quality: f64,
+    pub aiq: f64,
+    pub saved_pct: f64,
+    pub conclusion: String,
+    #[serde(default)]
+    pub budget_tiers_json: String,
+    #[serde(default)]
+    pub suggestions_json: String,
+}
+
+/// P1.d 影子评测样本（routing_calibration 表行），N2.b 网格搜索重放的输入。
+#[derive(Debug, Clone)]
+pub struct CalibrationRow {
+    pub task_type: String,
+    pub query_hash: String,
+    pub routed_model: String,
+    pub baseline_model: String,
+    pub routed_cost: f64,
+    pub baseline_cost: f64,
+    pub routed_quality: Option<f64>,
+    pub baseline_quality: Option<f64>,
 }
 
 /// P0.c 模型×任务成效分（model_task_score 表行），ewma_quality 由信号回填

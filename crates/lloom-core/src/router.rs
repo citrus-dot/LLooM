@@ -463,6 +463,7 @@ pub async fn route(
             method: "direct".to_string(),
             stream,
             band: String::new(),
+            budget_tier: String::new(),
             fallback_chain: Vec::new(),
         };
     }
@@ -535,6 +536,7 @@ pub async fn route(
                 method,
                 stream,
                 band: band.to_string(),
+                budget_tier: budget_tier.to_string(),
                 fallback_chain: outcome.fallback_chain,
             }
         }
@@ -544,6 +546,7 @@ pub async fn route(
             method: format!("plan_error:{e}"),
             stream: false,
             band: band.to_string(),
+            budget_tier: budget_tier.to_string(),
             fallback_chain: Vec::new(),
         },
     }

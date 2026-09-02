@@ -322,6 +322,62 @@ export function updateModel(name: string, updates: Partial<Model>): Promise<{ up
 
 // ── Stats / usage ──
 
+// N2.a 路由体检报告（三线成本/质量、AIQ、节省额、预算档分布、权重建议）
+export interface RoutingReviewLine {
+  cost: number;
+  quality: number;
+}
+
+export interface RoutingSuggestion {
+  task_type: string;
+  samples: number;
+  current: {
+    model: string;
+    est_cost: number;
+    quality: number;
+    cost_weight: number;
+    quality_weight: number;
+  };
+  suggested: {
+    model: string;
+    est_cost: number;
+    quality: number;
+    cost_weight: number;
+    quality_weight: number;
+    latency_weight: number;
+  };
+}
+
+export interface RoutingReview {
+  ok: boolean;
+  error?: string;
+  id?: number;
+  created_at?: string;
+  samples?: number;
+  weak?: RoutingReviewLine;
+  current?: RoutingReviewLine;
+  strong?: RoutingReviewLine;
+  aiq?: number;
+  saved_pct?: number;
+  conclusion?: string;
+  budget_tiers?: Record<string, number>;
+  suggestions?: RoutingSuggestion[];
+}
+
+export function getRoutingReview(): Promise<RoutingReview> {
+  return jget('/api/routing/review');
+}
+
+/** 手动跑一轮体检（幂等追加一份报告；无影子样本时返回 ok:false）。 */
+export function refreshRoutingReview(): Promise<{ ok: boolean; error?: string; id?: number }> {
+  return jpost('/api/routing/review/refresh');
+}
+
+/** 采纳建议权重（task_type 缺省 = 全部采纳；下一请求即生效）。 */
+export function adoptRoutingSuggestion(taskType?: string): Promise<{ ok: boolean; adopted?: unknown[] }> {
+  return jpost('/api/routing/review/adopt', taskType ? { task_type: taskType } : {});
+}
+
 export function getStats(): Promise<UsageStats> {
   return jget('/api/stats');
 }
