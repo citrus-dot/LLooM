@@ -13,6 +13,7 @@ import {
   Card,
   Statistic,
   Alert,
+  Tooltip,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import {
@@ -40,6 +41,18 @@ const fallbackMeta = { color: 'default', label: 'unknown' };
 
 function usdPerTokToDollarsPer1k(v: number): string {
   return (v * 1000).toFixed(6);
+}
+
+/** Tooltip text for a stale price. Explains the trigger; shows the stored reason. */
+function staleTooltip(s: PriceSpec): string {
+  if (s.price_stale) {
+    const reason =
+      s.stale_reason === 'calibration_drift'
+        ? '对账偏差：连续3天 真实成本/估算成本 超出 [0.8, 1.2]'
+        : (s.stale_reason ?? '已标记过期');
+    return `${reason}。建议核对官方价后「改价」或「采纳」`;
+  }
+  return '';
 }
 
 export default function PricingPage() {
@@ -185,7 +198,13 @@ export default function PricingPage() {
         return (
           <Tag color={m.color}>
             {m.label}
-            {s.price_stale ? <span style={{ color: '#cf1322' }}> ●</span> : null}
+            {s.price_stale
+              ? (
+                  <Tooltip title={staleTooltip(s)}>
+                    <span style={{ color: '#cf1322' }}>●</span>
+                  </Tooltip>
+                )
+              : null}
           </Tag>
         );
       },
@@ -247,7 +266,7 @@ export default function PricingPage() {
         type="info"
         showIcon
         message="价格口径说明"
-        description="价格按「倒排来源优先级」维护：manual > overlay > litellm_remote > litellm_packaged > heuristic。manual 为人工锚定，刷新 job 永不覆盖；标红色 ● 表示该价已过期（校准/刷新判定），需人工核对后「采纳」或「改价」。"
+        description="价格按「倒排来源优先级」维护：manual > overlay > litellm_remote > litellm_packaged > heuristic。manual 为人工锚定，刷新 job 永不覆盖；标红色 ● 表示该价已过期（对账比值连续 3 天超出 [0.8, 1.2] 且当日调用 ≥50 才触发，日常看不到属正常），悬停红点可见原因，需人工核对后「采纳」或「改价」。"
       />
 
       <Table

@@ -235,6 +235,7 @@ export interface PriceSpec {
   batch_multiplier: number;
   price_source: string;
   price_stale: boolean;
+  stale_reason?: string | null;
   effective_from: string | null;
 }
 
@@ -515,9 +516,11 @@ export async function streamOrchestrate(
   history: ChatMessage[],
   onEvent: (ev: SseEvent) => void,
   conversationId?: string,
+  model?: string,
 ): Promise<void> {
   const body: Record<string, unknown> = { query, history };
   if (conversationId) body.conversation_id = conversationId;
+  if (model) body.model = model;
   const res = await fetch('/api/orchestrate/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

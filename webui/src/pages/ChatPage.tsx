@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Avatar, Button, Input, Layout, List, Spin, Tag, Tooltip, Collapse } from 'antd';
+import { Avatar, Button, Input, Layout, List, Select, Spin, Tag, Tooltip, Collapse } from 'antd';
 import { PlusOutlined, SendOutlined, DeleteOutlined, EditOutlined, RobotOutlined, UserOutlined } from '@ant-design/icons';
 import {
   useChat,
@@ -9,12 +9,13 @@ import {
   deleteConv,
   renameConv,
   setInput,
+  setPinnedModel,
   refreshConvs,
   DisplayMsg,
   PlanView,
 } from '../store/chatStore';
 import Markdown from '../components/Markdown';
-import { cacheFeedback, cacheThresholdGet } from '../api';
+import { cacheFeedback, cacheThresholdGet, getModels, Model } from '../api';
 
 const { Sider, Content } = Layout;
 
@@ -143,11 +144,16 @@ export default function ChatPage() {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   // Current semantic-cache threshold, used to decide the gray-zone miss prompt.
   const [curThr, setCurThr] = useState(0.8);
+  // Chat model selector options (registered active models).
+  const [models, setModels] = useState<Model[]>([]);
 
   useEffect(() => {
     refreshConvs();
     cacheThresholdGet()
       .then((r) => setCurThr(r.threshold))
+      .catch(() => {});
+    getModels()
+      .then((r) => setModels(r.models))
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -353,6 +359,17 @@ export default function ChatPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 8, maxWidth: CHAT_MAX, width: '100%', margin: '0 auto' }}>
+          <Select
+            style={{ minWidth: 150, maxWidth: 260 }}
+            value={state.pinnedModel || 'auto'}
+            onChange={(v) => setPinnedModel(v === 'auto' ? '' : v)}
+            disabled={cur.loading}
+            options={[
+              { value: 'auto', label: 'auto · 智能路由' },
+              ...models.map((m) => ({ value: m.name, label: m.name })),
+            ]}
+            placeholder="模型"
+          />
           <Input
             value={cur.input}
             onChange={(e) => setInput(e.target.value)}

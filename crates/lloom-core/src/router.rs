@@ -698,6 +698,7 @@ mod tests {
             batch_multiplier: 0.5,
             price_source: "manual".to_string(),
             price_stale: false,
+            stale_reason: None,
             effective_from: None,
         }
     }

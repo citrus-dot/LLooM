@@ -118,6 +118,11 @@ struct OrchestrateBody {
     /// conversation store (SQLite) and the client-sent `history` is ignored.
     #[serde(default)]
     conversation_id: Option<String>,
+    /// Optional model pinning for the `general` role. When set to a registered,
+    /// active model name, the general/sub-task default role uses it directly
+    /// (bypasses plan() scoring); otherwise fall back to auto plan().
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -637,7 +642,19 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
 
     // P0.f: Rust 统一决策，Python 无模型真源。每个编排角色各做一次 plan()；
     // 失败回落 models 首模型（无硬编码字面量），交由 Python 兜底。
+    // 若客户端显式 `model` 钉住某已启用模型，则 general（含子任务默认）直接用
+    // 该模型（绕过评分，用于推理模型直连等场景）；decompose/aggregate 仍走 plan()。
+    let pinned_general = req
+        .model
+        .as_deref()
+        .filter(|m| models.iter().any(|mdl| mdl.name == *m))
+        .map(|m| m.to_string());
     let role_model = |role: &str| -> String {
+        if role == "general" {
+            if let Some(p) = pinned_general.as_deref() {
+                return p.to_string();
+            }
+        }
         router::plan_decision(role, &models)
             .ok()
             .map(|o| o.primary)

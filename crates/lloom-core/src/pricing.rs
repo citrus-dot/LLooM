@@ -101,6 +101,10 @@ pub struct PriceSpec {
     pub price_source: String,
     #[serde(default)]
     pub price_stale: bool,
+    /// Why the price was flagged stale (e.g. `calibration_drift`). Surfaces in
+    /// the Pricing UI tooltip; NULL when the price is not stale.
+    #[serde(default)]
+    pub stale_reason: Option<String>,
     #[serde(default)]
     pub effective_from: Option<String>,
 }
@@ -486,6 +490,7 @@ mod tests {
             batch_multiplier: 0.5,
             price_source: "overlay".into(),
             price_stale: false,
+            stale_reason: None,
             effective_from: None,
         }
     }

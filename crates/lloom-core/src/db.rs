@@ -989,6 +989,7 @@ fn price_spec_from_row(row: &rusqlite::Row) -> rusqlite::Result<PriceSpec> {
         batch_multiplier: row.get::<_, Option<f64>>("batch_multiplier")?.unwrap_or(0.5),
         price_source: row.get::<_, Option<String>>("price_source")?.unwrap_or_default(),
         price_stale: row.get::<_, Option<i64>>("price_stale")?.unwrap_or(0) != 0,
+        stale_reason: row.get::<_, Option<String>>("stale_reason")?,
         effective_from: row.get("effective_from")?,
     })
 }

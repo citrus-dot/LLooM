@@ -62,6 +62,9 @@ interface StoreState {
   activeId: string | null;
   convMap: Record<string, ConvState>;
   draft: ConvState;
+  /** C1-pin: chat model selector. Empty = auto routing; else a registered model name
+   *  used to pin the orchestrate `general` role (bypasses plan() scoring). */
+  pinnedModel: string;
 }
 
 let state: StoreState = {
@@ -69,6 +72,7 @@ let state: StoreState = {
   activeId: null,
   convMap: {},
   draft: emptyState(),
+  pinnedModel: '',
 };
 
 const listeners = new Set<() => void>();
@@ -180,6 +184,11 @@ export async function renameConv(id: string, title: string) {
 
 export function setInput(v: string) {
   setConv(state.activeId, (c) => ({ ...c, input: v }));
+}
+
+/** Set the chat model pin ('' = auto routing). Persists only for the session. */
+export function setPinnedModel(m: string) {
+  update((s) => ({ ...s, pinnedModel: m }));
 }
 
 async function persistPhase1(
@@ -298,7 +307,7 @@ export async function send() {
   try {
     await streamOrchestrate(
       q,
-      [], // server builds history from the conversation store
+      [],
       (ev: SseEvent) => {
         const d = (ev.data || {}) as any;
         if (ev.event === 'decompose' && d.sub_tasks) {
@@ -338,6 +347,7 @@ export async function send() {
           response = d.response;
           cached = !!d.cache_hit;
           cacheSim = typeof d.cache_sim === 'number' ? d.cache_sim : undefined;
+          if (d.reasoning) reasoning = d.reasoning;
           if (d.models_used) modelsUsed = d.models_used;
           if (typeof d.total_duration === 'number') totalDuration = d.total_duration;
           if (typeof d.input_tokens === 'number') usage = { ...usage, input_tokens: d.input_tokens };
@@ -350,6 +360,7 @@ export async function send() {
         }
       },
       convId,
+      state.pinnedModel || undefined,
     );
 
     if (errorMsg) {
@@ -386,6 +397,7 @@ export async function send() {
       saved_cost: usage.saved_cost,
       cache_hit: cached,
       cache_sim: cacheSim,
+      reasoning: reasoning || undefined,
       plan: plan.sub_tasks.length ? plan : undefined,
     };
     await updateMessage(convId, asstSeq, { content: response || '(无返回)', meta });
