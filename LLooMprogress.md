@@ -1,8 +1,8 @@
 # LLooM v2 项目进度
 
-> 最后更新：**2026-08-31** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：**CONTEXT-PLAN 2–5 审计收尾**（488d156；内核 P0–P5 / PR-1~8 / Phase 1–5 全部完结）
-> **下一阶段权威计划：[`NEXT-PLAN.md`](./NEXT-PLAN.md)**（N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2）
+> 最后更新：**2026-09-02** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
+> 最新已提交：**N1 OpenAI 兼容代理**（含 O2 绑定收尾 + C3 api_source 列，89 单测全绿）；此前 CONTEXT-PLAN 2–5 审计收尾（488d156）
+> **下一阶段权威计划：[`NEXT-PLAN.md`](./NEXT-PLAN.md)**（✅ N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2）
 > **待办台账**：主线见上方「下一阶段」；**搁置项（B 类 14 条）/ 独立小项（C 类 7 条）见 [六、待办事项](#六待办事项todo) 末尾两张台账表**
 
 ---
@@ -188,12 +188,12 @@
 - [x] ✅ **Phase 5 供应商前缀缓存（代码侧）**：`build_context` 固定 `[system][?summary][kept]` 前缀 + summary 块状更新，已为 DashScope 前缀缓存铺路；**账单侧命中核对留待办**（需 DashScope key）
 
 ### 下一阶段（权威计划：[NEXT-PLAN.md](./NEXT-PLAN.md)，2026-08-29 起）
-- [ ] **N1 OpenAI 兼容代理**（本迭代主攻）：`/v1/chat/completions`（流/非流）+ `/v1/models` + Bearer 鉴权（`LLOOM_PROXY_TOKEN`）；**含 O2 收尾**（默认绑 `127.0.0.1`，`LLOOM_BIND` 可覆盖）
+- [x] ✅ **N1 OpenAI 兼容代理**（2026-09-02，本阶段）：新模块 `openai_compat.rs`——`POST /v1/chat/completions`（流/非流，SSE 帧序列 role→content→finish→[DONE]）+ `GET /v1/models`（auto 恒在首位）+ Bearer 鉴权（`LLOOM_PROXY_TOKEN` 未设不鉴权，设了错误凭据 401）；model 语义：注册名直连 / `auto` 或未知名走 `route()` 评分路由；透明复用 security 检查、P3 failover、`priced_usage` 计价、`insert_usage`（api_source='proxy'，C3 已提交 1a22825）；**O2 收尾**：默认绑 `127.0.0.1`（`config::bind_addr()`，`LLOOM_BIND` 可覆盖）；`chat_with_failover` 加 max_tokens/temperature 参数透传（客户端未指定缺省 4096/1.0）；89 单测全绿（+5：鉴权/模型解析/响应形状/帧序列）；curl 冒烟全过（auto→plan 真实选择入 usage、直连/未知名、401 鉴权）
 - [ ] **N2 闭环评估**：AIQ 报告周期 job → `GET /api/routing/review` → WebUI「路由体检」卡片 → 一键采纳回写 `routing_policy`（Rust 侧网格搜索，单一真源）
 - [ ] **N3 信任与收尾**：a) O6 子任务并行（`asyncio.gather`）b) `/metrics` Prometheus 导出 c) 账单对账脚本（**阻塞：需真实账单导出**，脚本先行）
 
 ### 历史遗留（LLooMprogress 原 TODO）
-- [x] ✂️ **O2 绑定收窄**：已归并进 NEXT-PLAN **N1 配套收尾**（不再单列）
+- [x] ✅ **O2 绑定收窄**（2026-09-02，随 N1 落地）：默认绑 `127.0.0.1`，`LLOOM_BIND` env 可覆盖
 - [x] ✂️ **O6 子任务并行**：已归并进 NEXT-PLAN **N3.a**
 - [ ] ⚡ **O5 复杂判定调优** → 已收编进下方 **C 类台账**（需标注语料）
 - [ ] 🔧 多模型拆分需配置「可用模型 + 有效 Key」才真正生效 → 见 **C 类台账**
@@ -227,7 +227,7 @@
 |---|---|---|---|---|
 | C1 | **思考过程深度展示** ⭐ 推荐先做 | `reasoning_tokens` 已落库（`db.rs:218` 幂等 ALTER、`:693`/`:734` 落库、`:1034` UsageExtra），`reasoning_cost` 见 `db.rs:119`；**只差三步**：AI 服务透传 `reasoning_content` → SSE 新事件 → WebUI 折叠展示 | `db.rs:218`、`PRICING-PLAN.md` 校准节 | **最低**（纯透传 + 前端）|
 | C2 | **est_input_cost 分列**（精确输入侧对账）| `db.rs` 幂等 ALTER 列表加两列（迁移框架已支持），对账从「总额口径」升级为「输入侧分项」| `PRICING-PLAN.md:36` | 低 |
-| C3 | **`api_source` 列**（区分代理流量）| 幂等加列，默认 `'webui'`；建议 **N1 时顺手做** | `NEXT-PLAN.md:34` | 低（随 N1）|
+| C3 | ~~**`api_source` 列**（区分代理流量）~~ ✅ 已完成（2026-09-02，1a22825，随 N1 提前独立提交）| 幂等加列默认 `'webui'`，代理流量标 `'proxy'` | `NEXT-PLAN.md:34` | 已落地 |
 | C4 | **O5 复杂判定调优** | ⚠️ **先统一入口**：现 `router.rs:86 is_complex`（正则）与 `signals.rs:234 complexity_score`（评分，`:322` 调用）**两处判定并存**，须合并后再调阈值；且需 50–100 条标注语料，否则是盲调 | `router.rs:86`、`signals.rs:234` | 中（**阻塞在语料**）|
 | C5 | 多模型拆分真正生效 | **非开发项（无代码改动）**：需在设置页配置「可用模型 + 有效 Key」才生效，属配置引导 | — | 配置 |
 | C6 | EWMA α 灵敏度调整 | 仅当出现**日级调价**时（当前 α=0.15 ≈ 10 天半衰，对周级调价够用）| `PRICING-PLAN.md:931` | 条件触发，**建议不动** |

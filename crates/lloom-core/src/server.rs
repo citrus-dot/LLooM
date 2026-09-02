@@ -57,7 +57,7 @@ pub fn now_epoch_secs() -> i64 {
 
 /// 按模型名查 PriceSpec 并计算实际成本（无 PriceSpec → 0，本地/未登记模型）。
 /// 返回 (act_cost, zone_multiplier)。
-fn priced_usage(provider: &str, model: &str, usage: &pricing::UsageDetail) -> (f64, f64) {
+pub(crate) fn priced_usage(provider: &str, model: &str, usage: &pricing::UsageDetail) -> (f64, f64) {
     match db::get_price_spec(provider, model) {
         Ok(Some(ps)) => {
             let zr = zone_resolver();
@@ -373,12 +373,14 @@ async fn update_conversation_message(
 
 /// P3：按 `primary` + `fallback_chain` 顺序故障转移。成功即返回，对失败模型打健康哨点；
 /// 只有实际「跳升」到下一个候选时才给失败模型记 Escalation 成效信号（降级已有代价）。
-async fn chat_with_failover(
+pub(crate) async fn chat_with_failover(
     models: &[Model],
     task_type: &str,
     primary: &str,
     fallback_chain: &[String],
     messages: &[Value],
+    max_tokens: i64,
+    temperature: f64,
 ) -> Result<(ai_client::ChatResult, String)> {
     let mut try_names: Vec<String> = Vec::with_capacity(1 + fallback_chain.len());
     try_names.push(primary.to_string());
@@ -394,7 +396,7 @@ async fn chat_with_failover(
             continue;
         };
         let spec = ModelSpec::from(m);
-        match ai_client::chat(&spec, messages, 500, 0.3).await {
+        match ai_client::chat(&spec, messages, max_tokens, temperature).await {
             Ok(res) => {
                 crate::health::record_outcome(name, true);
                 // 跳升到非主选：给所有先前失败模型记一次 escalation（副作用小，但真实代价信号）
@@ -524,6 +526,8 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
         &routing.model,
         &routing.fallback_chain,
         &processed_messages,
+        500,
+        0.3,
     )
     .await
     {
@@ -1477,6 +1481,9 @@ pub fn build_router(state: AppState) -> Router {
         // Chat + orchestrate (SSE)
         .route("/api/chat/stream", post(chat_stream))
         .route("/api/orchestrate/stream", post(orchestrate_stream))
+        // N1：OpenAI 兼容代理（NEXT-PLAN §二）
+        .route("/v1/chat/completions", post(crate::openai_compat::chat_completions))
+        .route("/v1/models", get(crate::openai_compat::models_list))
         // P1.d 影子评测 + AIQ 重放数据源
         .route("/api/routing/shadow", post(routing_shadow).get(routing_shadow_status))
         .route("/api/routing/plan-subtask", post(rust_plan_subtask)) // P4.a Python 每子任务回调
@@ -1736,7 +1743,7 @@ async fn cache_autotune_set(Json(req): Json<Value>) -> Json<Value> {
 
 /// 分类器选择：注册表驱动（P0.d，去名称硬编码）——
 /// 分类是 easy 任务，取能力档最低、价最便宜的 active 模型；并列取名序稳定。
-fn pick_classifier(models: &[Model]) -> Option<ModelSpec> {
+pub(crate) fn pick_classifier(models: &[Model]) -> Option<ModelSpec> {
     let mut pool: Vec<&Model> = models.iter().collect();
     pool.sort_by(|a, b| {
         a.capability_tier

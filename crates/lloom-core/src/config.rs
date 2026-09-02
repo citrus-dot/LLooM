@@ -148,6 +148,15 @@ pub fn web_port() -> u16 {
         .unwrap_or(DEFAULT_WEB_PORT)
 }
 
+/// N1/O2 收尾：REST 服务器默认只绑环回（本地工具，默认关闭局域网暴露）。
+/// 需要局域网访问时显式设 `LLOOM_BIND=0.0.0.0`（建议同时配置 LLOOM_PROXY_TOKEN）。
+pub fn bind_addr() -> String {
+    std::env::var("LLOOM_BIND")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
+}
+
 /// Locate the built frontend (React `dist/` or legacy single `index.html`).
 pub fn ui_dir() -> Option<PathBuf> {
     let candidates = [

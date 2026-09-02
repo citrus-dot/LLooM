@@ -53,13 +53,14 @@ fn main() {
                     break;
                 }
             }
-            let listener = tokio::net::TcpListener::bind(("0.0.0.0", web_port))
+            let bind_addr = config::bind_addr();
+            let listener = tokio::net::TcpListener::bind((bind_addr.as_str(), web_port))
                 .await
                 .unwrap_or_else(|e| {
-                    eprintln!("[core] failed to bind port {web_port}: {e}");
+                    eprintln!("[core] failed to bind {bind_addr}:{web_port}: {e}");
                     std::process::exit(1);
                 });
-            println!("[core] REST server on :{web_port}");
+            println!("[core] REST server on {bind_addr}:{web_port}");
 
             // Background jobs: daily price calibration + always-on probes
             // (PRICING-PLAN §6.2 / §7). Handles are intentionally not held;
