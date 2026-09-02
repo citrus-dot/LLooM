@@ -281,6 +281,7 @@ fn record_probe_usage(m: &Model, usage: &pricing::UsageDetail, hit: bool) -> f64
             conversation_id: Some(format!("probe:{}:{}", m.provider, m.name)),
             field_missing: usage.field_missing,
             cache_saved_cost: 0.0,
+            api_source: None,
         }),
     );
     act_cost
@@ -307,6 +308,7 @@ fn record_probe_failure(m: &Model) {
             conversation_id: Some(format!("probe:{}:{}", m.provider, m.name)),
             field_missing: true,
             cache_saved_cost: 0.0,
+            api_source: None,
         }),
     );
 }

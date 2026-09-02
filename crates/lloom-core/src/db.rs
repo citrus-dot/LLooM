@@ -226,6 +226,8 @@ pub fn migrate_db(conn: &Connection) -> Result<()> {
         ("request_id", "ALTER TABLE usage_records ADD COLUMN request_id TEXT"),
         // P2.b：语义缓存命中省下的金额（命中时 act_cost 置 0，本列存「若未命中本应花费」）
         ("cache_saved_cost", "ALTER TABLE usage_records ADD COLUMN cache_saved_cost REAL DEFAULT 0"),
+        // C3（NEXT-PLAN N1 配套）：流量来源标记，区分 WebUI 与 OpenAI 兼容代理
+        ("api_source", "ALTER TABLE usage_records ADD COLUMN api_source TEXT DEFAULT 'webui'"),
     ];
     for (col, ddl) in add_cols {
         if !cols.iter().any(|c| c == col) {
@@ -698,6 +700,8 @@ pub struct UsageExtra {
     pub field_missing: bool,
     /// P2.b 语义缓存命中省下的金额（≈ 未命中时应花的 act_cost）。非命中恒 0。
     pub cache_saved_cost: f64,
+    /// C3 流量来源：`Some("proxy")` 为 OpenAI 兼容代理流量；None 走列默认 `'webui'`。
+    pub api_source: Option<String>,
 }
 
 /// Insert one usage_records row. `latency_ms`/`request_id` (P1.a) are optional
@@ -744,6 +748,11 @@ pub fn insert_usage(
         });
         vals.push(rusqlite::types::Value::Integer(if e.field_missing { 1 } else { 0 }));
         vals.push(rusqlite::types::Value::Real(e.cache_saved_cost));
+        // C3：仅显式标记来源时写列（None 落库默认 'webui'，旧行为不变）
+        if let Some(src) = &e.api_source {
+            cols.push("api_source");
+            vals.push(rusqlite::types::Value::Text(src.clone()));
+        }
     }
     cols.extend(["latency_ms", "request_id"]);
     vals.push(match latency_ms {
@@ -1998,7 +2007,7 @@ mod migration_tests {
             Some(&UsageExtra {
                 cached_tokens: 0, reasoning_tokens: 0, est_cost: 0.0, act_cost: 1.11e-5,
                 zone_multiplier: 1.0, conversation_id: None, field_missing: false,
-                cache_saved_cost: 0.0,
+                cache_saved_cost: 0.0, api_source: None,
             }),
         )
         .unwrap();
@@ -2025,7 +2034,7 @@ mod migration_tests {
             Some(&UsageExtra {
                 cached_tokens: 0, reasoning_tokens: 0, est_cost: 0.0, act_cost: 0.0,
                 zone_multiplier: 1.0, conversation_id: None, field_missing: false,
-                cache_saved_cost: 3.33e-05,
+                cache_saved_cost: 3.33e-05, api_source: None,
             }),
         )
         .unwrap();

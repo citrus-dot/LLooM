@@ -561,6 +561,7 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
                     conversation_id: None,
                     field_missing: res.usage.field_missing,
                     cache_saved_cost: 0.0,
+                    api_source: None,
                 }),
             );
             // P1.c：正常完成信号 → 该 模型×任务 的 ewma_quality 上修（+0.7）
@@ -770,6 +771,7 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                         conversation_id: conv_for_events.clone(),
                         field_missing: false,
                         cache_saved_cost,
+                        api_source: None,
                     }),
                 );
                 // P3：按 task_done 成功/失败喂健康哨点（模型可达性，无 role 归属冲突）
