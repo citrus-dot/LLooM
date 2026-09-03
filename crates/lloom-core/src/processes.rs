@@ -107,8 +107,9 @@ pub async fn start_ai() -> Result<Option<Child>> {
     let install_dir = config::install_dir();
     let port = config::ai_port().to_string();
 
-    // 1. PyInstaller bundle
-    let bundled = install_dir.join("resources/ai-service/ai-service");
+    // 1. PyInstaller bundle（onedir：入口二进制 + _internal/；Windows 入口名带 .exe）
+    let exe_name = if cfg!(windows) { "ai-service.exe" } else { "ai-service" };
+    let bundled = install_dir.join("resources/ai-service").join(exe_name);
     if bundled.exists() && bundled.is_file() {
         let child = spawn(
             bundled.to_string_lossy().as_ref(),
