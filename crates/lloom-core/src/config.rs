@@ -1,10 +1,34 @@
 //! Runtime configuration — install dir, data dir, ports, path resolution.
+//!
+//! 配置优先级链（高 → 低）：
+//! **CLI 参数**（`CliOverrides`，main 解析后 `init_cli_overrides` 注入一次）
+//! → **环境变量**（含启动时从 `.env` 注入的部分）→ **代码默认值**。
+//! 动态运行时调参（健康阈值/信号权重等）走 SQLite settings KV，不在此层。
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-pub const DEFAULT_API_PORT: u16 = 7860;
 pub const DEFAULT_AI_PORT: u16 = 7862;
 pub const DEFAULT_WEB_PORT: u16 = 7861;
+
+/// CLI 覆盖层：仅承载启动参数能显式给定的项；`None` 表示未指定、回落 env 链。
+#[derive(Debug, Default, Clone)]
+pub struct CliOverrides {
+    pub web_port: Option<u16>,
+    pub ai_port: Option<u16>,
+    pub bind: Option<String>,
+}
+
+static CLI_OVERRIDES: OnceLock<CliOverrides> = OnceLock::new();
+
+/// main() 在解析启动参数后调用一次（进程生命周期内不可重复设置）。
+pub fn init_cli_overrides(o: CliOverrides) {
+    let _ = CLI_OVERRIDES.set(o);
+}
+
+fn overrides() -> &'static CliOverrides {
+    CLI_OVERRIDES.get_or_init(CliOverrides::default)
+}
 
 /// Root install dir. Defaults to `LLOOM_INSTALL_DIR` or `.`.
 pub fn install_dir() -> PathBuf {
@@ -127,33 +151,64 @@ pub fn env_file_path() -> PathBuf {
     install_dir().join(".env")
 }
 
-pub fn api_port() -> u16 {
-    std::env::var("LLOOM_API_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(DEFAULT_API_PORT)
+/// AI 微服务端口链：CLI `--ai-port` > `LLOOM_AI_PORT` > `LLOOM_AI_SERVICE_URL`
+/// 里抠出的端口 > 默认 7862。（前两者生效时 spawn 与调用同源，见 [`ai_service_url`]）
+pub fn ai_port() -> u16 {
+    ai_port_with(overrides(), std::env::var("LLOOM_AI_PORT").ok().as_deref(), std::env::var("LLOOM_AI_SERVICE_URL").ok().as_deref())
 }
 
-pub fn ai_port() -> u16 {
-    std::env::var("LLOOM_AI_SERVICE_URL")
-        .ok()
-        .and_then(|u| u.split(':').last().and_then(|p| p.trim_end_matches('/').parse().ok()))
+fn ai_port_with(over: &CliOverrides, ai_port_env: Option<&str>, ai_url_env: Option<&str>) -> u16 {
+    over.ai_port
+        .or_else(|| ai_port_env.and_then(|p| p.parse().ok()))
+        .or_else(|| {
+            ai_url_env
+                .as_deref()
+                .and_then(extract_port_from_url)
+        })
         .unwrap_or(DEFAULT_AI_PORT)
 }
 
+fn extract_port_from_url(url: &str) -> Option<u16> {
+    url.split(':').last().and_then(|p| p.trim_end_matches('/').parse().ok())
+}
+
+/// Rust → Python AI 微服务的调用 URL（与 [`ai_port`] 同源）：
+/// 显式设置了完整 `LLOOM_AI_SERVICE_URL`（且无 CLI/`LLOOM_AI_PORT` 覆盖）时按原样使用，
+/// 保留 base path 自定义能力；否则按 ai_port() 构造。
+pub fn ai_service_url() -> String {
+    ai_service_url_with(overrides(), std::env::var("LLOOM_AI_PORT").ok().as_deref(), std::env::var("LLOOM_AI_SERVICE_URL").ok().as_deref())
+}
+
+fn ai_service_url_with(over: &CliOverrides, ai_port_env: Option<&str>, ai_url_env: Option<&str>) -> String {
+    let has_port_override = over.ai_port.is_some() || ai_port_env.is_some_and(|p| p.parse::<u16>().is_ok());
+    if !has_port_override {
+        if let Some(url) = ai_url_env.filter(|u| !u.trim().is_empty()) {
+            return url.to_string();
+        }
+    }
+    format!("http://localhost:{}", ai_port_with(over, ai_port_env, ai_url_env))
+}
+
 pub fn web_port() -> u16 {
-    std::env::var("LLOOM_WEB_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
+    web_port_with(overrides(), std::env::var("LLOOM_WEB_PORT").ok().as_deref())
+}
+
+fn web_port_with(over: &CliOverrides, web_port_env: Option<&str>) -> u16 {
+    over.web_port
+        .or_else(|| web_port_env.and_then(|p| p.parse().ok()))
         .unwrap_or(DEFAULT_WEB_PORT)
 }
 
 /// N1/O2 收尾：REST 服务器默认只绑环回（本地工具，默认关闭局域网暴露）。
-/// 需要局域网访问时显式设 `LLOOM_BIND=0.0.0.0`（建议同时配置 LLOOM_PROXY_TOKEN）。
+/// 需要局域网访问时显式给 `--bind 0.0.0.0` 或设 `LLOOM_BIND=0.0.0.0`（建议同时配置 LLOOM_PROXY_TOKEN）。
 pub fn bind_addr() -> String {
-    std::env::var("LLOOM_BIND")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
+    bind_addr_with(overrides(), std::env::var("LLOOM_BIND").ok().as_deref())
+}
+
+fn bind_addr_with(over: &CliOverrides, bind_env: Option<&str>) -> String {
+    over.bind
+        .clone()
+        .or_else(|| bind_env.map(str::to_string).filter(|s| !s.trim().is_empty()))
         .unwrap_or_else(|| "127.0.0.1".to_string())
 }
 
@@ -302,4 +357,85 @@ pub fn resolve_env_or_literal(value: &str) -> String {
 /// A value that can be a literal or a path. No-op; kept for API symmetry.
 pub fn is_absolute(p: &str) -> bool {
     Path::new(p).is_absolute()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_port_precedence() {
+        // 默认值
+        assert_eq!(web_port_with(&CliOverrides::default(), None), DEFAULT_WEB_PORT);
+        // env > 默认
+        assert_eq!(web_port_with(&CliOverrides::default(), Some("8080")), 8080);
+        // CLI > env > 默认
+        let over = CliOverrides { web_port: Some(9090), ..Default::default() };
+        assert_eq!(web_port_with(&over, Some("8080")), 9090);
+        // 非法 env 回落默认
+        assert_eq!(web_port_with(&CliOverrides::default(), Some("not-a-port")), DEFAULT_WEB_PORT);
+    }
+
+    #[test]
+    fn ai_port_precedence() {
+        // 默认值
+        assert_eq!(ai_port_with(&CliOverrides::default(), None, None), DEFAULT_AI_PORT);
+        // 从 LLOOM_AI_SERVICE_URL 抠端口（旧行为保留）
+        assert_eq!(
+            ai_port_with(&CliOverrides::default(), None, Some("http://127.0.0.1:17962/")),
+            17962
+        );
+        // LLOOM_AI_PORT > URL 抠取
+        assert_eq!(
+            ai_port_with(&CliOverrides::default(), Some("17970"), Some("http://127.0.0.1:17962/")),
+            17970
+        );
+        // CLI > 一切
+        let over = CliOverrides { ai_port: Some(17980), ..Default::default() };
+        assert_eq!(ai_port_with(&over, Some("17970"), Some("http://127.0.0.1:17962/")), 17980);
+    }
+
+    #[test]
+    fn ai_service_url_coherent_with_port() {
+        // 旧行为：显式完整 URL 原样使用（保留 base path 自定义）
+        assert_eq!(
+            ai_service_url_with(&CliOverrides::default(), None, Some("http://10.0.0.5:8000/v1")),
+            "http://10.0.0.5:8000/v1"
+        );
+        // 显式端口 env 生效时，URL 必须与 ai_port 同源（防 spawn/调用断链）
+        assert_eq!(
+            ai_service_url_with(&CliOverrides::default(), Some("17970"), Some("http://127.0.0.1:17962/")),
+            "http://localhost:17970"
+        );
+        // 非法端口 env → ai_port 回落默认，URL 同源
+        assert_eq!(
+            ai_service_url_with(&CliOverrides::default(), Some("not-a-port"), None),
+            format!("http://localhost:{DEFAULT_AI_PORT}")
+        );
+        assert_eq!(
+            ai_service_url_with(&CliOverrides::default(), Some("7862"), None),
+            "http://localhost:7862"
+        );
+        // CLI 覆盖压过 URL env
+        let over = CliOverrides { ai_port: Some(17980), ..Default::default() };
+        assert_eq!(
+            ai_service_url_with(&over, None, Some("http://127.0.0.1:17962/")),
+            "http://localhost:17980"
+        );
+        // 未配置任何项 → 按默认端口构造
+        assert_eq!(
+            ai_service_url_with(&CliOverrides::default(), None, None),
+            format!("http://localhost:{DEFAULT_AI_PORT}")
+        );
+    }
+
+    #[test]
+    fn bind_addr_precedence() {
+        assert_eq!(bind_addr_with(&CliOverrides::default(), None), "127.0.0.1");
+        assert_eq!(bind_addr_with(&CliOverrides::default(), Some("0.0.0.0")), "0.0.0.0");
+        let over = CliOverrides { bind: Some("192.168.1.10".into()), ..Default::default() };
+        assert_eq!(bind_addr_with(&over, Some("0.0.0.0")), "192.168.1.10");
+        // 空 env 视为未设置
+        assert_eq!(bind_addr_with(&CliOverrides::default(), Some("  ")), "127.0.0.1");
+    }
 }

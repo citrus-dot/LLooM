@@ -3,10 +3,29 @@
 //! Starts the Python AI micro-service, Ollama, and the axum REST server
 //! (`:7861`). WebUI is served at `/`; all UIs (browser, CLI, TUI) share the
 //! same REST contract via `lloom-core`.
+//!
+//! 配置优先级：CLI 参数 > 环境变量（含 `.env` 注入）> 代码默认值。
 
+use clap::Parser;
 use lloom_core::config;
 use lloom_core::db;
 use lloom_core::server::{self, AppState, build_router};
+
+#[derive(Parser, Debug)]
+#[command(name = "lloom-server", version, about = "LLooM 智能路由网关（REST + WebUI）")]
+struct Args {
+    /// WebUI/REST 监听端口（默认 7861；同 LLOOM_WEB_PORT）
+    #[arg(long)]
+    web_port: Option<u16>,
+
+    /// Python AI 微服务端口（默认 7862；同 LLOOM_AI_PORT）
+    #[arg(long)]
+    ai_port: Option<u16>,
+
+    /// 绑定地址（默认 127.0.0.1；同 LLOOM_BIND）
+    #[arg(long)]
+    bind: Option<String>,
+}
 
 fn main() {
     let install_dir = config::resolve_install_dir();
@@ -15,6 +34,14 @@ fn main() {
     // Load `.env` into the process environment so models can resolve API keys/bases
     // and subprocesses inherit them.
     config::load_env();
+
+    // CLI 参数最后解析并注入覆盖层（优先级最高；未给定的项回落 env 链）。
+    let args = Args::parse();
+    config::init_cli_overrides(config::CliOverrides {
+        web_port: args.web_port,
+        ai_port: args.ai_port,
+        bind: args.bind,
+    });
 
     if let Err(e) = db::init_db() {
         eprintln!("[core] db init failed: {e}");

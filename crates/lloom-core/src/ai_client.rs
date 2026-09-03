@@ -58,9 +58,7 @@ pub struct SseEvent {
 }
 
 fn base_url() -> String {
-    std::env::var("LLOOM_AI_SERVICE_URL").unwrap_or_else(|_| {
-        format!("http://localhost:{}", config::ai_port())
-    })
+    config::ai_service_url()
 }
 
 fn client() -> reqwest::Client {

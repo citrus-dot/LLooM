@@ -10,5 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 lloom-core = { path = "../../crates/lloom-core" }
+clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "net"] }
 axum = { version = "0.8", features = ["http1", "json", "tokio", "query", "macros"] }
