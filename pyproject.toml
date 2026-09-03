@@ -30,3 +30,7 @@ ai-service = "api.ai_service:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["api*"]
+
+[tool.ruff]
+# 代码库大量 CJK 注释与长 SSE payload 行，88 放不下；120 覆盖现状（仅个别行手动折行）。
+line-length = 120

@@ -2378,7 +2378,7 @@ mod migration_tests {
         let cid = "conv-tp-1";
         // 阶段一：用户消息 + assistant 占位(generating)
         let (u_id, u_seq) = crate::conversations::append_message(cid, "user", "请写个快排", None).unwrap();
-        let (a_id, a_seq) = crate::conversations::append_message(
+        let (_a_id, a_seq) = crate::conversations::append_message(
             cid, "assistant", "", Some(&serde_json::json!({"status": "generating"})),
         )
         .unwrap();

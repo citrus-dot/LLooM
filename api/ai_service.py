@@ -24,8 +24,7 @@ import hashlib
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
-from enum import Enum
+from dataclasses import field
 from typing import Any
 from collections.abc import Iterator
 
@@ -593,8 +592,6 @@ def _cacheable(query: str, temperature: float) -> bool:
 # Back-compat shims: the legacy module-level functions in this file called
 # SemanticCache(query, model) / .put(query, response, model). We route them
 # through the singleton so existing call sites keep compiling.
-def _semantic_for(cache_dir: str, threshold: float, ttl: int) -> SemanticCache | None:
-    return SemanticCache.get(cache_dir, threshold, ttl)
 
 
 # ── Semantic-cache pre-initialization ──
@@ -945,7 +942,8 @@ AGGREGATE_SYSTEM_PROMPT = """你是一个结果汇总专家。用户提出了一
 3. 突出关键结论
 4. 使用中文回答
 5. 结合对话上下文，确保回答与之前的对话连贯
-6. 严禁编造不存在的测试脚本、文件或可执行代码。如果子任务结果中包含代码示例，必须明确说明它来自子任务结果；如果子任务结果中没有代码，不要主动生成“附：一键运行测试脚本”之类的内容。
+6. 严禁编造不存在的测试脚本、文件或可执行代码。如果子任务结果中包含代码示例，必须明确说明它来自子任务结果；\
+如果子任务结果中没有代码，不要主动生成“附：一键运行测试脚本”之类的内容。
 7. 如果某个子任务执行失败，结果中会包含“执行失败:”前缀，请如实说明该部分失败，不要替它编造内容或假装已完成。"""
 
 
@@ -1091,7 +1089,6 @@ def _two_layer_lookup(
     sem: SemanticCache | None,
     query: str,
     model: str,
-    conv_id: str,
     fingerprint: str,
     context_free: bool,
     system_id: str,
@@ -1160,8 +1157,8 @@ def _call_llm(
     """
     system_id = _system_id(messages)
     if cache_query and exact is not None or sem is not None:
-        resp, sim, _layer = _two_layer_lookup(
-            exact, sem, cache_query, model_spec.name, conv_id,
+        resp, sim, _ = _two_layer_lookup(
+            exact, sem, cache_query, model_spec.name,
             fingerprint, context_free, system_id,
         )
         if resp is not None:
@@ -1263,8 +1260,8 @@ def _call_llm_stream(
     """
     system_id = _system_id(messages)
     if cache_query and (exact is not None or sem is not None):
-        resp, sim, _layer = _two_layer_lookup(
-            exact, sem, cache_query, model_spec.name, conv_id,
+        resp, sim, _ = _two_layer_lookup(
+            exact, sem, cache_query, model_spec.name,
             fingerprint, context_free, system_id,
         )
         if resp is not None:
@@ -1789,7 +1786,9 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             if final_model:
                 task["selected_model"] = final_model  # 下游显示/统计用实际服务模型
             hit = bool(task_hit) or task_usage.get("cache_hit", False)
-            sim = task_usage.get("cache_sim") or (sem.best_sim(user_content, final_model or task["selected_model"]) if sem else None)
+            sim = task_usage.get("cache_sim")
+            if not sim and sem:
+                sim = sem.best_sim(user_content, final_model or task["selected_model"])
             task["cache_hit"] = hit
             task["cache_sim"] = sim
 
@@ -1873,10 +1872,12 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
 
         if failed_tasks:
             final = "## 部分子任务执行失败\n\n" + "\n\n".join(
-                f"**子任务 {t['id']}**（{t['selected_model']}）: {t['description']}\n\n执行失败：{t.get('error', '未知错误')}"
+                f"**子任务 {t['id']}**（{t['selected_model']}）: {t['description']}\n\n"
+                f"执行失败：{t.get('error', '未知错误')}"
                 for t in sub_tasks
             )
-            yield _sse("task_start", {"id": 0, "description": "汇总最终回答（部分子任务失败）", "model": agg_model.name})
+            yield _sse("task_start", {"id": 0, "description": "汇总最终回答（部分子任务失败）",
+                                      "model": agg_model.name})
             for chunk in [final[i:i+30] for i in range(0, len(final), 30)]:
                 yield _sse("token", {"id": 0, "model": agg_model.name, "delta": chunk})
             agg_duration = 0.0
@@ -1895,7 +1896,10 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                     messages=[
                         {"role": "system", "content": AGGREGATE_SYSTEM_PROMPT},
                         *kept_history[-6:],
-                        {"role": "user", "content": f"原始任务：{req.query}\n\n子任务执行结果：\n\n{chr(10).join(summary_parts)}\n\n请汇总以上结果，生成最终回答。"},
+                        {"role": "user", "content": (
+                            f"原始任务：{req.query}\n\n子任务执行结果：\n\n"
+                            f"{chr(10).join(summary_parts)}\n\n请汇总以上结果，生成最终回答。"
+                        )},
                     ],
                     max_tokens=4096,
                     temperature=0.3,
