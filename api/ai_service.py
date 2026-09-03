@@ -1156,7 +1156,7 @@ def _call_llm(
     on the question). When None, caching is disabled for this call.
     """
     system_id = _system_id(messages)
-    if cache_query and exact is not None or sem is not None:
+    if cache_query and (exact is not None or sem is not None):
         resp, sim, _ = _two_layer_lookup(
             exact, sem, cache_query, model_spec.name,
             fingerprint, context_free, system_id,
