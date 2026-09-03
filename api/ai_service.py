@@ -23,6 +23,7 @@ import time
 import hashlib
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -1685,16 +1686,19 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
         # Complex subtasks use the budgeted history window (kept turns only —
         # the summary already covers dropped older turns).
         kept_history = history[len(history) - ctx_stats["kept"]:] if ctx_stats["kept"] else []
-        for task in sub_tasks:
+
+        def _execute_task(task: dict, completed: dict[int, dict]) -> tuple[dict, dict]:
+            """执行单个子任务：plan 回调 → fallback 链 → escalation。
+
+            只做计算、不 yield；task dict 原地写入 result/status/时长/缓存信息，
+            返回 (done_payload, stats) 交主循环汇总并发 SSE。缓存与 litellm
+            均线程安全，completed/计数器只在主线程变动，可并发调用。"""
             context_parts = []
             for dep_id in task["depends_on"]:
                 if dep_id in completed:
                     dep = completed[dep_id]
                     context_parts.append(f"[子任务{dep_id}] {dep['description']}\n结果: {dep['result']}")
             context = "\n\n".join(context_parts) if context_parts else ""
-
-            yield _sse("task_start", {"id": task["id"], "description": task["description"],
-                                      "model": task["selected_model"]})
 
             spec = _model_by_name(req.models, task["selected_model"])
             if not spec:
@@ -1759,6 +1763,7 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             # P4.c：零成本质量信号不达标 + escalation 开 → 升档强模型重试一次。
             tier_bumped = False
             escalated_from: str | None = None
+            local_escalations = 0
             if (done_result is not None
                     and not _quality_signal_ok(done_result)
                     and escalation_enabled):
@@ -1766,11 +1771,10 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 strong = _strongest_model(req.models, final_model)
                 if strong is not None and strong.name != final_model:
                     tier_bumped = True
-                    p4_tier_bumped = True
                     try:
                         done_result = _call_one(strong.name)
                         final_model = strong.name
-                        p4_total_escalations += 1
+                        local_escalations = 1
                     except Exception:
                         pass  # 保留上一次真实结果（即使质量不佳）
 
@@ -1788,12 +1792,6 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             sim = task_usage.get("cache_sim") or (sem.best_sim(user_content, final_model or task["selected_model"]) if sem else None)
             task["cache_hit"] = hit
             task["cache_sim"] = sim
-            any_cache_hit = any_cache_hit or hit
-            total_in += task_usage.get("input_tokens", 0)
-            total_out += task_usage.get("output_tokens", 0)
-            total_cost += task_usage.get("cost", 0.0)
-            total_saved += task_usage.get("saved_cost", 0.0)
-            completed[task["id"]] = task
 
             done_payload: dict = {
                 "id": task["id"], "model": final_model or task["selected_model"],
@@ -1815,7 +1813,56 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 done_payload["tier_bumped"] = True
             if task.get("status") == "failed":
                 done_payload["error"] = task.get("error") or "执行失败"
-            yield _sse("task_done", done_payload)
+            stats = {
+                "hit": hit,
+                "input_tokens": task_usage.get("input_tokens", 0),
+                "output_tokens": task_usage.get("output_tokens", 0),
+                "cost": task_usage.get("cost", 0.0),
+                "saved_cost": task_usage.get("saved_cost", 0.0),
+                "escalations": local_escalations,
+                "tier_bumped": tier_bumped,
+            }
+            return done_payload, stats
+
+        # N3.a：按依赖分波执行——同一波内子任务互不依赖，线程池并发
+        # （等价 asyncio.gather 语义：`_call_llm` 为同步调用，gather 的
+        # 并发由线程池承载）。task_start 先于波内全部执行下发，task_done
+        # 按原 sub_tasks 顺序在波完成后统一下发，保证事件顺序确定、
+        # 聚合输入仍按原序拼接。
+        waves: list[list[dict]] = []
+        pending_tasks = list(sub_tasks)
+        settled: set[int] = set()
+        while pending_tasks:
+            ready = [t for t in pending_tasks if all(d in settled for d in t["depends_on"])]
+            if not ready:
+                # 依赖环兜底：取首个待处理任务按无上下文执行（与旧串行行为一致：
+                # 缺失的依赖只贡献空上下文，不阻塞流程）。
+                ready = [pending_tasks[0]]
+            waves.append(ready)
+            for t in ready:
+                settled.add(t["id"])
+            pending_tasks = [t for t in pending_tasks if t not in ready]
+
+        for wave in waves:
+            for task in wave:
+                yield _sse("task_start", {"id": task["id"], "description": task["description"],
+                                          "model": task["selected_model"]})
+            if len(wave) == 1:
+                results = [_execute_task(wave[0], completed)]
+            else:
+                with ThreadPoolExecutor(max_workers=len(wave)) as pool:
+                    futures = [pool.submit(_execute_task, t, completed) for t in wave]
+                    results = [f.result() for f in futures]
+            for task, (done_payload, stats) in zip(wave, results):
+                completed[task["id"]] = task
+                any_cache_hit = any_cache_hit or stats["hit"]
+                total_in += stats["input_tokens"]
+                total_out += stats["output_tokens"]
+                total_cost += stats["cost"]
+                total_saved += stats["saved_cost"]
+                p4_total_escalations += stats["escalations"]
+                p4_tier_bumped = p4_tier_bumped or stats["tier_bumped"]
+                yield _sse("task_done", done_payload)
 
         # Aggregate —— 流式输出最终回答
         failed_tasks = [t for t in sub_tasks if t.get("status") == "failed"]
