@@ -23,7 +23,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-# pip 镜像源：由仓库根目录 pip.conf 提供（默认清华大学 PyPI 镜像，已验证可达）。
+# 依赖管理：优先 uv（按 uv.lock 冻结安装，构建可复现）；无 uv 时回落 pip。
+# uv 不读 pip.conf，受限网络下本地需 export UV_DEFAULT_INDEX=（清华镜像）。
 export PIP_CONFIG_FILE="$PROJECT_DIR/pip.conf"
 
 SKIP_AI=false
@@ -61,7 +62,15 @@ check_common() {
 
 check_python() {
     echo "检查 Python 依赖..."
-    # 自动探测：优先项目 .venv，其次显式 PYTHON_BIN，最后系统 python3
+    if command -v uv >/dev/null 2>&1; then
+        echo "  → 检测到 uv，按 uv.lock 冻结同步（--extra build,dev）..."
+        uv sync --frozen --extra build --extra dev || FAILED_DEPS=$((FAILED_DEPS+1))
+        PYTHON_BIN=".venv/bin/python"
+        [ -x "$PYTHON_BIN" ] || PYTHON_BIN="python3"
+        echo "  → 使用 Python: $PYTHON_BIN (uv 管理)"
+        return 0
+    fi
+    # 无 uv：回落传统 venv/pip 探测
     local py="${PYTHON_BIN:-}"
     if [ -z "$py" ]; then
         for cand in ".venv/bin/python" "venv/bin/python"; do

@@ -16,10 +16,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
+# 打包 AI 微服务所需（CI / build.sh: uv sync --frozen --extra build）
+build = [
     "pyinstaller>=6.0",
+]
+# 开发/测试（chromadb 为可选语义缓存，缺失时 ai_service 优雅降级）
+dev = [
     "pytest>=8.0",
-    # Optional semantic cache for orchestration (degrades gracefully)
     "chromadb>=0.5.0",
 ]
 
@@ -34,3 +37,9 @@ include = ["api*"]
 [tool.ruff]
 # 代码库大量 CJK 注释与长 SSE payload 行，88 放不下；120 覆盖现状（仅个别行手动折行）。
 line-length = 120
+
+# uv 使用说明：
+#   本地开发：uv sync --extra dev --extra build（依赖按 uv.lock 冻结）
+#   镜像：uv 不读 pip.conf，受限网络下本地导出镜像：
+#     export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+#   CI 用官方 PyPI，镜像不进仓库。
