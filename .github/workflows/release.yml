@@ -1,0 +1,93 @@
+# 三平台安装包构建 + Release 发布
+#
+# 触发：
+#   push tag v*        → 构建 + 发布 GitHub Release（附三平台安装包）
+#   workflow_dispatch  → 手动构建（仅产出 artifacts 供检查）
+#
+# 产物（v2 分支约定：Rust release 二进制 + PyInstaller onedir AI 微服务 + 静态 WebUI）：
+#   dist/LLooM-<ver>-linux-<arch>.tar.gz
+#   dist/LLooM-<ver>-macos-<arch>.tar.gz
+#   dist/LLooM-<ver>-windows-<arch>.zip
+#
+# 说明：
+#   - PyInstaller 产物不可跨平台，必须在目标 OS runner 上构建。
+#   - Linux 用 ubuntu-22.04 保证 glibc 兼容底线。
+#   - Ollama 不捆绑；macOS 产物未签名（用户首次运行需 xattr -cr 绕 Gatekeeper）。
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            pkg: bash scripts/package.sh
+          - os: macos-latest
+            pkg: bash scripts/package.sh
+          - os: windows-latest
+            pkg: powershell -ExecutionPolicy Bypass -File scripts/package.ps1
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0            # git describe 需要 tag 历史
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build WebUI
+        run: |
+          cd webui
+          npm ci
+          npm run build
+
+      - name: Build Rust (release)
+        run: cargo build --workspace --release
+
+      - name: Build AI micro-service (PyInstaller)
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller
+          pyinstaller ai_service.spec --noconfirm --clean
+
+      - name: Package
+        run: ${{ matrix.pkg }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+          generate_release_notes: true
