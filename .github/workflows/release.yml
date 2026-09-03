@@ -2,7 +2,8 @@
 #
 # 触发：
 #   push tag v*        → 构建 + 发布 GitHub Release（附三平台安装包）
-#   workflow_dispatch  → 手动构建（仅产出 artifacts 供检查）
+#   push v2 分支        → 构建三平台安装包（仅产 artifacts 供检查，不发 Release）
+#   workflow_dispatch  → 手动构建（同上）
 #
 # 产物（v2 分支约定：Rust release 二进制 + PyInstaller onedir AI 微服务 + 静态 WebUI）：
 #   dist/LLooM-<ver>-linux-<arch>.tar.gz
@@ -18,7 +19,9 @@ name: release
 
 on:
   push:
+    branches: [v2]
     tags: ["v*"]
+    paths-ignore: ["**.md"]
   workflow_dispatch:
 
 permissions:
