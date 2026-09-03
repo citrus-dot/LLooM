@@ -87,7 +87,12 @@ git clone -b v2 https://github.com/citrus-dot/LLooM.git
 cd LLooM
 
 # 安装 Python 依赖（Python AI 微服务）
-pip install -e ".[dev]"
+# 推荐 uv（按入库的 uv.lock 冻结安装，构建可复现）：
+uv sync --extra dev --extra build
+# 受限网络：uv 不读 pip.conf，需显式指定镜像：
+#   export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+# 无 uv 时回落 pip（仓库自带 pip.conf 清华镜像）：
+#   export PIP_CONFIG_FILE="$PWD/pip.conf" && pip install -e ".[dev]"
 
 # 复制并编辑环境配置
 cp .env.example .env

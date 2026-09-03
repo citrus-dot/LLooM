@@ -394,7 +394,7 @@
 
 ## 九、开发环境
 
-- Python：`.venv/`（3.13.12），`pip install -e ".[dev]"`（清华镜像）。
+- Python：**uv 管理**（`.venv/`，依赖按入库 `uv.lock` 冻结）：`uv sync --extra dev --extra build`；uv 不读 pip.conf，受限网络 `export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple`；无 uv 回落 `pip install -e ".[dev]"`。CI/打包走 `uv sync --frozen --extra build`（PyInstaller 产物可复现）。
 
 - Rust：`cargo build -p lloom-server`（全部模块已提交；改动后仍须 `cargo build` + `cargo test` 全绿再提交）。
 
