@@ -40,11 +40,10 @@ New-Item -ItemType Directory -Force -Path "$Stage/scripts" | Out-Null
 Copy-Item scripts/aiq_replay.py "$Stage/scripts/"   # N2 路由体检 job 按 install_dir/scripts 查找
 Copy-Item .env.example $Stage/
 
-@'
-@echo off
-cd /d %~dp0
-lloom-server.exe
-'@ | Set-Content -Path "$Stage/start.bat" -Encoding ascii
+# 不用 here-string：PS 5.1 对 LF 行尾脚本的 here-string 解析不可靠，
+# 用 `r`n 显式写 CRLF，保证 start.bat 在任意检出配置下正确。
+$bat = "@echo off`r`ncd /d %~dp0`r`nlloom-server.exe`r`n"
+Set-Content -Path "$Stage/start.bat" -Value $bat -Encoding ascii
 
 New-Item -ItemType Directory -Force -Path dist/pkg | Out-Null
 Compress-Archive -Path $Stage -DestinationPath $Out -Force
