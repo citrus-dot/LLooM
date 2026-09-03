@@ -38,7 +38,7 @@ jobs:
           - os: macos-latest
             pkg: bash scripts/package.sh
           - os: windows-latest
-            pkg: powershell -ExecutionPolicy Bypass -File scripts/package.ps1
+            pkg: cmd /c scripts\package.bat
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
