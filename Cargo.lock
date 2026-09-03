@@ -972,6 +972,7 @@ name = "lloom-server"
 version = "2.1.0"
 dependencies = [
  "axum",
+ "clap",
  "lloom-core",
  "tokio",
 ]
