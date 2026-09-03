@@ -73,6 +73,7 @@
 | 定价引擎     | Rust `pricing.rs` 单一计价真源，Python 只透传 usage                         | 消除双真源、量纲统一 USD/token |
 | 时段计算     | 纯标准库（+8 偏移 + Sakamoto 星期 + 公历换算），**不引 chrono**                    | 规避受限网络拉 crates.io 失败 |
 | 缓存键      | `hash(model + system_prompt版本 + context_fingerprint + cache_key)` | 上下文相关查询不跨会话命中        |
+| 配置层      | 优先级链 **CLI 参数 > 环境变量 > .env > 默认值**（`config::CliOverrides` + OnceLock）；`ai_service_url()` 单源封装防 spawn/调用断链；删除旧 `LLOOM_API_PORT` 残留 | `--help` 自文档、无第二配置真源 |
 
 ***
 
