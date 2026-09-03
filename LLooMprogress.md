@@ -284,7 +284,7 @@
 
 - [x] ✅ **N2 闭环评估**（2026-09-02，本阶段）：**N2.a 报告闭环**——`aiq_replay.py` 加 `--json`（计算与输出分离，与文本报告数字同源一致；顺手修 SELECT 缺 `id` 列 KeyError 与 sqlite `?1` 占位符弃用警告）；新表 `policy_review`（幂等建表，三线成本/质量 + AIQ + saved\_pct + 预算档分布 + 建议快照）；周期 job `aiq_report_loop` 挂 `spawn_background_jobs()`（6h，首 tick 立即出报告，失败只打日志下周期自愈）；`GET /api/routing/review`（最新报告）+ `POST /api/routing/review/refresh`（手动立即体检）。**N2.b 权重建议**——Rust 侧 `review.rs::grid_search_suggestions` 用 `plan()` 对影子样本无副作用网格重放（cost/quality 权重 7×7，打分 = 质量增益 − 0.5×成本增幅，物性门槛 0.05），找支配当前策略的帕累托点；`POST /api/routing/review/adopt` 人工采纳后 upsert `routing_policy`（每请求读库，下一请求即生效；**不自动改策略**）；WebUI OverviewPage「路由体检」折叠卡（三线表 + 预算档分布 + 建议对比表 + 全部采纳/立即体检按钮，遵循重要信息折叠收纳约定）。**验收**：94 单测全绿（+4 review：网格建议更便宜模型 / 无空间不出建议 / 采纳后换选 / policy\_review 往返+档分布）；curl 冒烟全过（启动首跑写报告 id=1、refresh 追加 id=2、无建议时 adopt 正确拒绝）；`--json` 与文本数字一致已核
 
-- [ ] **N3 信任与收尾**：a) O6 子任务并行（`asyncio.gather`）b) `/metrics` Prometheus 导出 c) 账单对账脚本（**阻塞：需真实账单导出**，脚本先行）
+- [ ] **N3 信任与收尾**：a) ✅ **O6 子任务并行**（2026-09-03）——`ai_service.py` 编排路径按 `depends_on` 分波：同波无依赖子任务以 `ThreadPoolExecutor` 并发（`_call_llm` 为同步调用，等价 `asyncio.gather` 语义；ExactCache/SemanticCache 内部锁 + `completed`/计数器仅主线程变动，线程安全），`task_start` 先行、`task_done` 按原序在波末统一下发，依赖环兜底为无上下文执行（同旧串行行为）；子任务执行体重构为 `_execute_task`（plan 回调 → fallback 链 → escalation 不变），SSE 契约无改动。冒烟：3 子任务时长和 17.17s > 墙钟 17.7s（含 decompose+汇总 1.93s）证实并发，聚合输入完整；94 单测全绿 b) `/metrics` Prometheus 导出 c) 账单对账脚本（**阻塞：需真实账单导出**，脚本先行）
 
 ### 历史遗留（LLooMprogress 原 TODO）
 
