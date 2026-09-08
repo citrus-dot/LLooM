@@ -1547,11 +1547,15 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
             usage: dict = {}
             reasoning: list[str] = []
             parts: list[str] = []
+            # Reasoning models spend output tokens on thinking before the
+            # answer; a 2000 cap truncates them mid-sentence (finish_reason
+            # =length). Give them headroom, keep the cheap cap for the rest.
+            is_reasoning = "r1" in model_spec.name.lower() or "think" in model_spec.litellm_model.lower()
             try:
                 for delta in _call_llm_stream(
                     model_spec,
                     messages=messages,
-                    max_tokens=2000,
+                    max_tokens=8192 if is_reasoning else 2000,
                     timeout=120,
                     exact=exact,
                     sem=sem,

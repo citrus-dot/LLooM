@@ -288,6 +288,7 @@ export async function send() {
   const plan: PlanView = { sub_tasks: [] };
   let response = '';
   let errorMsg: string | null = null;
+  let gotResult = false;
   let cached = false;
   let cacheSim: number | undefined;
   let reasoning: string | undefined;
@@ -344,6 +345,7 @@ export async function send() {
           );
           patchPlan();
         } else if (ev.event === 'result' && d.response !== undefined) {
+          gotResult = true;
           response = d.response;
           cached = !!d.cache_hit;
           cacheSim = typeof d.cache_sim === 'number' ? d.cache_sim : undefined;
@@ -371,6 +373,34 @@ export async function send() {
         ...c,
         messages: c.messages.map((m, i) =>
           i === c.messages.length - 1 ? { ...m, content: finalContent, status: 'done' } : m,
+        ),
+        loading: false,
+      }));
+      return;
+    }
+
+    // Stream ended without a `result` event: the upstream SSE was cut early
+    // (e.g. provider dropped a long reasoning stream). Surface it instead of
+    // silently marking a truncated answer as complete with zero usage.
+    if (!gotResult) {
+      plan.sub_tasks = plan.sub_tasks.map((t) =>
+        t.status === 'running' ? { ...t, status: 'failed', error: '传输中断' } : t,
+      );
+      const finalContent = response
+        ? `${response}\n\n> ⚠️ 流式传输中断，以上为部分回答。可重发或换一个较简单的问题。`
+        : '请求失败: 流式传输中断且未返回任何内容。';
+      const meta = {
+        status: 'done',
+        error: true,
+        plan: plan.sub_tasks.length ? plan : undefined,
+      };
+      await updateMessage(convId, asstSeq, { content: finalContent, meta });
+      setConv(convId, (c) => ({
+        ...c,
+        messages: c.messages.map((m, i) =>
+          i === c.messages.length - 1
+            ? { ...m, content: finalContent, status: 'done', plan: plan.sub_tasks.length ? { ...plan } : undefined }
+            : m,
         ),
         loading: false,
       }));

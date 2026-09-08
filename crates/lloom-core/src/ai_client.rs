@@ -62,8 +62,14 @@ fn base_url() -> String {
 }
 
 fn client() -> reqwest::Client {
+    // NOTE: no total `.timeout()` here — reqwest's client timeout covers the
+    // WHOLE request including streaming reads, which silently killed long
+    // SSE responses at 300s (task_done/result never reached the client).
+    // Instead: bounded connect + per-read idle timeout, so a healthy stream
+    // can run arbitrarily long but a stalled one is reaped.
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .read_timeout(std::time::Duration::from_secs(120))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
