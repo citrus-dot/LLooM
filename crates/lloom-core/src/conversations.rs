@@ -302,18 +302,20 @@ pub fn auto_title(messages: &[Value]) -> String {
 /// Legacy full-save semantics (POST /api/conversations): creates the
 /// conversation if needed and replaces its messages atomically. Returns the id.
 pub fn save_or_create(req_id: &str, title: &str, messages: &[Value]) -> Result<String> {
-    validate_id(req_id)?;
+    // Resolve the id first: an empty client id means "server generates one"
+    // (WebUI's first-save path). Validation must run on the RESOLVED id, not
+    // the raw input — validating before the fallback made that path a dead 400.
+    let id = if req_id.is_empty() { new_id() } else { req_id.to_string() };
+    validate_id(&id)?;
     let mut conn = db::open_fk()?;
     let now = now_iso();
     let existing: Option<(String, String)> = conn
         .query_row(
             "SELECT title, created_at FROM conversations WHERE id = ?1",
-            params![req_id],
+            params![id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .ok();
-
-    let id = if req_id.is_empty() { new_id() } else { req_id.to_string() };
 
     // Title policy (unchanged from the JSON era): explicit title wins; on
     // overwrite with empty title keep the existing title; new conversations

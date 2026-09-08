@@ -807,7 +807,7 @@ pub fn get_usage_stats(
                 COUNT(*) as request_count,
                 SUM(cache_hit) as cache_hits,
                 SUM(cache_saved_cost) as cache_saved
-         FROM usage_records WHERE 1=1",
+         FROM usage_records WHERE cost >= 0",
     );
     let mut vals: Vec<rusqlite::types::Value> = Vec::new();
     if let Some(m) = model_name {
@@ -845,7 +845,7 @@ pub fn get_usage_stats(
 
 pub fn get_total_spend(user_id: Option<&str>, model_name: Option<&str>, since: Option<&str>) -> Result<f64> {
     let conn = open()?;
-    let mut sql = String::from("SELECT COALESCE(SUM(cost), 0.0) as total FROM usage_records WHERE 1=1");
+    let mut sql = String::from("SELECT COALESCE(SUM(cost), 0.0) as total FROM usage_records WHERE cost >= 0");
     let mut vals: Vec<rusqlite::types::Value> = Vec::new();
     if let Some(u) = user_id {
         sql.push_str(" AND user_id = ?");
@@ -1844,7 +1844,7 @@ pub fn probe_stats() -> Result<ProbeStats> {
     let conn = open()?;
     let mut stmt = conn.prepare(
         "SELECT COUNT(*) as rounds,
-                COALESCE(SUM(cost), 0.0) as spend,
+                COALESCE(SUM(CASE WHEN cost > 0 THEN cost ELSE 0 END), 0.0) as spend,
                 COALESCE(SUM(CASE WHEN cache_hit = 1 THEN 1 ELSE 0 END), 0) as hits,
                 COALESCE(SUM(CASE WHEN cache_hit = 0 AND cost > 0 THEN 1 ELSE 0 END), 0) as hit_fails,
                 COALESCE(SUM(CASE WHEN cost < 0 THEN 1 ELSE 0 END), 0) as fails
