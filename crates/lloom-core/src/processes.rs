@@ -217,9 +217,17 @@ pub fn ollama_installed() -> bool {
     if bin != "ollama" {
         return true; // bundled path found
     }
-    Command::new("sh")
+    if Command::new("sh")
         .args(["-c", "command -v ollama >/dev/null 2>&1"])
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+    {
+        return true;
+    }
+    // PATH lookup can miss a user-installed ollama when this process inherits
+    // a minimal PATH (e.g. launched from an IDE/sandbox). Fall back to the
+    // standard install locations before claiming it's not installed.
+    std::path::Path::new("/usr/local/bin/ollama").exists()
+        || std::path::Path::new("/opt/homebrew/bin/ollama").exists()
 }
