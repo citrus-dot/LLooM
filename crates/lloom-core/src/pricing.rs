@@ -167,6 +167,95 @@ pub fn parse_remote_prices(raw: &str) -> HashMap<(String, String), RemotePrice> 
     out
 }
 
+// ── 第三方参考价（PR-x：OpenRouter 参考层，不覆盖 price_specs，仅供对账） ──
+
+/// 一条 OpenRouter 模型报价（per-token USD，转售价口径）。
+#[derive(Debug, Clone)]
+pub struct OpenRouterPrice {
+    pub id: String,
+    pub input_cost: f64,
+    pub output_cost: f64,
+}
+
+/// 解析 OpenRouter `GET /api/v1/models` 响应 → 报价列表。
+/// 结构 `{"data":[{"id":"qwen/qwen-plus","pricing":{"prompt":"0.00000026",...}}]}`；
+/// prompt/completion 为字符串或数字，<=0 或缺失跳过。纯函数，离线单测。
+pub fn parse_openrouter_prices(raw: &str) -> Vec<OpenRouterPrice> {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    let Some(items) = root.get("data").and_then(|d| d.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in items {
+        let Some(id) = it.get("id").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        let Some(p) = it.get("pricing") else {
+            continue;
+        };
+        let num = |k: &str| -> Option<f64> {
+            match p.get(k) {
+                Some(serde_json::Value::String(s)) => s.trim().parse::<f64>().ok(),
+                Some(serde_json::Value::Number(n)) => n.as_f64(),
+                _ => None,
+            }
+        };
+        let (Some(input), Some(output)) = (num("prompt"), num("completion")) else {
+            continue;
+        };
+        if input <= 0.0 || output <= 0.0 {
+            continue;
+        }
+        out.push(OpenRouterPrice {
+            id: id.to_string(),
+            input_cost: input,
+            output_cost: output,
+        });
+    }
+    out
+}
+
+/// 本地 (provider, model) → OpenRouter 最佳匹配 id。
+/// 规则（可解释优先级）：① 尾段精确相等（忽略大小写，且非 free 变体）；
+/// ② id 包含模型名子串（非 free）；都不中则 None。同级取 id 最短者（通常为主条目）。
+pub fn match_openrouter(local_model: &str, catalog: &[OpenRouterPrice]) -> Option<OpenRouterPrice> {
+    let lm = local_model.to_ascii_lowercase();
+    let eligible = |p: &OpenRouterPrice| !p.id.to_ascii_lowercase().ends_with(":free");
+    let mut best: Option<&OpenRouterPrice> = None;
+    let mut best_exact = false;
+    for p in catalog {
+        if !eligible(p) {
+            continue;
+        }
+        let last = p.id.rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+        let exact = last == lm;
+        let contains = !exact && p.id.to_ascii_lowercase().contains(&lm);
+        if !exact && !contains {
+            continue;
+        }
+        let better = match best {
+            None => true,
+            Some(b) => {
+                // 精确匹配永远压过包含匹配；同级取 id 更短者
+                if exact && !best_exact {
+                    true
+                } else if !exact && best_exact {
+                    false
+                } else {
+                    p.id.len() < b.id.len()
+                }
+            }
+        };
+        if better {
+            best_exact = exact;
+            best = Some(p);
+        }
+    }
+    best.cloned()
+}
+
 /// 生效档的抽象：有阶梯走 Tier，无阶梯回落 Flat（避免借用 self 的生存期问题）
 enum BandRef<'a> {
     Tier(&'a TierBand),
@@ -524,6 +613,43 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.band(100).cache_read(), 1e-6);
+    }
+
+    // ── PR-x OpenRouter 参考层 ──
+
+    fn or(id: &str, i: f64, o: f64) -> OpenRouterPrice {
+        OpenRouterPrice { id: id.into(), input_cost: i, output_cost: o }
+    }
+
+    #[test]
+    fn parse_openrouter_prices_basic() {
+        let raw = r#"{"data":[
+            {"id":"qwen/qwen-plus","pricing":{"prompt":"0.00000026","completion":"0.00000078"}},
+            {"id":"qwen/qwen-plus:free","pricing":{"prompt":"0","completion":"0"}},
+            {"id":"bad/entry","pricing":{"prompt":"abc","completion":"0.1"}},
+            {"id":"deepseek/deepseek-v3","pricing":{"prompt":0.00000027,"completion":0.0000011}}
+        ]}"#;
+        let out = parse_openrouter_prices(raw);
+        assert_eq!(out.len(), 2, "free 与非法值应被跳过");
+        assert_eq!(out[0].id, "qwen/qwen-plus");
+        assert!((out[1].input_cost - 2.7e-7).abs() < 1e-15, "数字型 pricing 也应支持");
+    }
+
+    #[test]
+    fn openrouter_match_prefers_exact_and_non_free() {
+        let cat = vec![
+            or("qwen/qwen-plus:free", 0.0, 0.0),
+            or("qwen/qwen-plus", 2.6e-7, 7.8e-7),
+            or("qwen/qwen-plus-latest", 3.0e-7, 9.0e-7),
+        ];
+        let m = match_openrouter("qwen-plus", &cat).unwrap();
+        assert_eq!(m.id, "qwen/qwen-plus", "精确尾段胜出且排除 free");
+
+        let cat2 = vec![or("deepseek/deepseek-v3-0324", 2.7e-7, 1.1e-6)];
+        let m2 = match_openrouter("deepseek-v3", &cat2).unwrap();
+        assert_eq!(m2.id, "deepseek/deepseek-v3-0324", "无精确时回退包含匹配");
+
+        assert!(match_openrouter("totally-unknown", &cat).is_none());
     }
 
     #[test]

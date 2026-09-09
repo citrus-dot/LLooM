@@ -137,6 +137,18 @@ CREATE TABLE IF NOT EXISTS provider_zones (
     PRIMARY KEY (provider)
 );
 
+-- ── PR-x 第三方参考价（OpenRouter 参考层；独立于 price_specs，永不参与计价） ──
+CREATE TABLE IF NOT EXISTS price_reference (
+    provider      TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    ref_source    TEXT NOT NULL DEFAULT 'openrouter',
+    ref_model_id  TEXT NOT NULL,
+    input_cost    REAL NOT NULL,
+    output_cost   REAL NOT NULL,
+    fetched_at    TIMESTAMP,
+    PRIMARY KEY (provider, model, ref_source)
+);
+
 CREATE TABLE IF NOT EXISTS price_calibration (
     provider   TEXT NOT NULL,
     model      TEXT NOT NULL,
@@ -1024,6 +1036,91 @@ pub fn mark_price_stale(provider: &str, model: &str, stale: bool, reason: &str) 
         params![provider, model, if stale { 1 } else { 0 }, reason],
     )?;
     Ok(())
+}
+
+// ── PR-x 第三方参考价（OpenRouter 参考层，独立表，不进 price_specs） ──
+
+/// 单条参考价 + 与本地图价的偏差（读取时联算，不落库）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PriceReferenceView {
+    pub provider: String,
+    pub model: String,
+    pub ref_source: String,
+    pub ref_model_id: String,
+    pub ref_input_cost: f64,
+    pub ref_output_cost: f64,
+    pub spec_input_cost: Option<f64>,
+    pub spec_output_cost: Option<f64>,
+    /// (spec - ref) / ref × 100，None = 本地无价或参考价无效
+    pub dev_input_pct: Option<f64>,
+    pub dev_output_pct: Option<f64>,
+    pub fetched_at: Option<String>,
+}
+
+pub fn upsert_price_reference(
+    provider: &str,
+    model: &str,
+    ref_source: &str,
+    ref_model_id: &str,
+    input_cost: f64,
+    output_cost: f64,
+) -> Result<()> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO price_reference (provider, model, ref_source, ref_model_id, input_cost, output_cost, fetched_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+         ON CONFLICT(provider, model, ref_source) DO UPDATE SET
+           ref_model_id = excluded.ref_model_id,
+           input_cost = excluded.input_cost,
+           output_cost = excluded.output_cost,
+           fetched_at = excluded.fetched_at",
+        params![provider, model, ref_source, ref_model_id, input_cost, output_cost],
+    )?;
+    Ok(())
+}
+
+/// 参考价 × 本地 specs 联表视图（含偏差百分比），定价页直接消费。
+pub fn list_price_references() -> Result<Vec<PriceReferenceView>> {
+    let conn = open()?;
+    let mut stmt = conn.prepare(
+        "SELECT r.provider, r.model, r.ref_source, r.ref_model_id,
+                r.input_cost, r.output_cost, r.fetched_at,
+                s.input_cost, s.output_cost
+         FROM price_reference r
+         LEFT JOIN price_specs s ON s.provider = r.provider AND s.model = r.model
+         ORDER BY r.provider, r.model",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let ref_in: f64 = row.get(4)?;
+        let ref_out: f64 = row.get(5)?;
+        let spec_in: Option<f64> = row.get(7)?;
+        let spec_out: Option<f64> = row.get(8)?;
+        let dev = |spec: Option<f64>, reference: f64| -> Option<f64> {
+            if reference > 0.0 {
+                spec.map(|s| (s - reference) / reference * 100.0)
+            } else {
+                None
+            }
+        };
+        Ok(PriceReferenceView {
+            provider: row.get(0)?,
+            model: row.get(1)?,
+            ref_source: row.get(2)?,
+            ref_model_id: row.get(3)?,
+            ref_input_cost: ref_in,
+            ref_output_cost: ref_out,
+            spec_input_cost: spec_in,
+            spec_output_cost: spec_out,
+            dev_input_pct: dev(spec_in, ref_in),
+            dev_output_pct: dev(spec_out, ref_out),
+            fetched_at: row.get::<_, Option<String>>(6)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
 }
 
 pub fn list_provider_zones() -> Result<Vec<Zone>> {

@@ -20,11 +20,13 @@ import {
   PriceSpec,
   CalibrationRow,
   ProbeStats,
+  PriceReference,
   listPriceSpecs,
   updatePriceSpec,
   acceptPriceSpec,
   refreshPricing,
   listPriceCalibration,
+  listPriceReferences,
   getProbeStats,
   setProbeBudget,
 } from '../api';
@@ -63,22 +65,30 @@ export default function PricingPage() {
 
   const [calRows, setCalRows] = useState<CalibrationRow[]>([]);
   const [probe, setProbe] = useState<ProbeStats | null>(null);
+  const [refs, setRefs] = useState<PriceReference[]>([]);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<PriceSpec | null>(null);
   const [form] = Form.useForm();
 
+  const refMap = useMemo(
+    () => new Map(refs.map((r) => [`${r.provider}/${r.model}`, r] as const)),
+    [refs],
+  );
+
   const refresh = async () => {
     setLoading(true);
     try {
-      const [s, c, p] = await Promise.all([
+      const [s, c, p, rf] = await Promise.all([
         listPriceSpecs(staleOnly),
         listPriceCalibration(30),
         getProbeStats(),
+        listPriceReferences(),
       ]);
       setSpecs(s);
       setCalRows(c);
       setProbe(p);
+      setRefs(rf);
     } catch (e) {
       message.error(`加载失败: ${e}`);
     } finally {
@@ -95,7 +105,11 @@ export default function PricingPage() {
     setRefreshing(true);
     try {
       const r = await refreshPricing();
-      message.success(`刷新完成：更新 ${r.updated} 条，远端 ${r.remote_total} 条，保留 manual ${r.manual_kept} 条`);
+      const refInfo = (r as { reference?: { ok: boolean; matched?: number; error?: string } })
+        .reference;
+      const refTxt =
+        refInfo?.ok && refInfo.matched != null ? `，参考价匹配 ${refInfo.matched} 条` : '';
+      message.success(`刷新完成：更新 ${r.updated} 条，远端 ${r.remote_total} 条，保留 manual ${r.manual_kept} 条${refTxt}`);
       refresh();
     } catch (e) {
       message.error(`刷新失败（断网/镜像不可达，本地价保留）: ${e}`);
@@ -210,6 +224,30 @@ export default function PricingPage() {
       },
     },
     {
+      title: '参考价 (OpenRouter)',
+      key: 'ref',
+      render: (_: unknown, s: PriceSpec) => {
+        const r = refMap.get(`${s.provider}/${s.model}`);
+        if (!r) return <span style={{ color: '#bbb' }}>无匹配</span>;
+        const devTxt = (v: number | null) =>
+          v == null ? '-' : `${v > 0 ? '+' : ''}${v.toFixed(0)}%`;
+        const devMax = Math.max(Math.abs(r.dev_input_pct ?? 0), Math.abs(r.dev_output_pct ?? 0));
+        const warn = devMax >= 20; // 偏差≥20% 高亮（含转售加价/汇率噪声，仅提示不自动改价）
+        return (
+          <Tooltip
+            title={`OpenRouter ${r.ref_model_id}：转售价口径（含加价+汇率），仅供对账参考，不参与计价。正偏差=本地价比参考便宜。`}
+          >
+            <span>
+              {(r.ref_input_cost * 1000).toFixed(4)} / {(r.ref_output_cost * 1000).toFixed(4)}
+              <span style={{ marginLeft: 6, color: warn ? '#d46b08' : '#8c8c8c', fontSize: 12 }}>
+                {warn ? '⚠ ' : ''}in {devTxt(r.dev_input_pct)} · out {devTxt(r.dev_output_pct)}
+              </span>
+            </span>
+          </Tooltip>
+        );
+      },
+    },
+    {
       title: '生效日',
       dataIndex: 'effective_from',
       key: 'eff',
@@ -266,7 +304,7 @@ export default function PricingPage() {
         type="info"
         showIcon
         message="价格口径说明"
-        description="价格按「倒排来源优先级」维护：manual > overlay > litellm_remote > litellm_packaged > heuristic。manual 为人工锚定，刷新 job 永不覆盖；标红色 ● 表示该价已过期（对账比值连续 3 天超出 [0.8, 1.2] 且当日调用 ≥50 才触发，日常看不到属正常），悬停红点可见原因，需人工核对后「采纳」或「改价」。"
+        description="价格按「倒排来源优先级」维护：manual > overlay > litellm_remote > litellm_packaged > heuristic。manual 为人工锚定，刷新 job 永不覆盖；标红色 ● 表示该价已过期（对账比值连续 3 天超出 [0.8, 1.2] 且当日调用 ≥50 才触发，日常看不到属正常），悬停红点可见原因，需人工核对后「采纳」或「改价」。「参考价」列为 OpenRouter 第三方转售价，独立对账层：不参与计价、不覆盖任何本地价，偏差 ≥20% 高亮提示（转售价天然偏高，仅供发现供应商调价/锚定价脱节的线索）。"
       />
 
       <Table

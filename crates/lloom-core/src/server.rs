@@ -1275,9 +1275,68 @@ async fn run_pricing_refresh() -> std::result::Result<(usize, usize, usize), Str
 /// POST /api/pricing/refresh —— 手动触发刷新（不覆盖 manual；断网/镜像不可达返回错误但不动本地值）。
 async fn pricing_refresh() -> Result<Json<Value>> {
     match run_pricing_refresh().await {
-        Ok((updated, remote_total, manual)) => Ok(Json(json!({
-            "ok": true, "updated": updated, "remote_total": remote_total, "manual_kept": manual
-        }))),
+        Ok((updated, remote_total, manual)) => {
+            // 顺带刷新第三方参考价（best-effort，失败不影响主刷新结果）
+            let reference = match run_reference_refresh().await {
+                Ok(n) => json!({ "ok": true, "matched": n }),
+                Err(e) => json!({ "ok": false, "error": e }),
+            };
+            Ok(Json(json!({
+                "ok": true, "updated": updated, "remote_total": remote_total, "manual_kept": manual,
+                "reference": reference,
+            })))
+        }
+        Err(e) => Err(AppError::Internal(e)),
+    }
+}
+
+// ── PR-x 第三方参考价层（OpenRouter；只对账不覆盖 price_specs） ──
+
+/// 参考价刷新：拉 OpenRouter /api/v1/models → 匹配全部本地 spec（含 manual——
+/// 参考层正是为了发现 manual 锚定价与市场脱节）→ upsert price_reference。
+/// 返回匹配条数；网络失败返回 Err（调用方静默）。
+async fn run_reference_refresh() -> std::result::Result<usize, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get("https://openrouter.ai/api/v1/models")
+        .send()
+        .await
+        .map_err(|e| format!("openrouter unreachable: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("openrouter http {}", resp.status()));
+    }
+    let raw = resp.text().await.map_err(|e| e.to_string())?;
+    let catalog = pricing::parse_openrouter_prices(&raw);
+    if catalog.is_empty() {
+        return Err("openrouter: parsed 0 entries".into());
+    }
+    let specs = db::list_price_specs().map_err(|e| e.to_string())?;
+    let mut matched = 0usize;
+    for s in &specs {
+        if let Some(p) = pricing::match_openrouter(&s.model, &catalog) {
+            if db::upsert_price_reference(&s.provider, &s.model, "openrouter", &p.id, p.input_cost, p.output_cost)
+                .is_ok()
+            {
+                matched += 1;
+            }
+        }
+    }
+    Ok(matched)
+}
+
+/// GET /api/pricing/reference —— 参考价 × 本地图价联表（含偏差 %），定价页消费。
+async fn pricing_reference() -> Result<Json<Value>> {
+    let rows = db::list_price_references()?;
+    Ok(Json(serde_json::to_value(rows).unwrap_or_default()))
+}
+
+/// POST /api/pricing/reference/refresh —— 手动刷新参考价。
+async fn pricing_reference_refresh() -> Result<Json<Value>> {
+    match run_reference_refresh().await {
+        Ok(matched) => Ok(Json(json!({ "ok": true, "matched": matched }))),
         Err(e) => Err(AppError::Internal(e)),
     }
 }
@@ -1297,6 +1356,7 @@ async fn pricing_refresh_loop() {
     loop {
         int.tick().await;
         let _ = run_pricing_refresh().await;
+        let _ = run_reference_refresh().await; // 参考层同步刷新，失败静默
     }
 }
 
@@ -1488,6 +1548,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/pricing/specs/{provider}/{model}", put(pricing_spec_update))
         .route("/api/pricing/specs/{provider}/{model}/accept", post(pricing_accept))
         .route("/api/pricing/refresh", post(pricing_refresh))
+        .route("/api/pricing/reference", get(pricing_reference))
+        .route("/api/pricing/reference/refresh", post(pricing_reference_refresh))
         .route("/api/pricing/calibration", get(pricing_calibration))
         .route("/api/probe/stats", get(probe_stats))
         .route("/api/probe/budget", put(probe_budget_update))

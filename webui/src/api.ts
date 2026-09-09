@@ -291,6 +291,30 @@ export function refreshPricing(): Promise<{ ok: boolean; updated: number; remote
   return jpost('/api/pricing/refresh');
 }
 
+// ── PR-x 第三方参考价（OpenRouter 参考层，对账用，不参与计价） ──
+
+export interface PriceReference {
+  provider: string;
+  model: string;
+  ref_source: string;
+  ref_model_id: string;
+  ref_input_cost: number;
+  ref_output_cost: number;
+  spec_input_cost: number | null;
+  spec_output_cost: number | null;
+  dev_input_pct: number | null;
+  dev_output_pct: number | null;
+  fetched_at: string | null;
+}
+
+export function listPriceReferences(): Promise<PriceReference[]> {
+  return jget('/api/pricing/reference');
+}
+
+export function refreshPriceReferences(): Promise<{ ok: boolean; matched: number }> {
+  return jpost('/api/pricing/reference/refresh');
+}
+
 export function listPriceCalibration(days = 30): Promise<CalibrationRow[]> {
   return jget(`/api/pricing/calibration?days=${days}`);
 }

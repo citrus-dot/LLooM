@@ -232,8 +232,28 @@ fn tier_cost_multiplier(tier: &str) -> f64 {
     }
 }
 
-/// 门槛（gate）+ 评分（score）。全量候选淘汰时返回带诊断的 NoCandidates。
+/// pinned 模式：Soft = 强先验加分决胜（默认）；Hard = 旧行为门槛内直接钦定。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinnedMode {
+    Soft,
+    Hard,
+}
+
+fn pinned_mode_from_env() -> PinnedMode {
+    if std::env::var("LLOOM_PINNED_MODE").ok().as_deref() == Some("hard") {
+        PinnedMode::Hard
+    } else {
+        PinnedMode::Soft
+    }
+}
+
+/// 默认入口：pinned 模式读 `LLOOM_PINNED_MODE`（缺省 soft）。
 pub fn plan(input: &PlanInput) -> Result<PlanOutcome, PlanError> {
+    plan_with_mode(input, pinned_mode_from_env())
+}
+
+/// 门槛（gate）+ 评分（score）。全量候选淘汰时返回带诊断的 NoCandidates。
+pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome, PlanError> {
     // P5.a tight：复杂任务降一档（只降需求能力档，band 报告仍保留原值）。
     let req_band = if input.budget_tier == "tight" && input.band == "hard" {
         "medium"
@@ -293,30 +313,43 @@ pub fn plan(input: &PlanInput) -> Result<PlanOutcome, PlanError> {
         });
     }
 
-    // pinned：策略钦定（须在门槛内，健康可用）
-    if let Some(pinned) = input.policy.pinned_model.as_deref() {
-        if let Some(m) = gated.iter().find(|m| m.name == pinned) {
-            let rest: Vec<String> = score_all(input, &gated)
-                .into_iter()
-                .filter(|c| c.name != pinned)
-                .map(|c| c.name)
-                .take(input.policy.fallback_depth.max(0) as usize)
-                .collect();
-            return Ok(PlanOutcome {
-                primary: pinned.to_string(),
-                fallback_chain: rest,
-                candidates: vec![Candidate {
-                    name: pinned.to_string(),
-                    score: f64::INFINITY,
-                    est_cost: 0.0,
-                    quality: quality_of(input, m),
-                    capability_tier: m.capability_tier,
-                }],
-            });
+    // pinned：策略先验。
+    // soft（默认）：pinned 作为强先验参与评分（+0.3 奖励），门槛照旧、评分决胜——
+    //   实测表现更好 / pinned 被拒 / 成本超限时数据能推翻策略钦定。
+    // hard（LLOOM_PINNED_MODE=hard）：旧行为，门槛内直接钦定（撤回开关）。
+    if mode == PinnedMode::Hard {
+        if let Some(pinned) = input.policy.pinned_model.as_deref() {
+            if let Some(m) = gated.iter().find(|m| m.name == pinned) {
+                let rest: Vec<String> = score_all(input, &gated)
+                    .into_iter()
+                    .filter(|c| c.name != pinned)
+                    .map(|c| c.name)
+                    .take(input.policy.fallback_depth.max(0) as usize)
+                    .collect();
+                return Ok(PlanOutcome {
+                    primary: pinned.to_string(),
+                    fallback_chain: rest,
+                    candidates: vec![Candidate {
+                        name: pinned.to_string(),
+                        score: f64::INFINITY,
+                        est_cost: 0.0,
+                        quality: quality_of(input, m),
+                        capability_tier: m.capability_tier,
+                    }],
+                });
+            }
         }
     }
 
+    let pinned_name = input.policy.pinned_model.as_deref().filter(|p| {
+        gated.iter().any(|m| m.name == *p) // 不在门槛内的 pinned 无奖励
+    });
     let mut candidates = score_all(input, &gated);
+    if let Some(pinned) = pinned_name {
+        if let Some(c) = candidates.iter_mut().find(|c| c.name == pinned) {
+            c.score += 0.3; // PR-x pinned 强先验奖励
+        }
+    }
     candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
     let primary = candidates[0].name.clone();
@@ -929,13 +962,45 @@ mod tests {
             ..Default::default()
         };
         let ctx = Ctx::new();
-        let out = plan(&base_input(&models, &specs, "general", "medium", &policy, 100, &ctx)).unwrap();
+        // soft 模式：+0.3 强先验仍应让 pinned 在同档正常胜出
+        let input = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
+        let out = plan_with_mode(&input, PinnedMode::Soft).unwrap();
         assert_eq!(out.primary, "qwen-plus");
-        // pinned down → 回落评分链
+        // hard 模式（旧行为）：门槛内直接钦定，score=INFINITY
+        let out_hard = plan_with_mode(&input, PinnedMode::Hard).unwrap();
+        assert_eq!(out_hard.primary, "qwen-plus");
+        assert!(out_hard.candidates[0].score.is_infinite());
+        // pinned down → 两种模式都回落评分链
         let mut down = models.clone();
         down.iter_mut().find(|m| m.name == "qwen-plus").unwrap().health_state = "down".to_string();
-        let out2 = plan(&base_input(&down, &specs, "general", "medium", &policy, 100, &ctx)).unwrap();
+        let input2 = base_input(&down, &specs, "general", "medium", &policy, 100, &ctx);
+        let out2 = plan_with_mode(&input2, PinnedMode::Soft).unwrap();
         assert_ne!(out2.primary, "qwen-plus");
+        let out2h = plan_with_mode(&input2, PinnedMode::Hard).unwrap();
+        assert_ne!(out2h.primary, "qwen-plus");
+    }
+
+    #[test]
+    fn soft_pinned_can_be_overridden_by_data() {
+        // soft 模式下 pinned 不是钦定：实测质量显著占优的模型可推翻它；hard 模式则不能。
+        let models = registry();
+        let specs = prices();
+        let policy = RoutingPolicy {
+            task_type: "general".into(),
+            pinned_model: Some("qwen-plus".into()),
+            cost_weight: 0.0,
+            quality_weight: 1.0,
+            latency_weight: 0.0,
+            ..Default::default()
+        };
+        let mut ctx = Ctx::new();
+        ctx.quality.insert("qwen-plus".to_string(), 0.1); // pinned 实测质量崩了
+        ctx.quality.insert("deepseek-v3".to_string(), 0.95);
+        let input = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
+        let out_soft = plan_with_mode(&input, PinnedMode::Soft).unwrap();
+        assert_ne!(out_soft.primary, "qwen-plus", "数据应能推翻表现差的 pinned");
+        let out_hard = plan_with_mode(&input, PinnedMode::Hard).unwrap();
+        assert_eq!(out_hard.primary, "qwen-plus", "hard 模式保持钦定");
     }
 
     #[test]
