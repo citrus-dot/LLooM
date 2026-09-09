@@ -269,6 +269,14 @@ pub fn delete(id: &str) -> Result<()> {
     if n == 0 {
         return Err(AppError::NotFound(format!("conversation '{id}'")));
     }
+    // messages 由 FK ON DELETE CASCADE 级联清除；旧版 JSON 快照也必须一并删除，
+    // 否则重启时 migrate_json_dir 会把该 id 重新导入（"删除后复活"）。
+    let snapshot = config::conversations_dir().join(format!("{id}.json"));
+    if snapshot.exists() {
+        if let Err(e) = std::fs::remove_file(&snapshot) {
+            eprintln!("[core] delete conversation {id}: remove legacy snapshot failed: {e}");
+        }
+    }
     Ok(())
 }
 
