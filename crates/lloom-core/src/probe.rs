@@ -23,8 +23,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-/// 默认月预算（微美分）：¥5 ÷ 7.2 ≈ $0.0007。0 = 关闭探针。WebUI 可调。
-const DEFAULT_MONTHLY_LIMIT_USD: u64 = 700;
+/// 默认月预算（微美分）：¥5 ÷ 7.2 ≈ $0.69 = 700_000 微美分。0 = 关闭探针。WebUI 可调。
+const DEFAULT_MONTHLY_LIMIT_USD: u64 = 700_000;
 /// 单轮成本上限（USD）：异常放大即熔断该模型本轮。
 const PER_ROUND_CAP_USD: f64 = 0.002;
 /// 失败哨兵：探针调用失败以 act_cost = -1 落库（stats 用 cost < 0 计数）。
