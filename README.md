@@ -78,7 +78,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API re
 
 1. Download the latest release from [GitHub Releases](https://github.com/citrus-dot/LLooM/releases)
 2. Launch it (or the bundled `.deb`/`.rpm`)
-3. Configure API keys in Settings → API Keys
+3. Add models on the **Models** page and set each model's API key there
 4. Start chatting
 
 ### Option B: Development Mode
@@ -95,9 +95,8 @@ uv sync --extra dev --extra build
 # Fallback without uv (repo ships pip.conf with a Tsinghua mirror):
 #   export PIP_CONFIG_FILE="$PWD/pip.conf" && pip install -e ".[dev]"
 
-# Copy and edit environment
+# Copy and edit environment (ports/paths — API keys are set per-model in the UI)
 cp .env.example .env
-# Edit .env with your API keys
 
 # Run the Rust server (Web UI on :7861)
 cargo run -p lloom-server
@@ -142,11 +141,11 @@ All configuration is via environment variables in `.env`:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `DASHSCOPE_API_KEY` | (empty) | Alibaba DashScope API key |
+| `DASHSCOPE_API_KEY` | (empty) | Optional fallback: DashScope API key (preferred: set per-model in the UI) |
 | `DASHSCOPE_API_BASE` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | DashScope endpoint |
-| `OPENAI_API_KEY` | (empty) | OpenAI API key |
+| `OPENAI_API_KEY` | (empty) | Optional fallback: OpenAI API key (preferred: set per-model in the UI) |
 | `OPENAI_BASE_URL` | (empty) | OpenAI base URL override |
-| `ANTHROPIC_API_KEY` | (empty) | Anthropic API key |
+| `ANTHROPIC_API_KEY` | (empty) | Optional fallback: Anthropic API key (preferred: set per-model in the UI) |
 | `LLOOM_WEB_PORT` | `7861` | Rust server + Web UI port |
 | `LLOOM_AI_SERVICE_URL` | `http://localhost:7862` | Python AI micro-service URL |
 | `LLOOM_DATA_DIR` | `./data` | Data directory (SQLite, conversations) |
@@ -276,17 +275,17 @@ bun run src/index.tsx
 
 Five tabs: **Home** (logo + prompt + spend stats), **Chat** (conversation list
 + streaming chat), **Models** (registered models + add form), **Usage** (costs,
-model pricing), **Settings** (API keys + service management). Switch with `Tab`,
-quit with `Ctrl+C`.
+model pricing), **Settings** (service addresses + service management). Switch
+with `Tab`, quit with `Ctrl+C`.
 
 - `Enter` submits, `Shift+Enter` inserts a newline
 - Chat sidebar starts with a `[+] 新建对话` item (selected by default)
 - Conversations carry full multi-turn history into orchestration; cached
   replies are flagged "来自缓存"
 - `Models` lets you add a model via an in-TUI form (name / provider / LiteLLM
-  model / API base / task type)
-- Right-click a conversation to open a menu (open / delete), a service in
-  Settings for logs / restart / stop / start, and an API key row to edit it
+  model / API base / API key / task type)
+- Right-click a conversation to open a menu (open / delete) or a service in
+  Settings for logs / restart / stop / start
 - Deleting models/conversations asks for confirmation
 - Home/Usage auto-refresh every 30s
 
