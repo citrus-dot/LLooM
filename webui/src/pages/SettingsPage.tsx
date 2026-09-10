@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Card, Row, Col, Button, Space, Tag, Form, Input, message, Descriptions, Progress, Alert, Switch, Slider } from 'antd';
+import { Card, Button, Space, Tag, message, Descriptions, Progress, Alert, Switch, Slider } from 'antd';
 import {
   CheckOutlined,
   CloseOutlined,
-  SaveOutlined,
-  ThunderboltOutlined,
   CloudDownloadOutlined,
   DeleteOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
 import {
   getServicesStatus,
-  readEnv,
-  writeEnvBatch,
-  smartRestart,
   cacheInit,
   cacheStatus,
   cacheCleanup,
@@ -24,59 +19,8 @@ import {
   CacheThresholdInfo,
 } from '../api';
 
-interface EnvItem {
-  key: string;
-  label: string;
-  type: 'text' | 'password';
-  desc: string;
-}
-
-// API keys are NOT configured here anymore — they are per-model settings
-// edited on the Models page (stored in the models table). This page keeps
-// only service addresses / ports / paths.
-const ENV_SECTIONS: { title: string; items: EnvItem[] }[] = [
-  {
-    title: '服务地址',
-    items: [
-      { key: 'DASHSCOPE_API_BASE', label: 'DashScope Base', type: 'text', desc: '默认 dashscope.aliyuncs.com' },
-      { key: 'OPENAI_BASE_URL', label: 'OpenAI Base URL', type: 'text', desc: '可选代理地址' },
-      { key: 'OLLAMA_API_BASE', label: 'Ollama Base', type: 'text', desc: '本地 Ollama 地址' },
-    ],
-  },
-  {
-    title: '核心配置',
-    items: [
-      { key: 'LLOOM_WEB_PORT', label: 'Web 端口', type: 'text', desc: '默认 7861' },
-      { key: 'LLOOM_DATA_DIR', label: '数据目录', type: 'text', desc: 'SQLite/对话' },
-    ],
-  },
-];
-
-// Operational/internal variables that must NOT be user-editable through the
-// settings UI — editing them (e.g. LLOOM_AI_SERVICE_URL / LLOOM_AI_PORT) can
-// break the server↔AI-service wiring. They are hidden from the free-form
-// "其他配置" section so they can't be mis-edited. User-facing keys such as
-// LLOOM_WEB_PORT / OLLAMA_API_BASE / LLOOM_DATA_DIR stay editable (schema).
-const INTERNAL_ENV_KEYS = new Set<string>([
-  'LLOOM_AI_SERVICE_URL',
-  'LLOOM_AI_PORT',
-  'LLOOM_API_PORT',
-  'LLOOM_HOST',
-  'LLOOM_PID_FILE',
-  'LLOOM_ENV',
-  'LLOOM_LOG_LEVEL',
-  'LLOOM_INSTALL_DIR',
-  'LOG_LEVEL',
-  'RUST_LOG',
-]);
-const isInternalKey = (k: string): boolean =>
-  INTERNAL_ENV_KEYS.has(k) || k.startsWith('LLOOM_AI_');
-
 export default function SettingsPage() {
   const [services, setServices] = useState<ServiceStatus[]>([]);
-  const [env, setEnv] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const [form] = Form.useForm();
   const [cache, setCache] = useState<CacheStatus | null>(null);
   const [thr, setThr] = useState<CacheThresholdInfo | null>(null);
   const [thrBusy, setThrBusy] = useState(false);
@@ -167,10 +111,8 @@ export default function SettingsPage() {
     setThrBusy(false);
   };
 
-  // Compact semantic-cache panel. Lives in the narrow left column (span=10)
-  // directly beneath 环境检查, so it shares that column's width. Progress
-  // reflects the real byte-level download (cache.percent / mirror / speed)
-  // instead of a fake elapsed/timeouts bar.
+  // Semantic-cache panel. Progress reflects the real byte-level download
+  // (cache.percent / mirror / speed) instead of a fake elapsed/timeouts bar.
   const renderCacheCard = () => {
     const running = cache?.status === 'running';
     const statusTag = !cache ? (
@@ -307,191 +249,50 @@ export default function SettingsPage() {
 
   const refresh = async () => {
     try {
-      const [s, e] = await Promise.all([getServicesStatus(), readEnv()]);
+      const s = await getServicesStatus();
       setServices(s.services);
-      setEnv(e);
-      // Prefill form. Secret (password-type) fields are NEVER prefilled with
-      // their real value — the API masks them as "****xxxx" anyway, and
-      // echoing a real key into a form field is a leak risk. Instead the field
-      // is left blank with a placeholder hinting it's already configured.
-      const schemaKeys = new Set(ENV_SECTIONS.flatMap((sec) => sec.items.map((i) => i.key)));
-      const values: Record<string, string> = {};
-      ENV_SECTIONS.forEach((sec) =>
-        sec.items.forEach((item) => {
-          if (!isSecretKey(item.key)) {
-            values[item.key] = e[item.key] ?? '';
-          }
-        }),
-      );
-      Object.keys(e)
-        .filter((k) => !schemaKeys.has(k) && !isSecretKey(k) && !isInternalKey(k))
-        .sort()
-        .forEach((k) => {
-          values[k] = e[k] ?? '';
-        });
-      form.setFieldsValue(values);
     } catch (e) {
-      message.error(`读取配置失败: ${e}`);
+      message.error(`读取服务状态失败: ${e}`);
     }
-  };
-
-  // Sections for rendering: schema groups + an "其他配置" group with extra keys.
-  // Secret-like keys are excluded entirely — secrets are per-model now, and the
-  // settings page no longer offers any key editing.
-  const allSections = () => {
-    const schemaKeys = new Set(ENV_SECTIONS.flatMap((sec) => sec.items.map((i) => i.key)));
-    const extra = Object.keys(env)
-      .filter((k) => !schemaKeys.has(k) && !isInternalKey(k) && !isSecretKey(k))
-      .sort()
-      .map((k) => ({ key: k, label: k, type: 'text' as const, desc: '' }));
-    return extra.length ? [...ENV_SECTIONS, { title: '其他配置', items: extra }] : ENV_SECTIONS;
   };
 
   useEffect(() => {
     refresh();
   }, []);
 
-  const isSecretKey = (k: string) => {
-    const up = k.toUpperCase();
-    return up.endsWith('_API_KEY') || up.endsWith('_KEY') || up.endsWith('_TOKEN') || up.endsWith('_SECRET');
-  };
-
-  // Build the updates map. Secret fields left blank mean "keep existing" and
-  // are skipped (the backend also rejects "****" mask values defensively).
-  const buildUpdates = (): Record<string, string> => {
-    const values = form.getFieldsValue();
-    const updates: Record<string, string> = {};
-    Object.entries(values).forEach(([k, v]) => {
-      const val = String(v ?? '').trim();
-      const secret = isSecretKey(k);
-      if (isInternalKey(k)) return; // never write operational vars back
-      if (secret && val === '') return; // blank secret = keep existing
-      if (secret && val.startsWith('****')) return; // mask echoed back = keep
-      if (val !== (env[k] ?? '')) {
-        updates[k] = val;
-      }
-    });
-    return updates;
-  };
-
-  const saveAll = async () => {
-    const updates = buildUpdates();
-    const changed = Object.keys(updates).length;
-    if (changed === 0) {
-      message.info('没有需要保存的更改');
-      return;
-    }
-    setSaving(true);
-    try {
-      await writeEnvBatch(updates);
-      setEnv({ ...env, ...updates });
-      message.success(`已保存 ${changed} 项配置`);
-    } catch (e) {
-      message.error(`保存失败: ${e}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const smartApply = async () => {
-    const updates = buildUpdates();
-    const changedKeys = Object.keys(updates);
-    if (changedKeys.length === 0) {
-      message.info('没有需要应用的更改');
-      return;
-    }
-    await writeEnvBatch(updates);
-    setEnv({ ...env, ...updates });
-    message.loading('正在重启服务使配置生效...');
-    try {
-      const res = await smartRestart(changedKeys);
-      if (res.ok) message.success(`配置已生效，已重启 ${res.restarted.join(', ')}`);
-      else message.error(`重启失败: ${res.errors.join('; ')}`);
-    } catch (e) {
-      message.error(`智能重启失败: ${e}`);
-    }
-  };
-
-  // Whether a key is set at all (masked values count as set). Used for the
-  // "已配置（输入新值覆盖）" placeholder on secret fields.
-  const isSet = (key: string) => Boolean((env[key] ?? '').trim());
-
   return (
-    <Row gutter={16} align="top">
-      {/* Left rail: environment check with the semantic-cache panel stacked
-          directly beneath it, so both share one column width. */}
-      <Col span={10}>
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Card title="环境检查">
-            {services.map((s) => (
-              <div
-                key={s.name}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  padding: '8px 0',
-                  borderBottom: '1px solid #f5f5f5',
-                }}
-              >
-                <span>{s.name}</span>
-                {s.healthy ? (
-                  <Tag color="success" icon={<CheckOutlined />}>
-                    {s.status}
-                  </Tag>
-                ) : (
-                  <Tag color="error" icon={<CloseOutlined />}>
-                    {s.status}
-                  </Tag>
-                )}
-              </div>
-            ))}
-            <Descriptions size="small" column={1} style={{ marginTop: 8 }}>
-              <Descriptions.Item label="服务健康">
-                {services.filter((s) => s.healthy).length}/{services.length}
-              </Descriptions.Item>
-            </Descriptions>
-          </Card>
-
-          {renderCacheCard()}
-        </Space>
-      </Col>
-      <Col span={14}>
-          <Card
-            title="环境配置"
-            extra={
-              <Space>
-                <Button icon={<SaveOutlined />} onClick={saveAll} loading={saving}>
-                  保存全部
-                </Button>
-                <Button type="primary" icon={<ThunderboltOutlined />} onClick={smartApply}>
-                  智能应用配置
-                </Button>
-              </Space>
-            }
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card title="环境检查">
+        {services.map((s) => (
+          <div
+            key={s.name}
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              padding: '8px 0',
+              borderBottom: '1px solid #f5f5f5',
+            }}
           >
-            <Alert
-              type="info"
-              showIcon
-              message="API Key 请在「模型管理」中按模型配置"
-              style={{ marginBottom: 12 }}
-            />
-            <Form form={form} layout="vertical">
-              {allSections().map((sec) => (
-                <div key={sec.title}>
-                  <div style={{ fontWeight: 600, color: '#333', margin: '12px 0 8px' }}>{sec.title}</div>
-                  {sec.items.map((item) => (
-                    <Form.Item key={item.key} name={item.key} label={item.label} style={{ marginBottom: 12 }}>
-                      <Input.Password
-                        placeholder={isSet(item.key) ? '已配置（输入新值覆盖）' : item.desc}
-                        autoComplete="off"
-                      />
-                    </Form.Item>
-                  ))}
-                </div>
-              ))}
-            </Form>
-          </Card>
-        </Col>
-      </Row>
+            <span>{s.name}</span>
+            {s.healthy ? (
+              <Tag color="success" icon={<CheckOutlined />}>
+                {s.status}
+              </Tag>
+            ) : (
+              <Tag color="error" icon={<CloseOutlined />}>
+                {s.status}
+              </Tag>
+            )}
+          </div>
+        ))}
+        <Descriptions size="small" column={1} style={{ marginTop: 8 }}>
+          <Descriptions.Item label="服务健康">
+            {services.filter((s) => s.healthy).length}/{services.length}
+          </Descriptions.Item>
+        </Descriptions>
+      </Card>
+
+      {renderCacheCard()}
+    </Space>
   );
 }

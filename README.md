@@ -155,7 +155,6 @@ lloom-cli budgets set user default 10 --duration 30d
 lloom-cli budgets list | check user default
 lloom-cli usage | status
 lloom-cli service status | start ollama | stop ai | restart ai | logs ollama
-lloom-cli service apply DASHSCOPE_API_KEY   # smart-restart affected services
 lloom-cli conversation list | show <id> | delete <id> | new
 lloom-cli chat "hi"                         # one-shot
 lloom-cli chat "continue" --session <id>    # resume

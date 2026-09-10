@@ -55,9 +55,6 @@ enum Command {
     /// Conversation management
     #[command(subcommand)]
     Conversation(ConversationCmd),
-    /// Read/write .env configuration
-    #[command(subcommand)]
-    Config(ConfigCmd),
 }
 
 #[derive(Subcommand)]
@@ -108,11 +105,6 @@ enum ServiceCmd {
     Logs {
         /// Service name: ai or ollama
         name: String,
-    },
-    /// Apply config changes: smart-restart services affected by changed keys
-    Apply {
-        /// Env keys that changed (e.g. DASHSCOPE_API_KEY)
-        keys: Vec<String>,
     },
     /// Shut down all services (AI + Ollama + core server)
     Shutdown,
@@ -215,14 +207,6 @@ enum BudgetsCmd {
     },
 }
 
-#[derive(Subcommand)]
-enum ConfigCmd {
-    /// List all env keys (values masked)
-    List,
-    /// Set an env key
-    Set { key: String, value: String },
-}
-
 const BASE: &str = "http://localhost:7861";
 
 #[tokio::main]
@@ -250,7 +234,6 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => cmd_chat(&client, &query, session.as_deref(), interactive).await?,
         Command::Orchestrate { query } => cmd_orchestrate(&client, &query).await?,
         Command::Conversation(c) => cmd_conversation(&client, c).await?,
-        Command::Config(c) => cmd_config(&client, c).await?,
     }
     Ok(())
 }
@@ -348,35 +331,6 @@ async fn cmd_service(client: &Client, cmd: ServiceCmd) -> Result<(), Box<dyn std
                 println!("(暂无日志)");
             } else {
                 print!("{logs}");
-            }
-        }
-        ServiceCmd::Apply { keys } => {
-            let r = post(
-                client,
-                "/api/services/smart-restart",
-                serde_json::json!({ "changed_keys": keys }),
-            )
-            .await?;
-            if r["ok"].as_bool().unwrap_or(false) {
-                let restarted = r["restarted"].as_array().cloned().unwrap_or_default();
-                println!(
-                    "✓ 配置已生效，已重启: {}",
-                    restarted
-                        .iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            } else {
-                let errors = r["errors"].as_array().cloned().unwrap_or_default();
-                eprintln!(
-                    "✗ 重启失败: {}",
-                    errors
-                        .iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                );
             }
         }
         ServiceCmd::Shutdown => {
@@ -946,42 +900,7 @@ fn handle_orchestrate_event(ev: &str, data: &str) {
     }
 }
 
-// ── Config ──
-
-async fn cmd_config(client: &Client, cmd: ConfigCmd) -> Result<(), Box<dyn std::error::Error>> {
-    match cmd {
-        ConfigCmd::List => {
-            let env: Value = get(client, "/api/config").await?;
-            let obj = env.as_object().cloned().unwrap_or_default();
-            if obj.is_empty() {
-                println!("(空)");
-            } else {
-                let mut keys: Vec<&String> = obj.keys().collect();
-                keys.sort();
-                for k in keys {
-                    let v = obj.get(k).and_then(|x| x.as_str()).unwrap_or("");
-                    let masked = if v.trim().is_empty() { "(空)" } else { "***" };
-                    println!("  {:<24} {}", k, masked);
-                }
-            }
-        }
-        ConfigCmd::Set { key, value } => {
-            let r = post(
-                client,
-                "/api/config",
-                serde_json::json!({ "updates": { key.clone(): value } }),
-            )
-            .await?;
-            let updated = r["updated"].as_array().cloned().unwrap_or_default();
-            if !updated.is_empty() {
-                println!("✓ 已设置 {key}");
-            } else {
-                println!("✗ 设置失败");
-            }
-        }
-    }
-    Ok(())
-}
+// ── helpers ──
 
 fn urlencode(s: &str) -> String {
     // Simple percent-encoding for path segments (model names, scope ids).

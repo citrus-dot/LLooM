@@ -12,6 +12,7 @@ env/
 # IDE
 .vscode/
 .idea/
+.trae/
 
 # Rust build artifacts
 target/
@@ -33,6 +34,7 @@ data/
 *.db
 *.sqlite3
 conversations/
+chroma/
 
 # OS
 .DS_Store

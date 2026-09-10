@@ -72,7 +72,6 @@
 | `/api/usage` | GET | 用量统计 |
 | `/api/budgets` | GET/POST | 预算列表/设置 |
 | `/api/budgets/check` | GET | 预算检查 |
-| `/api/config` | GET/POST | 读取/写入 .env |
 | `/api/stats` | GET | 仪表盘统计 |
 | `/api/conversations` | GET/POST | 对话列表/保存 |
 | `/api/conversations/:id` | GET/DELETE | 对话加载/删除 |
@@ -85,7 +84,6 @@
 | `/api/services/:name/stop` | POST | 停止服务 |
 | `/api/services/:name/restart` | POST | 重启服务 |
 | `/api/services/:name/logs` | GET | 服务日志 |
-| `/api/services/smart-restart` | POST | 配置变更后智能重启 |
 | `/api/system/open-folder` | POST | 打开目录 |
 | `/api/system/open-web` | POST | 打开网页 |
 | `/api/system/cli` | POST | 运行 CLI |
@@ -246,7 +244,6 @@ bash scripts/smoke_test.sh
 | GET | `/api/budgets` | 列出预算 |
 | POST | `/api/budgets` | 创建/更新预算 |
 | GET | `/api/budgets/check` | 检查预算状态 |
-| GET/POST | `/api/config` | 读写 .env 配置 |
 | GET | `/api/stats` | 仪表盘统计 |
 | POST | `/api/chat/stream` | 聊天（SSE 流式） |
 | POST | `/api/orchestrate/stream` | 任务编排（SSE 流式） |
@@ -258,7 +255,6 @@ bash scripts/smoke_test.sh
 | POST | `/api/services/{name}/stop` | 停止服务 |
 | POST | `/api/services/{name}/restart` | 重启服务 |
 | GET | `/api/services/{name}/logs` | 服务日志 |
-| POST | `/api/services/smart-restart` | 配置变更后重启 AI 服务 |
 | POST | `/api/system/open-folder` | 打开目录 |
 | POST | `/api/system/open-web` | 打开网页 |
 | POST | `/api/system/cli` | 运行 CLI |

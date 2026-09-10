@@ -185,10 +185,6 @@ export function getServiceLogs(name: string): Promise<{ logs: string }> {
   return jget(`/api/services/${name}/logs`);
 }
 
-export function smartRestart(changedKeys: string[]): Promise<{ ok: boolean; restarted: string[]; errors: string[] }> {
-  return jpost('/api/services/smart-restart', { changed_keys: changedKeys });
-}
-
 export function shutdownAll(): Promise<{ shutting_down: boolean }> {
   return jpost('/api/shutdown');
 }
@@ -462,16 +458,6 @@ export function setBudget(scope: string, scopeId: string, maxBudget: number, dur
 
 export function checkBudget(scope: string, scopeId: string): Promise<BudgetCheck> {
   return jget(`/api/budgets/check?scope=${encodeURIComponent(scope)}&scope_id=${encodeURIComponent(scopeId)}`);
-}
-
-// ── Config / env ──
-
-export function readEnv(): Promise<Record<string, string>> {
-  return jget('/api/config');
-}
-
-export function writeEnvBatch(updates: Record<string, string>): Promise<{ updated: string[] }> {
-  return jpost('/api/config', { updates });
 }
 
 // ── Conversations ──

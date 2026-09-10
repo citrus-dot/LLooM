@@ -204,18 +204,6 @@ export async function renameConversation(id: string, title: string): Promise<{ i
   })
 }
 
-export async function readEnv(): Promise<Record<string, string>> {
-  return get("/api/config")
-}
-
-export async function writeEnv(updates: Record<string, string>): Promise<{ updated: string[] }> {
-  return post("/api/config", { updates })
-}
-
-export async function smartRestart(changedKeys: string[]): Promise<{ ok: boolean; restarted: string[]; errors: string[] }> {
-  return post("/api/services/smart-restart", { changed_keys: changedKeys })
-}
-
 // SSE chat stream → full response text
 export async function chatStream(messages: ChatMessage[]): Promise<string> {
   const res = await fetch(`${BASE}/api/chat/stream`, {

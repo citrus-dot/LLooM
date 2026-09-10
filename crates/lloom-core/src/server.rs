@@ -152,11 +152,6 @@ struct MessageUpdate {
 }
 
 #[derive(Debug, Deserialize)]
-struct ConfigUpdate {
-    updates: HashMap<String, String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct ConversationSave {
     #[serde(default)]
     id: String,
@@ -170,12 +165,6 @@ struct ConversationSave {
 struct ConversationRename {
     #[serde(default)]
     title: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ServiceAction {
-    #[serde(default)]
-    changed_keys: Vec<String>,
 }
 
 // ── Health / UI ──
@@ -315,40 +304,7 @@ async fn check_budget(
     ))
 }
 
-// ── Config / Stats ──
-
-async fn get_config() -> Json<Value> {
-    // Mask secret values before exposing them over the API. Any key whose name
-    // looks like a credential (ends with _API_KEY / _KEY / _TOKEN / _SECRET) is
-    // returned as "****" + last 4 chars (or just "****" if too short). The raw
-    // values are still on disk in .env and are read directly by write_env /
-    // the AI service — the frontend only ever needs to know *whether* a key is
-    // set, not its value.
-    let env = config::read_env();
-    let masked: HashMap<String, String> = env
-        .iter()
-        .map(|(k, v)| {
-            let upper = k.to_ascii_uppercase();
-            let is_secret = upper.ends_with("_API_KEY")
-                || upper.ends_with("_KEY")
-                || upper.ends_with("_TOKEN")
-                || upper.ends_with("_SECRET");
-            if is_secret && !v.is_empty() {
-                (k.clone(), model_dto::mask_secret(v))
-            } else {
-                (k.clone(), v.clone())
-            }
-        })
-        .collect();
-    Json(json!(masked))
-}
-
-async fn update_config(Json(req): Json<ConfigUpdate>) -> Result<Json<Value>> {
-    write_env(&req.updates)?;
-    Ok(Json(
-        json!({ "updated": req.updates.keys().collect::<Vec<_>>() }),
-    ))
-}
+// ── Stats ──
 
 async fn get_stats(State(state): State<AppState>) -> Result<Json<Value>> {
     Ok(Json(json!({
@@ -1165,31 +1121,6 @@ async fn service_logs(Path(name): Path<String>) -> Json<Value> {
     Json(json!({ "logs": logs }))
 }
 
-async fn smart_restart(
-    State(state): State<AppState>,
-    Json(action): Json<ServiceAction>,
-) -> Json<Value> {
-    let mut restarted = Vec::new();
-    let mut errors = Vec::new();
-    let _ = action.changed_keys; // any config change triggers an AI service restart
-    {
-        let mut guard = state.children.lock().unwrap();
-        if let Some(child) = guard.ai.as_mut() {
-            let _ = child.kill();
-            guard.ai = None;
-        }
-    }
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    match crate::processes::start_ai().await {
-        Ok(child) => {
-            state.children.lock().unwrap().ai = child;
-            restarted.push("AI Service".to_string());
-        }
-        Err(e) => errors.push(format!("AI service restart failed: {e}")),
-    }
-    Json(json!({ "ok": errors.is_empty(), "restarted": restarted, "errors": errors }))
-}
-
 /// Full cleanup: kill owned child processes (AI service, Ollama) then pkill any
 /// external/system-managed instances by name. Shared by the `/api/shutdown`
 /// endpoint and the SIGINT/SIGTERM signal handler so both paths leave no stale
@@ -1832,8 +1763,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/pricing/calibration", get(pricing_calibration))
         .route("/api/probe/stats", get(probe_stats))
         .route("/api/probe/budget", put(probe_budget_update))
-        // Config + stats
-        .route("/api/config", get(get_config).post(update_config))
+        // Stats
         .route("/api/stats", get(get_stats))
         // Conversations
         .route(
@@ -1881,7 +1811,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/services/{name}/stop", post(service_stop))
         .route("/api/services/{name}/restart", post(service_restart))
         .route("/api/services/{name}/logs", get(service_logs))
-        .route("/api/services/smart-restart", post(smart_restart))
         // System
         .route("/api/system/open-folder", post(open_folder))
         .route("/api/system/open-web", post(open_web))
@@ -2267,28 +2196,6 @@ fn sse_error(detail: &str) -> Response {
 fn err_response(e: AppError) -> Response {
     let status = StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, Json(json!({ "error": e.to_string() }))).into_response()
-}
-
-fn write_env(updates: &HashMap<String, String>) -> Result<()> {
-    let env_path = config::env_file_path();
-    let mut env = config::read_env();
-    for (k, v) in updates {
-        // Defense-in-depth: skip masked values sent back by the frontend (the
-        // get_config endpoint masks secrets as "****xxxx"). Accepting them
-        // would overwrite the real key with the mask. An unchanged secret is
-        // represented by the mask; only non-mask values are written.
-        if v.starts_with("****") {
-            continue;
-        }
-        env.insert(k.clone(), v.clone());
-    }
-    let mut keys: Vec<&String> = env.keys().collect();
-    keys.sort();
-    let mut out = String::new();
-    for k in keys {
-        out.push_str(&format!("{k}={}\n", env.get(k).unwrap()));
-    }
-    std::fs::write(&env_path, out).map_err(AppError::Io)
 }
 
 async fn start_ollama_proc(state: &AppState) -> String {
