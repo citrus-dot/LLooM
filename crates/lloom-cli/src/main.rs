@@ -122,16 +122,22 @@ enum ModelsCmd {
     Add {
         /// Model name (e.g. qwen2.5-local)
         name: String,
-        /// Provider: dashscope / openai / anthropic / ollama / custom
+        /// Model kind: local / cloud. Default: inferred (compat set or provider=ollama -> local)
         #[arg(long)]
-        provider: String,
-        /// LiteLLM model string (e.g. ollama/qwen2.5:latest)
+        kind: Option<String>,
+        /// Local compat protocol: ollama (default) / openai (LM Studio / vLLM)
         #[arg(long)]
-        model: String,
-        /// API base URL (e.g. http://localhost:11434)
+        compat: Option<String>,
+        /// Cloud provider: dashscope / openai / anthropic / custom
+        #[arg(long)]
+        provider: Option<String>,
+        /// LiteLLM model string (default: {prefix}/{name}, e.g. ollama/qwen2.5:latest)
+        #[arg(long)]
+        model: Option<String>,
+        /// API base URL (default: local 11434 / 1234/v1; cloud optional)
         #[arg(long)]
         api_base: Option<String>,
-        /// API key for this model (sk-... literal, or env var name like DASHSCOPE_API_KEY)
+        /// API key (cloud only): sk-... literal, or env var name like DASHSCOPE_API_KEY
         #[arg(long)]
         api_key: Option<String>,
         /// Input cost per token (e.g. 0.000001)
@@ -148,6 +154,15 @@ enum ModelsCmd {
     Update {
         /// Model name to update
         name: String,
+        /// Switch model kind: local / cloud
+        #[arg(long)]
+        kind: Option<String>,
+        /// Local compat protocol: ollama / openai
+        #[arg(long)]
+        compat: Option<String>,
+        /// Cloud provider: dashscope / openai / anthropic / custom
+        #[arg(long)]
+        provider: Option<String>,
         /// New input cost per token
         #[arg(long)]
         input_cost: Option<f64>,
@@ -157,7 +172,7 @@ enum ModelsCmd {
         /// New API base URL
         #[arg(long)]
         api_base: Option<String>,
-        /// New API key (sk-... literal, or env var name like DASHSCOPE_API_KEY)
+        /// New API key (cloud only): sk-... literal, or env var name
         #[arg(long)]
         api_key: Option<String>,
         /// New task type
@@ -348,10 +363,16 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
                 println!("(无模型)");
             } else {
                 for m in &models {
+                    let kind = m["kind"].as_str().unwrap_or("cloud");
+                    let backend = if kind == "local" {
+                        format!("本地:{}", m["compat"].as_str().unwrap_or("ollama"))
+                    } else {
+                        format!("云端:{}", m["provider"].as_str().unwrap_or("?"))
+                    };
                     println!(
-                        "  {:<18} {:<12} {:<40} in=${:.6}/tok out=${:.6}/tok {}",
+                        "  {:<18} {:<16} {:<40} in=${:.6}/tok out=${:.6}/tok {}",
                         m["name"].as_str().unwrap_or(""),
-                        m["provider"].as_str().unwrap_or(""),
+                        backend,
                         m["litellm_model"].as_str().unwrap_or(""),
                         m["input_cost_per_token"].as_f64().unwrap_or(0.0),
                         m["output_cost_per_token"].as_f64().unwrap_or(0.0),
@@ -361,23 +382,61 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
             }
             println!("共 {} 个模型", models.len());
         }
-        ModelsCmd::Add { name, provider, model, api_base, api_key, input_cost, output_cost, task_type } => {
-            let body = serde_json::json!({
+        ModelsCmd::Add { name, kind, compat, provider, model, api_base, api_key, input_cost, output_cost, task_type } => {
+            let is_local = match kind.as_deref() {
+                Some("local") => true,
+                Some("cloud") => false,
+                Some(other) => {
+                    eprintln!("✗ kind 必须是 local|cloud，收到 '{other}'");
+                    exit(1);
+                }
+                None => compat.is_some() || provider.as_deref() == Some("ollama"),
+            };
+            if is_local && api_key.is_some() {
+                eprintln!("✗ 本地模型不配置 API Key");
+                exit(1);
+            }
+            let mut body = serde_json::json!({
                 "name": name,
-                "provider": provider,
-                "litellm_model": model,
-                "api_base": api_base.unwrap_or_default(),
-                "api_key_env": api_key.unwrap_or_default(),
+                "kind": if is_local { "local" } else { "cloud" },
                 "task_type": task_type.unwrap_or_else(|| "general".into()),
                 "input_cost_per_token": input_cost.unwrap_or(0.0),
                 "output_cost_per_token": output_cost.unwrap_or(0.0),
                 "rpm": 60,
             });
+            if let Some(v) = compat {
+                body["compat"] = serde_json::json!(v);
+            }
+            if let Some(v) = provider {
+                if !is_local {
+                    body["provider"] = serde_json::json!(v);
+                }
+            }
+            if let Some(v) = api_base {
+                body["api_base"] = serde_json::json!(v);
+            }
+            if let Some(v) = api_key {
+                if !is_local {
+                    body["api_key"] = serde_json::json!(v);
+                }
+            }
+            if let Some(v) = model {
+                body["litellm_model"] = serde_json::json!(v);
+            }
             let r = post(client, "/api/models", body).await?;
             println!("✓ 模型已注册 (id={}, name={})", r["id"], r["name"]);
         }
-        ModelsCmd::Update { name, input_cost, output_cost, api_base, api_key, task_type } => {
+        ModelsCmd::Update { name, kind, compat, provider, input_cost, output_cost, api_base, api_key, task_type } => {
             let mut updates = serde_json::Map::new();
+            if let Some(v) = kind {
+                updates.insert("kind".into(), serde_json::json!(v));
+            }
+            if let Some(v) = compat {
+                updates.insert("compat".into(), serde_json::json!(v));
+            }
+            if let Some(v) = provider {
+                updates.insert("provider".into(), serde_json::json!(v));
+            }
             if let Some(v) = input_cost {
                 updates.insert("input_cost_per_token".into(), serde_json::json!(v));
             }
@@ -388,7 +447,7 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
                 updates.insert("api_base".into(), serde_json::json!(v));
             }
             if let Some(v) = api_key {
-                updates.insert("api_key_env".into(), serde_json::json!(v));
+                updates.insert("api_key".into(), serde_json::json!(v));
             }
             if let Some(v) = task_type {
                 updates.insert("task_type".into(), serde_json::json!(v));
