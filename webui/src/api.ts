@@ -17,15 +17,54 @@ export interface ServicesStatus {
 export interface Model {
   id: number;
   name: string;
-  provider: string;
+  /** "local" | "cloud" */
+  kind: string;
+  /** local only: "ollama" | "openai" */
+  compat?: string;
+  /** cloud only: dashscope / openai / anthropic / custom */
+  provider?: string;
   litellm_model: string;
   api_base: string;
-  api_key_env: string;
+  /** 掩码输出（****tail）；未配置时为空串 */
+  api_key: string;
   task_type: string;
   input_cost_per_token: number;
   output_cost_per_token: number;
   rpm: number;
   is_active: number;
+  is_local: boolean;
+  capability_tier: number;
+  quality_score: number;
+  health_state: string;
+}
+
+/** POST /api/models 入参（kind: local|cloud）。*/
+export interface ModelCreatePayload {
+  name: string;
+  kind: 'local' | 'cloud';
+  compat?: string;
+  provider?: string;
+  api_base?: string;
+  api_key?: string;
+  litellm_model?: string;
+  task_type?: string;
+  input_cost_per_token?: number;
+  output_cost_per_token?: number;
+  rpm?: number;
+}
+
+/** PUT /api/models/{name} 入参：全部可选；api_key 传回 **** 掩码 = 保持原值。*/
+export interface ModelPatchPayload {
+  kind?: 'local' | 'cloud';
+  compat?: string;
+  provider?: string;
+  api_base?: string;
+  api_key?: string;
+  litellm_model?: string;
+  task_type?: string;
+  input_cost_per_token?: number;
+  output_cost_per_token?: number;
+  rpm?: number;
 }
 
 export interface UsageStats {
@@ -333,7 +372,7 @@ export function getModels(): Promise<{ models: Model[] }> {
   return jget('/api/models');
 }
 
-export function addModel(m: Partial<Model>): Promise<{ id: number }> {
+export function addModel(m: ModelCreatePayload): Promise<{ id: number }> {
   return jpost('/api/models', m);
 }
 
@@ -341,8 +380,8 @@ export function removeModel(name: string): Promise<{ deleted: boolean }> {
   return jdelete(`/api/models/${encodeURIComponent(name)}`);
 }
 
-export function updateModel(name: string, updates: Partial<Model>): Promise<{ updated: boolean }> {
-  return jput(`/api/models/${encodeURIComponent(name)}`, updates);
+export function updateModel(name: string, patch: ModelPatchPayload): Promise<{ updated: boolean }> {
+  return jput(`/api/models/${encodeURIComponent(name)}`, patch);
 }
 
 // ── Stats / usage ──

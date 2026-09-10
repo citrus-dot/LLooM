@@ -1,15 +1,25 @@
 import { useEffect, useState } from 'react';
 import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Select, message, Popconfirm } from 'antd';
 import { PlusOutlined, ReloadOutlined, EditOutlined } from '@ant-design/icons';
-import { getModels, addModel, updateModel, removeModel, Model } from '../api';
+import { getModels, addModel, updateModel, removeModel } from '../api';
+import type { Model, ModelCreatePayload, ModelPatchPayload } from '../api';
 
-const PROVIDERS = [
-  { value: 'dashscope', label: '阿里云百炼 (DashScope)', prefix: 'openai/' },
-  { value: 'openai', label: 'OpenAI', prefix: '' },
-  { value: 'anthropic', label: 'Anthropic', prefix: 'anthropic/' },
-  { value: 'ollama', label: 'Ollama (本地)', prefix: 'ollama/' },
-  { value: 'custom', label: '自定义', prefix: '' },
+const CLOUD_PROVIDERS = [
+  { value: 'dashscope', label: '阿里云百炼 (DashScope)' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'custom', label: '自定义' },
 ];
+
+const LOCAL_COMPTS = [
+  { value: 'ollama', label: 'Ollama 原生' },
+  { value: 'openai', label: 'OpenAI 兼容 (LM Studio / vLLM)' },
+];
+
+const LOCAL_BASE_HINT: Record<string, string> = {
+  ollama: '缺省 http://localhost:11434',
+  openai: '缺省 http://localhost:1234/v1',
+};
 
 const TASK_TYPES = [
   { value: '', label: '不分配' },
@@ -26,6 +36,8 @@ export default function ModelsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Model | null>(null);
   const [form] = Form.useForm();
+  const kind = Form.useWatch('kind', form) ?? 'cloud';
+  const compat = Form.useWatch('compat', form);
 
   const refresh = async () => {
     setLoading(true);
@@ -47,27 +59,42 @@ export default function ModelsPage() {
     const v = await form.validateFields();
     try {
       if (editing) {
-        await updateModel(editing.name, {
-          litellm_model: v.litellm_model || editing.litellm_model,
-          api_base: v.api_base ?? '',
-          api_key_env: v.api_key ?? '',
+        const patch: ModelPatchPayload = {
+          kind: v.kind,
           task_type: v.task_type ?? '',
           input_cost_per_token: v.input_cost ?? 0,
           output_cost_per_token: v.output_cost ?? 0,
-        });
+        };
+        if (v.litellm_model) patch.litellm_model = v.litellm_model;
+        if (v.kind === 'local') {
+          patch.compat = v.compat ?? 'ollama';
+          patch.api_base = v.api_base ?? '';
+        } else {
+          patch.provider = v.provider;
+          patch.api_base = v.api_base ?? '';
+          patch.api_key = v.api_key ?? '';
+        }
+        await updateModel(editing.name, patch);
         message.success('模型已更新');
       } else {
-        await addModel({
+        const body: ModelCreatePayload = {
           name: v.name,
-          provider: v.provider,
-          litellm_model: v.litellm_model || `${PROVIDERS.find((p) => p.value === v.provider)?.prefix ?? ''}${v.name}`,
-          api_base: v.api_base ?? '',
-          api_key_env: v.api_key ?? '',
+          kind: v.kind,
           task_type: v.task_type ?? '',
           input_cost_per_token: v.input_cost ?? 0,
           output_cost_per_token: v.output_cost ?? 0,
           rpm: v.rpm ?? 60,
-        });
+        };
+        if (v.litellm_model) body.litellm_model = v.litellm_model;
+        if (v.kind === 'local') {
+          body.compat = v.compat ?? 'ollama';
+          body.api_base = v.api_base || undefined;
+        } else {
+          body.provider = v.provider;
+          body.api_base = v.api_base || undefined;
+          body.api_key = v.api_key ?? '';
+        }
+        await addModel(body);
         message.success('模型添加成功');
       }
       setModalOpen(false);
@@ -88,11 +115,12 @@ export default function ModelsPage() {
   const openEdit = (m: Model) => {
     setEditing(m);
     form.setFieldsValue({
-      name: m.name,
-      provider: m.provider,
+      kind: m.kind,
+      compat: m.compat ?? 'ollama',
+      provider: m.provider ?? 'dashscope',
       litellm_model: m.litellm_model,
       api_base: m.api_base ?? '',
-      api_key: m.api_key_env ?? '',
+      api_key: m.api_key ?? '',
       input_cost: m.input_cost_per_token,
       output_cost: m.output_cost_per_token,
       task_type: m.task_type,
@@ -112,7 +140,16 @@ export default function ModelsPage() {
 
   const columns = [
     { title: '模型名称', dataIndex: 'name', key: 'name', render: (n: string) => <b>{n}</b> },
-    { title: '供应商', dataIndex: 'provider', key: 'provider', render: (v: string) => <Tag color="blue">{v}</Tag> },
+    {
+      title: '类型',
+      key: 'kind',
+      render: (_: unknown, m: Model) =>
+        m.kind === 'local' ? (
+          <Tag color="green">本地 · {m.compat ?? 'ollama'}</Tag>
+        ) : (
+          <Tag color="blue">云端 · {m.provider}</Tag>
+        ),
+    },
     { title: 'LiteLLM 模型', dataIndex: 'litellm_model', key: 'litellm_model' },
     {
       title: '输入 ($/1K)',
@@ -174,25 +211,56 @@ export default function ModelsPage() {
         }}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form
+          form={form}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onValuesChange={(changed) => {
+            if ('kind' in changed) {
+              // 切换类型时清掉另一侧的残留值，避免把本地 base 带进云端配置
+              form.setFieldsValue({ api_base: '', api_key: '' });
+            }
+          }}
+        >
           <Form.Item name="name" label="模型名称" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="如 my-gpt-4o" />
+            <Input placeholder="如 my-gpt-4o" disabled={!!editing} />
           </Form.Item>
-          <Form.Item name="provider" label="供应商" initialValue="dashscope">
-            <Select options={PROVIDERS} />
+          <Form.Item name="kind" label="模型类型" initialValue="cloud">
+            <Select
+              options={[
+                { value: 'cloud', label: '云端模型（API Key 调用）' },
+                { value: 'local', label: '本地模型（Ollama / OpenAI 兼容端点）' },
+              ]}
+            />
           </Form.Item>
+          {kind === 'local' ? (
+            <>
+              <Form.Item name="compat" label="本地协议" initialValue="ollama">
+                <Select options={LOCAL_COMPTS} />
+              </Form.Item>
+              <Form.Item name="api_base" label="API Base" extra={LOCAL_BASE_HINT[compat] ?? LOCAL_BASE_HINT.ollama}>
+                <Input placeholder="留空使用缺省地址" />
+              </Form.Item>
+            </>
+          ) : (
+            <>
+              <Form.Item name="provider" label="云端供应商" rules={[{ required: true, message: '请选择供应商' }]}>
+                <Select options={CLOUD_PROVIDERS} />
+              </Form.Item>
+              <Form.Item name="api_base" label="API Base">
+                <Input placeholder="可选，留空走供应商默认" />
+              </Form.Item>
+              <Form.Item
+                name="api_key"
+                label="API Key"
+                extra="sk-... 字面密钥或环境变量名（如 DASHSCOPE_API_KEY）；编辑时原样提交掩码即保持原值，清空则移除"
+              >
+                <Input.Password placeholder="可选" autoComplete="new-password" />
+              </Form.Item>
+            </>
+          )}
           <Form.Item name="litellm_model" label="LiteLLM 模型字符串">
             <Input placeholder="留空自动生成，如 openai/my-model" />
-          </Form.Item>
-          <Form.Item name="api_base" label="API Base">
-            <Input placeholder="可选" />
-          </Form.Item>
-          <Form.Item
-            name="api_key"
-            label="API Key"
-            extra="sk-... 字面密钥或环境变量名（如 DASHSCOPE_API_KEY）；Ollama 本地模型留空"
-          >
-            <Input.Password placeholder="可选" autoComplete="new-password" />
           </Form.Item>
           <Space size={12} style={{ display: 'flex' }}>
             <Form.Item name="input_cost" label="输入价格 ($/token)" initialValue={0}>
