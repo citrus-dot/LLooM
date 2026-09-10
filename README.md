@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/webui-overview.png" width="820" alt="LLooM WebUI overview" />
+  <img src="assets/tui-hero.png" width="820" alt="LLooM TUI" />
 </p>
 
 ---
