@@ -215,6 +215,7 @@ fn bind_addr_with(over: &CliOverrides, bind_env: Option<&str>) -> String {
 /// Locate the built frontend (React `dist/` or legacy single `index.html`).
 pub fn ui_dir() -> Option<PathBuf> {
     let candidates = [
+        install_dir().join("webui/dist"),
         install_dir().join("resources/webui/dist"),
         install_dir().join("resources/ui"),
         install_dir().join("../../webui/dist"),
