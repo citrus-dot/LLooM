@@ -31,7 +31,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API re
 ## Features
 
 ### Model Management
-- Register cloud models (DashScope, OpenAI, Anthropic) and local models (Ollama)
+- Register **cloud models** (DashScope, OpenAI, Anthropic, custom) — configure provider, API base, and API key (literal `sk-...` or env var name) per model
+- Register **local models** (Ollama native, or OpenAI-compatible endpoints like LM Studio / vLLM) — no API key, cost zeroed by explicit type instead of endpoint guessing
 - Track token usage and cost per model in real-time
 - Set budgets with configurable duration (daily/weekly/monthly)
 - Automatic cost calculation based on registered pricing

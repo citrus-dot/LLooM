@@ -193,6 +193,18 @@
 
 - 冒烟：`cargo test` 57 全绿（新增 parse\_remote\_\*、cache\_saved\_cost 聚合）；`tsc --noEmit` + `vite build` 全过
 
+**2026-09-10 落地（M1 模型分层重构 + 本地/云端模型类型，见 `.trae/documents/model-layering-and-local-cloud.md`）**：
+
+- C1/C2 领域层拆分：`db.rs` 引入 `ModelRow` 行层（`From<&Model>` 落库投影 + 读侧宽容还原，零迁移）；`models.rs` 新增 `Backend`（Cloud{provider,api_base,api_key:ApiKeyRef} / Local{compat,api_base}）、`Provider`、`LocalCompat`、`ApiKeyRef` 枚举，`Model` 持有 backend；router/metadata/probe/ai_client 全部改读 `m.is_local()`/`m.provider_name()`，**废除 `is_local_endpoint` 启发式**（localhost 反代的云端模型不再被误判清零成本）
+
+- C3 API DTO 层：新增 `model_dto.rs` 三件套——`ModelCreate`（TryFrom→Model，非法组合拒收：本地带 key / 云端缺 provider / 错 litellm 前缀）、`ModelPatch`（resolve_against 整体校验 + diff_updates；`****` 前缀掩码哨兵=保持原 key）、`ModelDto`（GET 响应，api_key 掩码 `****tail`）；`db::get_model_any` 支持更新停用模型；get_config 掩码逻辑复用 `mask_secret`
+
+- C4/C5 三端同步：WebUI 模型表单类型切换（本地：compat+服务地址提示、隐藏 key；云端：provider+key，掩码哨兵防御）；CLI `models add/update` 加 `--kind/--compat/--provider`（kind 缺省按 compat/provider=ollama 推断，本地带 `--api-key` 客户端侧拒收）；TUI 表单同步 kind 字段；列表列改「类型」展示
+
+- 文档：`.env.example`（本地/云端模型说明 + LM Studio/vLLM 地址示例）、README 模型管理段落、NEXT-PLAN 阶段表加 M1 行
+
+- 冒烟：`cargo test` **110 全绿**（+7 model_dto：默认值填充/非法组合拒收/kind 切换清 key/掩码哨兵/DTO 掩码）；`tsc --noEmit` + `vite build` 全过
+
 **过往已实现并验证**（见 memory / 历史 commit）：
 
 - 编辑对话名称（`rename_conversation`，PUT `/api/conversations/{id}`）
@@ -412,7 +424,7 @@
 
 | 文件                           | 用途                                                   | 同步状态                       |
 | ---------------------------- | ---------------------------------------------------- | -------------------------- |
-| `LLooMprogress.md`（本文件）      | 项目总进度、决策、待办台账（主线 + B 类搁置 14 条 + C 类小项 7 条）、约束、文档索引   | 更新至 2026-08-31，同步至 488d156 |
+| `LLooMprogress.md`（本文件）      | 项目总进度、决策、待办台账（主线 + B 类搁置 14 条 + C 类小项 7 条）、约束、文档索引   | 更新至 2026-09-10（M1 模型分层） |
 | **`NEXT-PLAN.md`**           | **下一阶段权威计划**：N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2 | 2026-08-29 纳入（本次提交）        |
 | `ARCHITECTURE.md`            | 分层架构、端点、数据流、技术栈                                      | 已同步至 488d156               |
 | `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）                                     | 已同步至 488d156               |
