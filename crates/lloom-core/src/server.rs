@@ -847,7 +847,17 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
     // Port probes (async HTTP).
     let ai_health = crate::processes::check_ai_health().await;
     let ai_responding = ai_health.status == "ok";
-    let ai_ready = ai_health.ready;
+    // API keys configured per-model live in the DB (Models page) and are
+    // invisible to the Python service's env-based readiness probe — OR them
+    // in so a model with a key counts as a usable backend.
+    let model_key_ready = db::list_models(true)
+        .map(|models| {
+            models
+                .iter()
+                .any(|m| !config::api_key_for(&m.api_key_env).is_empty())
+        })
+        .unwrap_or(false);
+    let ai_ready = ai_health.ready || model_key_ready;
     let ollama_responding = crate::processes::check_ollama_health().await;
 
     // Child handles we manage. `None` means we reused an existing instance
@@ -881,7 +891,7 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
                 "name": "AI Service",
                 "status": "运行但未配置模型",
                 "healthy": false,
-                "detail": "未配置任何云 API Key 且 Ollama 不可达"
+                "detail": "模型未配置 API Key 且 Ollama 不可达（请在「模型管理」为模型设置 API Key）"
             })
         }
     } else {
