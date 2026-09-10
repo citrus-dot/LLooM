@@ -93,6 +93,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
         { key: "provider", label: "提供商", placeholder: "dashscope/openai/anthropic/ollama/custom" },
         { key: "litellm_model", label: "LiteLLM 模型", placeholder: "留空自动拼前缀，如 ollama/qwen2.5" },
         { key: "api_base", label: "API Base", placeholder: "如 http://localhost:11434" },
+        { key: "api_key", label: "API Key", placeholder: "sk-... 或环境变量名；Ollama 留空" },
         { key: "input_cost", label: "输入成本 ($/tok)", placeholder: "如 0.000001" },
         { key: "output_cost", label: "输出成本 ($/tok)", placeholder: "如 0.000002" },
         { key: "task_type", label: "任务路由", placeholder: "simple_qa/general/coding/math_logic/complex_reasoning" },
@@ -106,7 +107,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
             provider,
             litellm_model: vals.litellm_model.trim() || `${prefix}${vals.name.trim()}`,
             api_base: vals.api_base.trim(),
-            api_key_env: "",
+            api_key_env: vals.api_key.trim(),
             task_type: vals.task_type.trim(),
             input_cost_per_token: parseFloat(vals.input_cost) || 0,
             output_cost_per_token: parseFloat(vals.output_cost) || 0,
@@ -127,6 +128,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
       fields: [
         { key: "litellm_model", label: "LiteLLM 模型", placeholder: m.litellm_model, default: m.litellm_model },
         { key: "api_base", label: "API Base", placeholder: m.api_base ?? "", default: m.api_base ?? "" },
+        { key: "api_key", label: "API Key", placeholder: "sk-... 或环境变量名；Ollama 留空", default: m.api_key_env ?? "" },
         { key: "input_cost", label: "输入成本 ($/tok)", default: String(m.input_cost_per_token ?? 0) },
         { key: "output_cost", label: "输出成本 ($/tok)", default: String(m.output_cost_per_token ?? 0) },
         { key: "task_type", label: "任务路由", default: m.task_type },
@@ -136,6 +138,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
           await updateModel(m.name, {
             litellm_model: vals.litellm_model.trim() || m.litellm_model,
             api_base: vals.api_base.trim(),
+            api_key_env: vals.api_key.trim(),
             input_cost_per_token: parseFloat(vals.input_cost) || 0,
             output_cost_per_token: parseFloat(vals.output_cost) || 0,
             task_type: vals.task_type.trim(),

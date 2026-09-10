@@ -1,4 +1,6 @@
-// Settings route — env keys (API keys) editing, service control, OpenCode-style.
+// Settings route — env config (service addresses / ports / paths) editing,
+// service control, OpenCode-style. API keys are per-model settings edited on
+// the Models route, not here.
 
 import { createSignal, onMount } from "solid-js"
 import { theme } from "../theme"
@@ -10,11 +12,14 @@ import { healthServices, pollHealth } from "../health"
 import { Table } from "../ui"
 
 const ENV_SCHEMA: { title: string; items: { key: string; label: string }[] }[] = [
-  { title: "DashScope", items: [{ key: "DASHSCOPE_API_KEY", label: "API Key" }, { key: "DASHSCOPE_API_BASE", label: "API Base" }] },
-  { title: "OpenAI", items: [{ key: "OPENAI_API_KEY", label: "API Key" }, { key: "OPENAI_BASE_URL", label: "Base URL" }] },
-  { title: "Anthropic", items: [{ key: "ANTHROPIC_API_KEY", label: "API Key" }] },
-  { title: "核心配置", items: [{ key: "OLLAMA_API_BASE", label: "Ollama 地址" }, { key: "LLOOM_WEB_PORT", label: "Web 端口" }, { key: "LLOOM_DATA_DIR", label: "数据目录" }] },
+  { title: "服务地址", items: [{ key: "DASHSCOPE_API_BASE", label: "DashScope Base" }, { key: "OPENAI_BASE_URL", label: "OpenAI Base URL" }, { key: "OLLAMA_API_BASE", label: "Ollama 地址" }] },
+  { title: "核心配置", items: [{ key: "LLOOM_WEB_PORT", label: "Web 端口" }, { key: "LLOOM_DATA_DIR", label: "数据目录" }] },
 ]
+
+// Secret-like env keys are hidden from the settings list — secrets belong to
+// the per-model config on the Models route, not to free-form env editing.
+const isSecretKey = (k: string) =>
+  ["_API_KEY", "_KEY", "_TOKEN", "_SECRET"].some((s) => k.toUpperCase().endsWith(s))
 
 // Display name → control API name (Core Server is the host itself; not manageable).
 const SERVICE_KEYS: Record<string, string> = { "Ollama": "ollama", "AI Service": "ai" }
@@ -27,10 +32,11 @@ export function Settings(props: { setStatus: (s: string) => void }) {
   const dialog = useDialog()
 
   // All editable keys: schema-declared keys first, then any remaining keys the
-  // server exposes via /api/config (so nothing is hidden).
+  // server exposes via /api/config (so nothing is hidden). Secret-like keys
+  // are excluded — see isSecretKey above.
   const flatKeys = () => {
     const schemaKeys = ENV_SCHEMA.flatMap((s) => s.items.map((i) => i.key))
-    const extra = Object.keys(env()).filter((k) => !schemaKeys.includes(k)).sort()
+    const extra = Object.keys(env()).filter((k) => !schemaKeys.includes(k) && !isSecretKey(k)).sort()
     return [...schemaKeys, ...extra]
   }
 
@@ -76,7 +82,7 @@ export function Settings(props: { setStatus: (s: string) => void }) {
     const label = ENV_SCHEMA.find((s) => s.items.some((it) => it.key === key))?.items.find((it) => it.key === key)?.label ?? key
     dialog.prompt(`设置 ${label} (${key})`, {
       value: env()[key] ?? "",
-      placeholder: "输入密钥值...",
+      placeholder: "输入值...",
       onConfirm: (v) => save(key, v.trim()),
     })
   }
@@ -212,9 +218,9 @@ export function Settings(props: { setStatus: (s: string) => void }) {
         <text fg={theme.textDim}>  右键服务名弹出操作菜单</text>
       </box>
 
-      {/* Right: env keys */}
+      {/* Right: env config */}
       <box flexDirection="column" flexGrow={1} minWidth={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
-        <text fg={theme.textMuted} attributes={1}>API 密钥配置</text>
+        <text fg={theme.textMuted} attributes={1}>环境变量配置（API Key 在「模型管理」中按模型设置）</text>
         <box height={1} />
 
         <Table
@@ -256,7 +262,7 @@ export function Settings(props: { setStatus: (s: string) => void }) {
         />
 
         <box paddingTop={1}>
-          <text fg={theme.textDim}>  点击密钥行或按 Enter 弹出编辑框，⏎ 保存 · esc 取消 · ↑↓ 选择</text>
+          <text fg={theme.textDim}>  点击配置行或按 Enter 弹出编辑框，⏎ 保存 · esc 取消 · ↑↓ 选择</text>
         </box>
       </box>
     </box>
