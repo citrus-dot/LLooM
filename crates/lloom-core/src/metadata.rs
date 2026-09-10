@@ -1,9 +1,9 @@
 //! 模型元数据自动打标（ROUTING-PLAN P0.e）。
 //!
 //! `resolve_and_fill` 按「五级兜底」给新增 `Model` 回填路由元数据
-//! （capability_tier / context_window / is_local / needs_calibration / 成本）：
+//! （capability_tier / context_window / needs_calibration / 成本）：
 //! 已由更高优先级来源（overlay / 用户显式给出）的字段不被 heuristic 覆盖，
-//! 保证「命即填，后级不覆盖高级」。
+//! 保证「命即填，后级不覆盖高级」。本地/云端由用户显式选择，这里只消费。
 //!
 //! 五级来源（离线 box 只启用 4/5，前三级留接线点）：
 //!   1. litellm 打包表（运行时 import litellm.model_cost）——需 Python 运行时，暂不启用
@@ -63,13 +63,6 @@ pub fn tier_for_name(name: &str) -> i64 {
     2
 }
 
-/// 本地端点检测（硬事实，无条件应用）。
-pub fn is_local_endpoint(m: &Model) -> bool {
-    m.provider.eq_ignore_ascii_case("ollama")
-        || m.api_base.contains("127.0.0.1")
-        || m.api_base.to_lowercase().contains("localhost")
-}
-
 /// overlay 命中了哪些字段，供 heuristic 判断「不覆盖高级来源」。
 #[derive(Default)]
 struct OverlayHits {
@@ -79,7 +72,7 @@ struct OverlayHits {
 }
 
 fn overlay_key(m: &Model) -> String {
-    format!("{}/{}", m.provider, m.name)
+    format!("{}/{}", m.provider_name(), m.name)
 }
 
 /// 第 4 级：读 `model_catalog.json` 的 `{provider}/{name}` 条目回填。
@@ -118,9 +111,7 @@ fn fill_from_overlay_in(m: &mut Model, data_dir: &Path) -> OverlayHits {
     if let Some(v) = entry.get("supports_stream").and_then(|x| x.as_i64()) {
         m.supports_stream = v;
     }
-    if let Some(v) = entry.get("is_local").and_then(|x| x.as_i64()) {
-        m.is_local = v;
-    }
+    // 注：overlay 不再覆盖 is_local——本地/云端由用户在注册时显式选择。
     let in_c = entry.get("input_cost_per_token").and_then(|x| x.as_f64());
     let out_c = entry.get("output_cost_per_token").and_then(|x| x.as_f64());
     match (in_c, out_c) {
@@ -146,13 +137,11 @@ fn fill_heuristic(m: &mut Model, tier_filled: bool, ctx_filled: bool, cost_fille
     if !ctx_filled && m.context_window <= 0 {
         m.context_window = 32768;
     }
-    if is_local_endpoint(m) {
-        m.is_local = 1;
-        // 本地模型无外部计费：未显式给价 → 置 0（避免误计入账）
-        if !cost_filled {
-            m.input_cost_per_token = 0.0;
-            m.output_cost_per_token = 0.0;
-        }
+    // 本地模型无外部计费：未显式给价 → 置 0（避免误计入账）。
+    // is_local 是用户注册时的显式选择，这里只消费、不再猜测。
+    if m.is_local() && !cost_filled {
+        m.input_cost_per_token = 0.0;
+        m.output_cost_per_token = 0.0;
     }
     // 新 / 仅启发式的模型一律进入保守期，等 run 结果回填 ewma_quality 后解除
     m.needs_calibration = 1;
@@ -198,31 +187,15 @@ pub struct FillReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{Backend, LocalCompat, Model};
 
+    /// 云端测试模型（fixture + 自定 api_base）。
     fn model(name: &str, provider: &str, api_base: &str) -> Model {
-        Model {
-            id: 0,
-            name: name.to_string(),
-            provider: provider.to_string(),
-            litellm_model: name.to_string(),
-            api_base: api_base.to_string(),
-            api_key_env: String::new(),
-            task_type: String::new(),
-            input_cost_per_token: 0.0,
-            output_cost_per_token: 0.0,
-            rpm: 60,
-            is_active: 1,
-            capability_tier: 2,
-            quality_score: 0.6,
-            context_window: 32768,
-            supports_tools: 0,
-            supports_vision: 0,
-            supports_stream: 0,
-            is_local: 0,
-            priority: 0,
-            health_state: "unknown".to_string(),
-            needs_calibration: 0,
+        let mut m = Model::fixture(name, provider);
+        if let Backend::Cloud { api_base: b, .. } = &mut m.backend {
+            *b = if api_base.is_empty() { None } else { Some(api_base.to_string()) };
         }
+        m
     }
 
     #[test]
@@ -247,19 +220,29 @@ mod tests {
     }
 
     #[test]
-    fn local_detection_sets_flag_and_zero_cost() {
-        let mut m = model("qwen2.5-local", "ollama", "http://host.docker.internal:11434");
+    fn local_model_gets_zero_cost_and_calibration() {
+        // is_local 现在是注册时的显式选择：本地模型未显式给价 → 成本置 0
+        let mut m = Model::local_fixture("qwen2.5-local", LocalCompat::Ollama);
+        m.backend = Backend::Local {
+            compat: LocalCompat::Ollama,
+            api_base: "http://host.docker.internal:11434".to_string(),
+        };
         resolve_and_fill(&mut m);
-        assert_eq!(m.is_local, 1, "ollama 应被标本地");
+        assert!(m.is_local(), "显式本地模型保持本地");
         assert_eq!(m.input_cost_per_token, 0.0);
         assert_eq!(m.output_cost_per_token, 0.0);
         assert_eq!(m.needs_calibration, 1, "启发式模型须进入保守期");
     }
 
     #[test]
-    fn localhost_api_base_is_local() {
-        let m = model("my-model", "openai", "http://localhost:11434/v1");
-        assert!(is_local_endpoint(&m));
+    fn cloud_with_localhost_base_stays_cloud() {
+        // 回归守护：显式云端的模型即使走 localhost 反代也不得被改判本地/清零成本
+        let mut m = model("my-model", "openai", "http://localhost:11434/v1");
+        m.input_cost_per_token = 1e-6;
+        m.output_cost_per_token = 2e-6;
+        resolve_and_fill(&mut m);
+        assert!(!m.is_local(), "显式云端不被 api_base 启发式改判");
+        assert_eq!(m.input_cost_per_token, 1e-6, "云端成本不被清零");
     }
 
     #[test]
@@ -268,7 +251,7 @@ mod tests {
         resolve_and_fill(&mut m);
         assert_eq!(m.capability_tier, 1);
         assert_eq!(m.needs_calibration, 1);
-        assert_eq!(m.is_local, 0, "云端默认非本地");
+        assert!(!m.is_local(), "云端默认非本地");
     }
 
     #[test]

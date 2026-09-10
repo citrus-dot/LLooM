@@ -2,7 +2,7 @@
 //! Strongly-typed port of `core/database.py`.
 
 use crate::error::{AppError, Result};
-use crate::models::{Budget, Model, UsageStats};
+use crate::models::{ApiKeyRef, Backend, Budget, LocalCompat, Model, Provider, UsageStats};
 use crate::pricing::{PriceSpec, TierBand, Zone};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -741,14 +741,28 @@ fn model_from_row(row: &rusqlite::Row) -> rusqlite::Result<ModelRow> {
 }
 
 impl From<ModelRow> for Model {
+    /// 读侧宽容：尊重存量 `is_local` 判别列，不按 api_base 重分类。
+    /// 列编码：Local(Ollama)→provider="ollama"，Local(OpenAiCompat)→provider="custom"。
     fn from(r: ModelRow) -> Self {
+        let backend = if r.is_local == 1 {
+            let compat = if r.provider.eq_ignore_ascii_case("ollama") {
+                LocalCompat::Ollama
+            } else {
+                LocalCompat::OpenAiCompat
+            };
+            Backend::Local { compat, api_base: r.api_base.clone() }
+        } else {
+            Backend::Cloud {
+                provider: Provider::parse(&r.provider),
+                api_base: Some(r.api_base.clone()).filter(|s| !s.is_empty()),
+                api_key: ApiKeyRef::parse(&r.api_key_env),
+            }
+        };
         Model {
             id: r.id,
             name: r.name,
-            provider: r.provider,
             litellm_model: r.litellm_model,
-            api_base: r.api_base,
-            api_key_env: r.api_key_env,
+            backend,
             task_type: r.task_type,
             input_cost_per_token: r.input_cost_per_token,
             output_cost_per_token: r.output_cost_per_token,
@@ -760,7 +774,6 @@ impl From<ModelRow> for Model {
             supports_tools: r.supports_tools,
             supports_vision: r.supports_vision,
             supports_stream: r.supports_stream,
-            is_local: r.is_local,
             priority: r.priority,
             health_state: r.health_state,
             needs_calibration: r.needs_calibration,
@@ -773,10 +786,10 @@ impl From<&Model> for ModelRow {
         ModelRow {
             id: m.id,
             name: m.name.clone(),
-            provider: m.provider.clone(),
+            provider: m.provider_name().to_string(),
             litellm_model: m.litellm_model.clone(),
-            api_base: m.api_base.clone(),
-            api_key_env: m.api_key_env.clone(),
+            api_base: m.api_base().to_string(),
+            api_key_env: m.api_key_env().to_string(),
             task_type: m.task_type.clone(),
             input_cost_per_token: m.input_cost_per_token,
             output_cost_per_token: m.output_cost_per_token,
@@ -788,7 +801,7 @@ impl From<&Model> for ModelRow {
             supports_tools: m.supports_tools,
             supports_vision: m.supports_vision,
             supports_stream: m.supports_stream,
-            is_local: m.is_local,
+            is_local: i64::from(m.is_local()),
             priority: m.priority,
             health_state: m.health_state.clone(),
             needs_calibration: m.needs_calibration,
@@ -2271,28 +2284,15 @@ mod migration_tests {
 
         // P0.e 自动打标冒烟：insert_model 走 resolve_and_fill，注册的新模型按名字+本地端点
         // 回填能力档/上下文/is_local/needs_calibration，并落库验证。
-        let smoke = crate::models::Model {
-            id: 0,
-            name: "smoke-flash-1b".into(),
-            provider: "dashscope".into(),
+        let smoke = Model {
             litellm_model: "dashscope/smoke-flash-1b".into(),
-            api_base: String::new(),
-            api_key_env: String::new(),
-            task_type: "general".into(),
-            input_cost_per_token: 0.0,
-            output_cost_per_token: 0.0,
-            rpm: 60,
-            is_active: 1,
-            capability_tier: 2,      // 默认档 → 应按名字启发式降档为轻量
-            quality_score: 0.6,
-            context_window: 0,       // 0 → 启发式回填默认 32K
-            supports_tools: 0,
-            supports_vision: 0,
-            supports_stream: 0,
-            is_local: 0,
-            priority: 0,
-            health_state: "unknown".into(),
-            needs_calibration: 0,
+            backend: Backend::Cloud {
+                provider: Provider::DashScope,
+                api_base: None,
+                api_key: None,
+            },
+            context_window: 0, // 0 → 启发式回填默认 32K
+            ..Model::fixture("smoke-flash-1b", "dashscope")
         };
         insert_model(&smoke).unwrap();
         let conn3 = open().unwrap();
@@ -2722,6 +2722,41 @@ mod model_row_tests {
             needs_calibration: 0,
         };
         let model = Model::from(row.clone());
+        assert_eq!(ModelRow::from(&model), row);
+    }
+
+    /// 本地 OpenAI 兼容行：is_local=1 + provider="custom" 编码必须无损往返。
+    #[test]
+    fn local_openai_compat_row_roundtrip() {
+        let row = ModelRow {
+            id: 3,
+            name: "l1".into(),
+            provider: "custom".into(),
+            litellm_model: "openai/l1".into(),
+            api_base: "http://localhost:1234/v1".into(),
+            api_key_env: String::new(),
+            task_type: String::new(),
+            input_cost_per_token: 0.0,
+            output_cost_per_token: 0.0,
+            rpm: 60,
+            is_active: 1,
+            capability_tier: 2,
+            quality_score: 0.6,
+            context_window: 32768,
+            supports_tools: 0,
+            supports_vision: 0,
+            supports_stream: 0,
+            is_local: 1,
+            priority: 0,
+            health_state: "unknown".into(),
+            needs_calibration: 0,
+        };
+        let model = Model::from(row.clone());
+        assert!(model.is_local());
+        assert!(matches!(
+            model.backend,
+            Backend::Local { compat: LocalCompat::OpenAiCompat, .. }
+        ));
         assert_eq!(ModelRow::from(&model), row);
     }
 }

@@ -220,7 +220,7 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
             "model_not_found",
         );
     };
-    let primary_provider = primary.provider.clone();
+    let primary_provider = primary.provider_name().to_string();
 
     // 审计落库（与 chat_stream 同款：决策快照 + 耗时，outcome 调用后回填）
     let routing_task_type = routing.task_type.clone();
@@ -277,7 +277,7 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
             let provider = models
                 .iter()
                 .find(|m| m.name == used_model)
-                .map(|m| m.provider.as_str())
+                .map(|m| m.provider_name())
                 .unwrap_or(primary_provider.as_str());
             let latency_ms = chat_start.elapsed().as_secs_f64() * 1000.0;
             let (act_cost, zm) = priced_usage(provider, &used_model, &res.usage);
@@ -377,7 +377,7 @@ pub async fn models_list(headers: HeaderMap) -> Response {
             "id": m.name,
             "object": "model",
             "created": created,
-            "owned_by": m.provider,
+            "owned_by": m.provider_name(),
         })
     }));
     Json(json!({ "object": "list", "data": data })).into_response()

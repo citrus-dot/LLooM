@@ -284,11 +284,11 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
         }
         let ec = input
             .price_specs
-            .get(&(m.provider.clone(), m.name.clone()))
+            .get(&(m.provider_name().to_string(), m.name.clone()))
             .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, cost_epoch(input), input.zones))
             .unwrap_or(0.0);
         // P5.a protect：仅本地免费或零成本模型（预算耗尽推本地 Ollama 的最后一档）。
-        if input.budget_tier == "protect" && m.is_local != 1 && ec > 0.0 {
+        if input.budget_tier == "protect" && !m.is_local() && ec > 0.0 {
             rejected.push(format!("{}: protect 仅本地/零成本", m.name));
             continue;
         }
@@ -386,7 +386,7 @@ fn sticky_bonus(input: &PlanInput, m: &Model) -> f64 {
     }
     let cache_sensitive = input
         .price_specs
-        .get(&(m.provider.clone(), m.name.clone()))
+        .get(&(m.provider_name().to_string(), m.name.clone()))
         .map(|s| s.cache_read_cost.is_some())
         .unwrap_or(false);
     if cache_sensitive { 0.05 } else { 0.0 }
@@ -428,7 +428,7 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
         .map(|m| {
             input
                 .price_specs
-                .get(&(m.provider.clone(), m.name.clone()))
+                .get(&(m.provider_name().to_string(), m.name.clone()))
                 .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, cost_epoch(input), input.zones))
                 .unwrap_or(0.0)
         })
@@ -688,33 +688,20 @@ mod tests {
     use super::*;
 
     fn model(name: &str, provider: &str, tier: i64, ctx: i64) -> Model {
-        Model {
-            id: 0,
-            name: name.to_string(),
-            provider: provider.to_string(),
-            litellm_model: name.to_string(),
-            api_base: String::new(),
-            api_key_env: String::new(),
-            task_type: String::new(),
-            input_cost_per_token: 0.0,
-            output_cost_per_token: 0.0,
-            rpm: 60,
-            is_active: 1,
-            capability_tier: tier,
-            quality_score: match tier {
-                3 => 0.85,
-                2 => 0.70,
-                _ => 0.45,
-            },
-            context_window: ctx,
-            supports_tools: 0,
-            supports_vision: 0,
-            supports_stream: 0,
-            is_local: if provider == "ollama" { 1 } else { 0 },
-            priority: 0,
-            health_state: "unknown".to_string(),
-            needs_calibration: 0,
-        }
+        let mut m = if provider == "ollama" {
+            Model::local_fixture(name, crate::models::LocalCompat::Ollama)
+        } else {
+            Model::fixture(name, provider)
+        };
+        m.litellm_model = name.to_string();
+        m.capability_tier = tier;
+        m.quality_score = match tier {
+            3 => 0.85,
+            2 => 0.70,
+            _ => 0.45,
+        };
+        m.context_window = ctx;
+        m
     }
 
     fn spec(provider: &str, m: &str, in_c: f64, out_c: f64) -> PriceSpec {

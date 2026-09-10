@@ -24,11 +24,16 @@ pub struct ModelSpec {
 
 impl From<&Model> for ModelSpec {
     fn from(m: &Model) -> Self {
+        // api_base/api_key 的 env 解析只发生在出进程边界（这里）；domain 层存原始值。
+        let api_key = match &m.backend {
+            crate::models::Backend::Cloud { api_key: Some(k), .. } => k.resolve(),
+            _ => String::new(),
+        };
         Self {
             name: m.name.clone(),
             litellm_model: m.litellm_model.clone(),
-            api_base: config::resolve_env_or_literal(&m.api_base),
-            api_key: config::api_key_for(&m.api_key_env),
+            api_base: config::resolve_env_or_literal(m.api_base()),
+            api_key,
             input_cost_per_token: m.input_cost_per_token,
             output_cost_per_token: m.output_cost_per_token,
         }

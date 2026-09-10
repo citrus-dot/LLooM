@@ -475,7 +475,7 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
     // P0.d：路由结果必须落在注册表内；direct 未注册 / plan 无候选 → 明确报错，
     // 不再伪造空 spec 继续调用。
     let primary_provider: &str = match models.iter().find(|m| m.name == routing.model) {
-        Some(m) => m.provider.as_str(),
+        Some(m) => m.provider_name(),
         None => {
             let detail = if let Some(d) = routing.method.strip_prefix("plan_error:") {
                 format!("路由失败：{d}")
@@ -548,7 +548,7 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
             let provider = models
                 .iter()
                 .find(|m| m.name == used_model)
-                .map(|m| m.provider.as_str())
+                .map(|m| m.provider_name())
                 .unwrap_or(primary_provider);
             // PRICING-PLAN §4.2/§6.1：Rust 单一计价真源，按真实 usage 分项计算并落库。
             // （PR-5 落地前 est_cost 传 0；task_type 用路由分类结果）
@@ -760,7 +760,7 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                 let provider = models
                     .iter()
                     .find(|m| m.name == model)
-                    .map(|m| m.provider.as_str())
+                    .map(|m| m.provider_name())
                     .unwrap_or("unknown");
                 let usage_detail = pricing::UsageDetail {
                     prompt_tokens: in_tok,
@@ -854,7 +854,7 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
         .map(|models| {
             models
                 .iter()
-                .any(|m| !config::api_key_for(&m.api_key_env).is_empty())
+                .any(|m| !config::api_key_for(m.api_key_env()).is_empty())
         })
         .unwrap_or(false);
     let ai_ready = ai_health.ready || model_key_ready;

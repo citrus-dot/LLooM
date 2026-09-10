@@ -173,7 +173,8 @@ fn probe_messages() -> Vec<Value> {
 }
 
 fn is_cloud(m: &Model) -> bool {
-    !m.provider.eq_ignore_ascii_case("ollama") && !m.api_base.contains("localhost") && !m.api_base.contains("127.0.0.1")
+    // 本地/云端是注册时的显式选择，不再按 api_base 猜测
+    !m.is_local()
 }
 
 /// 后台探针循环：每小时一轮。由 `server::spawn_background_jobs` 挂载。
@@ -205,10 +206,10 @@ async fn run_probe_round() -> std::result::Result<(), crate::error::AppError> {
         if !is_cloud(m) {
             continue; // 本轮只探云端；本地免费通道探针留待后续扩展
         }
-        if budget().failure_count(&m.provider, &m.name) >= FAIL_PAUSE_THRESHOLD {
+        if budget().failure_count(&m.provider_name(), &m.name) >= FAIL_PAUSE_THRESHOLD {
             continue;
         }
-        if !budget().try_charge(&m.provider, &m.name, PER_ROUND_CAP_USD) {
+        if !budget().try_charge(&m.provider_name(), &m.name, PER_ROUND_CAP_USD) {
             continue;
         }
         let spec = ModelSpec::from(m);
@@ -216,35 +217,35 @@ async fn run_probe_round() -> std::result::Result<(), crate::error::AppError> {
         // ① 暖机（写缓存）
         match ai_client::chat(&spec, &msgs, 8, 0.0).await {
             Ok(res) => {
-                budget().note_success(&m.provider, &m.name);
+                budget().note_success(&m.provider_name(), &m.name);
                 let cost = record_probe_usage(m, &res.usage, false);
-                budget().charge(&m.provider, &m.name, cost);
+                budget().charge(&m.provider_name(), &m.name, cost);
             }
             Err(e) => {
-                let n = budget().note_failure(&m.provider, &m.name);
+                let n = budget().note_failure(&m.provider_name(), &m.name);
                 record_probe_failure(m);
-                eprintln!("[core] probe {}/{} failed ({n} consecutive): {e}", m.provider, m.name);
+                eprintln!("[core] probe {}/{} failed ({n} consecutive): {e}", m.provider_name(), m.name);
                 continue;
             }
         }
         // ② 验证隐式缓存命中（同载荷应命中）
         match ai_client::chat(&spec, &msgs, 8, 0.0).await {
             Ok(res) => {
-                budget().note_success(&m.provider, &m.name);
+                budget().note_success(&m.provider_name(), &m.name);
                 let hit = res.usage.cached_tokens > 0;
                 let cost = record_probe_usage(m, &res.usage, hit);
-                budget().charge(&m.provider, &m.name, cost);
+                budget().charge(&m.provider_name(), &m.name, cost);
                 if !hit {
                     eprintln!(
                         "[core] probe {}/{} cache-verify MISS (cached_tokens=0) — 校准层将核对表价",
-                        m.provider, m.name
+                        m.provider_name(), m.name
                     );
                 }
             }
             Err(e) => {
-                let n = budget().note_failure(&m.provider, &m.name);
+                let n = budget().note_failure(&m.provider_name(), &m.name);
                 record_probe_failure(m);
-                eprintln!("[core] probe {}/{} round-2 failed ({n} consecutive): {e}", m.provider, m.name);
+                eprintln!("[core] probe {}/{} round-2 failed ({n} consecutive): {e}", m.provider_name(), m.name);
             }
         }
     }
@@ -254,7 +255,7 @@ async fn run_probe_round() -> std::result::Result<(), crate::error::AppError> {
 /// 探针成功记账（task_type='probe'；act_cost 由 Rust 按 PriceSpec 分项计算）。
 /// 返回实际成本（USD）供预算扣费。
 fn record_probe_usage(m: &Model, usage: &pricing::UsageDetail, hit: bool) -> f64 {
-    let (act_cost, zm) = match db::get_price_spec(&m.provider, &m.name) {
+    let (act_cost, zm) = match db::get_price_spec(&m.provider_name(), &m.name) {
         Ok(Some(ps)) => {
             let zr = crate::server::zone_resolver();
             let t = crate::server::now_epoch_secs();
@@ -278,7 +279,7 @@ fn record_probe_usage(m: &Model, usage: &pricing::UsageDetail, hit: bool) -> f64
             est_cost: 0.0,
             act_cost,
             zone_multiplier: zm,
-            conversation_id: Some(format!("probe:{}:{}", m.provider, m.name)),
+            conversation_id: Some(format!("probe:{}:{}", m.provider_name(), m.name)),
             field_missing: usage.field_missing,
             cache_saved_cost: 0.0,
             api_source: None,
@@ -305,7 +306,7 @@ fn record_probe_failure(m: &Model) {
             est_cost: 0.0,
             act_cost: FAIL_SENTINEL_COST,
             zone_multiplier: 1.0,
-            conversation_id: Some(format!("probe:{}:{}", m.provider, m.name)),
+            conversation_id: Some(format!("probe:{}:{}", m.provider_name(), m.name)),
             field_missing: true,
             cache_saved_cost: 0.0,
             api_source: None,

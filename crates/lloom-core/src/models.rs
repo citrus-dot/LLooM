@@ -1,9 +1,217 @@
 //! Strongly-typed domain models for LLooM.
 //!
-//! These mirror the SQLite schema in `db.rs` and the wire formats shared with
-//! the frontend and the Python AI service.
+//! `Model` is the domain layer: it owns a `Backend` (local vs cloud) plus the
+//! routing metadata shared by both kinds. Persistence goes through
+//! `db::ModelRow` (flat projection of the SQLite table) via explicit `From`
+//! conversions; the HTTP layer uses dedicated DTOs in `server.rs`.
 
+use serde::de::{self, Deserializer};
+use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+// ── Backend（本地/云端判别）──
+
+/// 云端运营商。未知字符串一律落入 `Custom`，保证对存量数据与新增供应商开放。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Provider {
+    DashScope,
+    OpenAI,
+    Anthropic,
+    Custom(String),
+}
+
+impl Provider {
+    pub fn parse(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "dashscope" => Provider::DashScope,
+            "openai" => Provider::OpenAI,
+            "anthropic" => Provider::Anthropic,
+            other => Provider::Custom(other.to_string()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Provider::DashScope => "dashscope",
+            Provider::OpenAI => "openai",
+            Provider::Anthropic => "anthropic",
+            Provider::Custom(s) => s,
+        }
+    }
+}
+
+impl Serialize for Provider {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Provider {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(Provider::parse(&s))
+    }
+}
+
+/// 本地服务的兼容协议：Ollama 原生（litellm 前缀 `ollama/`）或 OpenAI 兼容端点
+/// （LM Studio / vLLM 等，litellm 前缀 `openai/`）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum LocalCompat {
+    Ollama,
+    OpenAiCompat,
+}
+
+impl LocalCompat {
+    pub fn parse(s: &str) -> Self {
+        if s.eq_ignore_ascii_case("ollama") {
+            LocalCompat::Ollama
+        } else {
+            LocalCompat::OpenAiCompat
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            LocalCompat::Ollama => "ollama",
+            LocalCompat::OpenAiCompat => "openai",
+        }
+    }
+
+    pub fn litellm_prefix(&self) -> &'static str {
+        match self {
+            LocalCompat::Ollama => "ollama",
+            LocalCompat::OpenAiCompat => "openai",
+        }
+    }
+}
+
+/// 云端 API key 的两种来源：环境变量名或 `sk-` 开头的字面密钥。
+/// 判别规则与 `config::api_key_for` 一致（`sk-` 开头且不含下划线 → 字面值）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApiKeyRef {
+    EnvName(String),
+    Literal(String),
+}
+
+impl ApiKeyRef {
+    /// 空串 → None；其余按 `sk-` 启发式判别。
+    pub fn parse(s: &str) -> Option<Self> {
+        if s.is_empty() {
+            return None;
+        }
+        let is_literal = s.starts_with("sk-") && !s.contains('_');
+        Some(if is_literal {
+            ApiKeyRef::Literal(s.to_string())
+        } else {
+            ApiKeyRef::EnvName(s.to_string())
+        })
+    }
+
+    /// 原始字符串（env 名或字面密钥），落库/展示用。
+    pub fn raw(&self) -> &str {
+        match self {
+            ApiKeyRef::EnvName(s) | ApiKeyRef::Literal(s) => s,
+        }
+    }
+
+    /// 运行时解析为真实密钥（env 名 → 环境变量值；字面 → 原值）。
+    pub fn resolve(&self) -> String {
+        crate::config::api_key_for(self.raw())
+    }
+}
+
+impl Serialize for ApiKeyRef {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.raw())
+    }
+}
+
+impl<'de> Deserialize<'de> for ApiKeyRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        ApiKeyRef::parse(&s).ok_or_else(|| de::Error::custom("api_key must not be empty"))
+    }
+}
+
+/// 模型的调用后端：本地（无 key）或云端（运营商 + 可选地址 + 可选 key）。
+///
+/// serde 采用内部 tag（`{"kind":"cloud","provider":"dashscope",...}` /
+/// `{"kind":"local","compat":"ollama",...}`），None/空串统一序列化为 `""`。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Backend {
+    Cloud {
+        provider: Provider,
+        api_base: Option<String>,
+        api_key: Option<ApiKeyRef>,
+    },
+    Local {
+        compat: LocalCompat,
+        api_base: String,
+    },
+}
+
+impl Backend {
+    /// litellm 模型字符串前缀；`Custom` 供应商按 OpenAI 兼容协议调用。
+    pub fn litellm_prefix(&self) -> &str {
+        match self {
+            Backend::Cloud { provider, .. } => match provider {
+                Provider::DashScope => "dashscope",
+                Provider::OpenAI => "openai",
+                Provider::Anthropic => "anthropic",
+                Provider::Custom(_) => "openai",
+            },
+            Backend::Local { compat, .. } => compat.litellm_prefix(),
+        }
+    }
+}
+
+impl Serialize for Backend {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let v = match self {
+            Backend::Cloud { provider, api_base, api_key } => json!({
+                "kind": "cloud",
+                "provider": provider.as_str(),
+                "api_base": api_base.clone().unwrap_or_default(),
+                "api_key": api_key.as_ref().map(|k| k.raw()).unwrap_or_default(),
+            }),
+            Backend::Local { compat, api_base } => json!({
+                "kind": "local",
+                "compat": compat.as_str(),
+                "api_base": api_base,
+            }),
+        };
+        v.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Backend {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(deserializer)?;
+        let obj = v
+            .as_object()
+            .ok_or_else(|| de::Error::custom("backend must be an object"))?;
+        let get_str = |key: &str| obj.get(key).and_then(|x| x.as_str()).unwrap_or_default();
+        match obj.get("kind").and_then(|k| k.as_str()) {
+            Some("local") => Ok(Backend::Local {
+                compat: LocalCompat::parse(get_str("compat")),
+                api_base: get_str("api_base").to_string(),
+            }),
+            Some("cloud") => Ok(Backend::Cloud {
+                provider: Provider::parse(get_str("provider")),
+                api_base: Some(get_str("api_base")).filter(|s| !s.is_empty()).map(String::from),
+                api_key: ApiKeyRef::parse(get_str("api_key")),
+            }),
+            Some(other) => Err(de::Error::custom(format!("unknown backend kind '{other}'"))),
+            // 缺 kind 时按云端宽容解析（存量 DTO 兼容）
+            None => Ok(Backend::Cloud {
+                provider: Provider::parse(get_str("provider")),
+                api_base: Some(get_str("api_base")).filter(|s| !s.is_empty()).map(String::from),
+                api_key: ApiKeyRef::parse(get_str("api_key")),
+            }),
+        }
+    }
+}
 
 // ── Model ──
 
@@ -12,12 +220,8 @@ pub struct Model {
     #[serde(default)]
     pub id: i64,
     pub name: String,
-    pub provider: String,
     pub litellm_model: String,
-    #[serde(default)]
-    pub api_base: String,
-    #[serde(default)]
-    pub api_key_env: String,
+    pub backend: Backend,
     #[serde(default)]
     pub task_type: String,
     #[serde(default)]
@@ -45,9 +249,6 @@ pub struct Model {
     /// 须流式调用（推理系模型，非流式易超时）；0=非流式可用
     #[serde(default)]
     pub supports_stream: i64,
-    /// 本地模型（Ollama 等，零成本兜底）
-    #[serde(default)]
-    pub is_local: i64,
     /// 人工偏好加权（评分 +0.05/级）
     #[serde(default)]
     pub priority: i64,
@@ -57,6 +258,97 @@ pub struct Model {
     /// 保守期标记：sample_count<20 的模型在复杂任务上扣分
     #[serde(default = "default_needs_cal")]
     pub needs_calibration: i64,
+}
+
+impl Model {
+    pub fn is_local(&self) -> bool {
+        matches!(self.backend, Backend::Local { .. })
+    }
+
+    /// 供应商标识（价格键 / overlay 键 / 归属展示用）。本地 OpenAI 兼容端点
+    /// 归入 `custom`，与 DB provider 列的编码保持一致。
+    pub fn provider_name(&self) -> &str {
+        match &self.backend {
+            Backend::Cloud { provider, .. } => provider.as_str(),
+            Backend::Local { compat: LocalCompat::Ollama, .. } => "ollama",
+            Backend::Local { compat: LocalCompat::OpenAiCompat, .. } => "custom",
+        }
+    }
+
+    /// 原始调用地址（未做 env 解析；解析只发生在出进程边界的 ModelSpec）。
+    pub fn api_base(&self) -> &str {
+        match &self.backend {
+            Backend::Cloud { api_base, .. } => api_base.as_deref().unwrap_or_default(),
+            Backend::Local { api_base, .. } => api_base,
+        }
+    }
+
+    /// key 引用原文（env 名或字面密钥）；本地模型恒为空。
+    pub fn api_key_env(&self) -> &str {
+        match &self.backend {
+            Backend::Cloud { api_key: Some(k), .. } => k.raw(),
+            _ => "",
+        }
+    }
+
+    /// The ModelSpec payload sent to the Python AI service.
+    pub fn to_ai_spec(&self, api_key: &str) -> serde_json::Value {
+        serde_json::json!({
+            "name": self.name,
+            "litellm_model": self.litellm_model,
+            "api_base": self.api_base(),
+            "api_key": api_key,
+            "input_cost_per_token": self.input_cost_per_token,
+            "output_cost_per_token": self.output_cost_per_token,
+        })
+    }
+
+    pub fn calculate_cost(&self, input_tokens: i64, output_tokens: i64) -> f64 {
+        input_tokens as f64 * self.input_cost_per_token
+            + output_tokens as f64 * self.output_cost_per_token
+    }
+}
+
+#[cfg(test)]
+impl Model {
+    /// 测试 fixture：云端模型。
+    pub fn fixture(name: &str, provider: &str) -> Model {
+        Model {
+            id: 0,
+            name: name.to_string(),
+            litellm_model: format!("{provider}/{name}"),
+            backend: Backend::Cloud {
+                provider: Provider::parse(provider),
+                api_base: None,
+                api_key: None,
+            },
+            task_type: String::new(),
+            input_cost_per_token: 0.0,
+            output_cost_per_token: 0.0,
+            rpm: 60,
+            is_active: 1,
+            capability_tier: 2,
+            quality_score: 0.6,
+            context_window: 32768,
+            supports_tools: 0,
+            supports_vision: 0,
+            supports_stream: 0,
+            priority: 0,
+            health_state: "unknown".to_string(),
+            needs_calibration: 0,
+        }
+    }
+
+    /// 测试 fixture：本地模型。
+    pub fn local_fixture(name: &str, compat: LocalCompat) -> Model {
+        Model {
+            backend: Backend::Local {
+                compat,
+                api_base: "http://localhost:11434".to_string(),
+            },
+            ..Model::fixture(name, "ollama")
+        }
+    }
 }
 
 fn default_rpm() -> i64 {
@@ -85,25 +377,6 @@ fn default_health() -> String {
 
 fn default_needs_cal() -> i64 {
     1
-}
-
-impl Model {
-    /// The ModelSpec payload sent to the Python AI service.
-    pub fn to_ai_spec(&self, api_key: &str) -> serde_json::Value {
-        serde_json::json!({
-            "name": self.name,
-            "litellm_model": self.litellm_model,
-            "api_base": self.api_base,
-            "api_key": api_key,
-            "input_cost_per_token": self.input_cost_per_token,
-            "output_cost_per_token": self.output_cost_per_token,
-        })
-    }
-
-    pub fn calculate_cost(&self, input_tokens: i64, output_tokens: i64) -> f64 {
-        input_tokens as f64 * self.input_cost_per_token
-            + output_tokens as f64 * self.output_cost_per_token
-    }
 }
 
 // ── Usage ──
