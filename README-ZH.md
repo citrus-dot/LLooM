@@ -1,8 +1,40 @@
-# LLooM — 智能大模型路由平台
+<p align="center">
+  <img src="assets/logo.png" width="120" height="120" alt="LLooM Logo" />
+</p>
 
-[English](README.md) | **中文**
+<h1 align="center">LLooM</h1>
 
-一个自包含的 LLM 路由平台。Rust 核心服务器负责模型管理、按任务类型路由、Token 用量与成本追踪、安全过滤；仅剩一个薄薄的 Python 服务，用于 Rust 无法替代的 LLM 调用。
+<p align="center">
+  <strong>自包含的智能 LLM 路由平台</strong> — 一个 Rust 服务器搞定模型路由、成本核算、语义缓存与安全过滤，零 Docker 依赖
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" />
+  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blue" alt="Platform" />
+  <img src="https://img.shields.io/badge/Rust-axum-CE422B?logo=rust&logoColor=white" alt="Rust" />
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/LiteLLM-100%2B%20providers-red" alt="LiteLLM" />
+  <img src="https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> | <strong>中文</strong>
+</p>
+
+---
+
+## 为什么选择 LLooM?
+
+| 痛点 | LLooM 方案 |
+|------|-----------|
+| 多模型切换繁琐，手动选模型靠感觉 | **智能路由** — 两层分类（正则规则 → LLM 兜底）+ 评分选模，按任务类型自动挑性价比最优的模型 |
+| API 账单不可控 | **预算档联动路由** — normal/throttle/tight/protect 四档预算自动降级，protect 强制零成本本地兜底 |
+| 价格信息不透明 | **多源定价体系** — manual > overlay > litellm_remote > litellm_packaged > heuristic 优先级链，OpenRouter 参考价交叉核对（偏差 ≥20% 预警） |
+| 重复问题反复付费 | **语义缓存** — 向量相似度匹配，命中直接返回缓存，零成本回复，命中率可监控 |
+| 复杂任务单模型难以胜任 | **任务编排** — 自动拆解子任务、按子任务分派模型、按序执行并汇总结果 |
+| LLM 调用缺乏安全防护 | **安全层** — PII 脱敏（7 类）+ 越狱拦截（5 类）+ MMLU 14 域分类 |
+| 服务状态是黑盒，"healthy" 未必健康 | **诚实状态报告** — 子进程存活 + 端口响应 + AI 就绪三重探测，能区分 Down / 端口冲突 / 未配置模型 |
+| 传统方案要堆 10 个 Docker 容器 | **单二进制 + SQLite** — 无 Docker、无外部数据库，克隆即跑 |
 
 ## 架构
 
@@ -34,17 +66,23 @@ LLM 提供商（DashScope / Ollama / OpenAI / Anthropic）
 - 注册云端模型（通义千问/DashScope、OpenAI、Anthropic）和本地模型（Ollama）
 - 实时追踪每个模型的 Token 用量和成本
 - 设置预算及可配置周期（日/周/月）
-- 基于注册的定价自动计算成本
+- 基于注册的定价自动计算成本，支持人工改价与远端刷新采纳
 
 ### 智能路由
 - **两层分类**：正则规则（零成本）优先，LLM 兜底其次
 - **评分路由（`plan()`）**：注册表门槛（能力档/上下文/健康/成本上限/钉选）+ 成本质量加权评分；成本走 `pricing.rs est_cost`，质量走 EWMA 冷启动分。已彻底取代全部硬编码模型表
+- **钉选软优先**：钉选模型默认作为 +0.3 加分的软优先（仍受健康/预算门槛约束）；设 `LLOOM_PINNED_MODE=hard` 可恢复旧的强制指定行为
 - **回退链 + 升档**：5 级故障转移（qwen3-max → plus → qwen-plus → flash → 本地），健康感知自动升档
 - **影子评测 + AIQ**：自动采样流量校准成本—质量，可离线重放（`scripts/aiq_replay.py`）
-- **健康感知容灾**：滑窗健康状态机、主动探测恢复、按请求回退
+- **健康感知容灾**：滑窗健康状态机、小时级主动探测（月度预算封顶，可调）、按请求回退
 - **预算联动**：预算档（normal/throttle/tight/protect）注入路由；tight 复杂任务降档，protect 强制本地/零成本
 - **推理模型支持**：自动为推理模型启用流式输出
 - **领域增强**：STEM → 数学逻辑，计算机/工程 → 编程
+
+### 定价与成本核算
+- **多源优先级链**：manual > overlay > litellm_remote > litellm_packaged > heuristic，来源可在定价页逐一核实
+- **OpenRouter 第三方参考价**：与本地图价联表展示输入/输出偏差百分比，≥20% 橙色预警，仅作交叉核对、不覆盖本地价
+- **探针校准**：小时级 warm-up + cache-verify 探测，失败 sentinel 不污染用量统计，月度预算可调（`/api/probe/budget`）
 
 ### 任务编排
 - **复杂度检测**：6 条正则规则 + 长度/句子数启发式
@@ -66,7 +104,7 @@ LLM 提供商（DashScope / Ollama / OpenAI / Anthropic）
 - 缓存生命周期可通过 `/api/cache/*` 管理（预初始化 / 状态 / 清理 / 反馈 / 阈值自调）
 
 ### 界面
-- **WebUI** — 浏览器访问 `http://localhost:7861/`（服务状态、聊天、模型、用量、设置）
+- **WebUI** — 浏览器访问 `http://localhost:7861/`（服务状态、聊天、模型、用量、定价、设置）
 - **CLI** — `lloom-cli`，脚本与快速操作
 - **TUI** — OpenTUI + SolidJS 终端仪表盘（`tui/`）
 - **诚实的服务管理** — 启动/停止/重启 Ollama 和 AI 服务，真实状态报告（WebUI 按钮、TUI 右键菜单、CLI 命令），并可查看各服务日志
@@ -98,6 +136,9 @@ uv sync --extra dev --extra build
 cp .env.example .env
 # 在 .env 中填入你的 API 密钥
 
+# 构建 WebUI（lloom-server 从 webui/dist 提供界面）
+cd webui && npm install && npm run build && cd ..
+
 # 启动 Rust 服务器（WebUI 在 :7861）
 cargo run -p lloom-server
 ```
@@ -117,9 +158,9 @@ bash scripts/build.sh --skip-ai       # 跳过 AI 微服务打包
 **不捆绑 Ollama**。服务器使用 PATH 或 `localhost:11434` 上的系统 Ollama；若缺失，CLI / WebUI / TUI 会在用到本地模型时给出安装提示。安装方式：`curl -fsSL https://ollama.com/install.sh | sh`。
 
 构建产物：
-- `dist/ai-service/ai-service` — 独立 AI 微服务可执行（约 26MB，封装 litellm）
 - `target/release/lloom-server` — 主服务器（REST + WebUI）
 - `target/release/lloom-cli` — 命令行界面
+- `dist/ai-service/ai-service` — 独立 AI 微服务可执行（约 26MB，封装 litellm）
 - `dist/ollama/ollama` — 内置 Ollama 二进制
 
 TUI 是独立的 Node/SolidJS 应用（`tui/`，见下文），不属于 Rust 构建。
@@ -149,6 +190,7 @@ bash scripts/smoke_test.sh
 | `LLOOM_AI_SERVICE_URL` | `http://localhost:7862` | Python AI 微服务 URL |
 | `LLOOM_DATA_DIR` | `./data` | 数据目录（SQLite、对话） |
 | `OLLAMA_API_BASE` | `http://localhost:11434` | Ollama 端点 |
+| `LLOOM_PINNED_MODE` | `soft` | 钉选模式：`soft` 软优先（+0.3 加分），`hard` 强制指定 |
 
 ## REST API
 
@@ -177,10 +219,13 @@ bash scripts/smoke_test.sh
 | POST | `/api/services/smart-restart` | 配置变更后重启 AI 服务 |
 | POST | `/api/system/open-folder` | 打开目录 |
 | POST | `/api/system/open-web` | 打开网页 |
+| POST | `/api/system/cli` | 运行 CLI |
 | GET | `/api/pricing/specs` | 列出所有 PriceSpec |
 | PUT | `/api/pricing/specs/{provider}/{model}` | 手工改价 |
 | POST | `/api/pricing/specs/{provider}/{model}/accept` | 采纳刷新价（转正 manual） |
 | POST | `/api/pricing/refresh` | 触发远端定价刷新 job |
+| GET | `/api/pricing/reference` | OpenRouter 参考价 × 本地图价联表（含偏差 %） |
+| POST | `/api/pricing/reference/refresh` | 手动刷新参考价 |
 | GET | `/api/pricing/calibration` | 校准曲线 |
 | GET | `/api/probe/stats` | 探针消耗/预算 |
 | PUT | `/api/probe/budget` | 调整探针月预算 |
@@ -193,7 +238,6 @@ bash scripts/smoke_test.sh
 | POST | `/api/cache/cleanup` | 清理缓存 |
 | POST | `/api/cache/feedback` | 命中反馈（灰区采样） |
 | GET,POST | `/api/cache/threshold` | 缓存阈值查询 / 自调 |
-| POST | `/api/system/cli` | 运行 CLI |
 
 ## 技术栈
 
@@ -294,20 +338,45 @@ LLooM/
 │                                 # models.rs, config.rs, error.rs
 ├── crates/lloom-server/          # 主服务器（REST + WebUI）
 ├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）
+├── webui/                        # WebUI 前端（React + Vite + Ant Design）
+│   ├── src/                      # pages: Overview/Usage/Chat/Models/Pricing/Settings
+│   └── dist/                     # 构建产物（由 lloom-server 提供服务）
 ├── tui/                          # TUI（OpenTUI + SolidJS，bun）
 │   ├── src/                      # app.tsx, index.tsx, routes/, ui/
 │   └── package.json
-├── webui/index.html              # WebUI 前端（SPA，独立）
 ├── api/ai_service.py             # Python AI 微服务（litellm 封装）
+├── assets/                       # README 等文档图片素材
 ├── scripts/
 │   ├── build.sh                  # 跨平台构建（含系统依赖检测）
 │   ├── download_ollama.sh        # 跨平台 Ollama 下载
+│   ├── aiq_replay.py             # AIQ 离线重放
 │   └── smoke_test.sh             # 19 项冒烟测试
 ├── ai_service.spec               # PyInstaller spec（AI 微服务）
 ├── ARCHITECTURE.md               # 分层详解 + REST 参考
 ├── pyproject.toml                # Python 项目配置（AI 服务）
 └── .env.example                  # 环境模板
 ```
+
+## 路线图
+
+### 近期
+
+- [ ] **OpenAI 兼容代理** — `POST /v1/chat/completions` + `GET /v1/models`，任意 OpenAI 客户端（ChatBox / Open WebUI / 沉浸式翻译 / Agent 框架）零改造接入评分路由、缓存与预算档
+- [ ] **子任务并行执行** — 无依赖子任务 `asyncio.gather` 并行，降低编排端到端延迟
+- [ ] **Prometheus 指标导出** — `GET /metrics`：按模型/任务类型/预算档计数、缓存命中、fallback 事件、路由开销
+
+### 中期
+
+- [ ] **路由权重闭环建议** — 离线重放网格搜索最优 (cost, quality, latency) 权重，人工审查后一键采纳
+- [ ] **账单对账** — 云厂商账单导出 × 实际记账对账，报告偏差
+- [ ] **多租户 / MCP 网关** — 视决策门（G1/G2）展开
+
+## 文档
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — 分层架构详解 + REST API 参考
+- [TEST-GUIDE.md](TEST-GUIDE.md) — 功能测试指南
+- [ROUTING-PLAN.md](ROUTING-PLAN.md) / [PRICING-PLAN.md](PRICING-PLAN.md) / [CONTEXT-PLAN.md](CONTEXT-PLAN.md) — 路由 / 定价 / 上下文设计文档
+- [LLooMprogress.md](LLooMprogress.md) — 项目进展台账
 
 ## 许可证
 

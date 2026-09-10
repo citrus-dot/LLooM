@@ -1,8 +1,40 @@
-# LLooM — Intelligent LLM Routing Platform
+<p align="center">
+  <img src="assets/logo.png" width="120" height="120" alt="LLooM Logo" />
+</p>
 
-**English** | [中文](README-ZH.md)
+<h1 align="center">LLooM</h1>
 
-A self-contained LLM routing platform. A Rust core server manages models, routes requests by task type, tracks token usage and costs, and filters requests for security — with a thin Python service only for the LLM calls that Rust can't replace.
+<p align="center">
+  <strong>A self-contained intelligent LLM routing platform</strong> — one Rust server that routes, prices, caches and secures your LLM traffic. Zero Docker required.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" />
+  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blue" alt="Platform" />
+  <img src="https://img.shields.io/badge/Rust-axum-CE422B?logo=rust&logoColor=white" alt="Rust" />
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/LiteLLM-100%2B%20providers-red" alt="LiteLLM" />
+  <img src="https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
+</p>
+
+<p align="center">
+  <strong>English</strong> | <a href="README-ZH.md">中文</a>
+</p>
+
+---
+
+## Why LLooM?
+
+| Pain point | LLooM's answer |
+|------------|----------------|
+| Juggling multiple models by gut feeling | **Smart routing** — two-layer classification (regex → LLM fallback) plus score-based selection picks the best value model per task type |
+| Uncontrollable API bills | **Budget-tier-aware routing** — normal/throttle/tight/protect tiers degrade automatically; protect forces zero-cost local fallback |
+| Opaque pricing | **Multi-source pricing chain** — manual > overlay > litellm_remote > litellm_packaged > heuristic, cross-checked against OpenRouter reference prices (≥20% deviation flagged) |
+| Paying repeatedly for the same questions | **Semantic cache** — vector similarity matching returns cached replies at zero cost, hit rate is observable |
+| Complex tasks overwhelming a single model | **Task orchestration** — auto-decomposition, per-subtask model assignment, sequential execution, result aggregation |
+| No security guardrails on LLM calls | **Security layer** — PII masking (7 types), jailbreak interception (5 types), MMLU 14-domain classification |
+| "Healthy" status that isn't really healthy | **Honest status reporting** — child process alive + port responding + AI readiness, distinguishing Down / port conflict / missing configuration |
+| Legacy stacks piling up 10 Docker containers | **Single binary + SQLite** — no Docker, no external database, clone and run |
 
 ## Architecture
 
@@ -34,17 +66,23 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API re
 - Register cloud models (DashScope, OpenAI, Anthropic) and local models (Ollama)
 - Track token usage and cost per model in real-time
 - Set budgets with configurable duration (daily/weekly/monthly)
-- Automatic cost calculation based on registered pricing
+- Automatic cost calculation based on registered pricing, with manual overrides and remote refresh acceptance
 
 ### Smart Routing
 - **Two-layer classification**: Regex rules (zero cost) first, LLM fallback second
 - **Scoring router (`plan()`)**: Registry-gated (tier/context/health/cost-cap/pinned) + weighted cost/quality score; cost via `pricing.rs est_cost`, quality via EWMA cold-start score. Replaces all hardcoded model maps.
+- **Pinned soft-prior**: A pinned model acts as a soft preference (+0.3 score bonus) by default, still gated by health/budget checks; set `LLOOM_PINNED_MODE=hard` to restore the old hard appointment behavior.
 - **Fallback chains**: 5-level failover (qwen3-max → plus → qwen-plus → flash → local) with health-aware escalation
 - **Shadow evaluation + AIQ**: Auto-samples traffic to calibrate cost-vs-quality, replayable offline (`scripts/aiq_replay.py`)
-- **Health-aware failover**: Sliding-window health state machine, auto-probe recovery, per-request fallback
+- **Health-aware failover**: Sliding-window health state machine, hourly active probes (capped by an adjustable monthly budget), per-request fallback
 - **Budget-driven**: Budget tier (normal/throttle/tight/protect) injected into routing; tight downgrades complex tasks, protect forces local/zero-cost
 - **Inference model support**: Auto-enables streaming for inference models
 - **Domain enhancement**: STEM → math_logic, CS/engineering → coding
+
+### Pricing & Cost Accounting
+- **Multi-source priority chain**: manual > overlay > litellm_remote > litellm_packaged > heuristic, each source verifiable in the pricing page
+- **OpenRouter third-party reference**: joined with local prices showing input/output deviation percentages; ≥20% flagged in orange — cross-check only, never overwrites local prices
+- **Probe calibration**: hourly warm-up + cache-verify probes, failure sentinels excluded from usage stats, monthly budget adjustable (`/api/probe/budget`)
 
 ### Task Orchestration
 - **Complexity detection**: 6 regex rules + length/sentence count heuristics
@@ -61,13 +99,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API re
 ### Semantic Cache
 - ChromaDB vector similarity search (cosine, 0.95 threshold, 24h TTL)
 - Returns cached responses for repeated simple Q&A (zero cost)
-- Cache hits are flagged (`cache_hit`) and shown as "来自缓存" in the UIs, so a
-  reply while services are down is clearly identified as cached
+- Cache hits are flagged (`cache_hit`) and shown as "来自缓存" in the UIs, so a reply while services are down is clearly identified as cached
 - Graceful degradation when embedding model unavailable
 - Cache lifecycle is manageable via `/api/cache/*` (pre-init / status / cleanup / feedback / threshold autotune)
 
 ### UIs
-- **WebUI** — browser UI at `http://localhost:7861/` (service status, chat, models, usage, settings)
+- **WebUI** — browser UI at `http://localhost:7861/` (service status, chat, models, usage, pricing, settings)
 - **CLI** — `lloom-cli` for scripts and quick ops
 - **TUI** — OpenTUI + SolidJS terminal dashboard (`tui/`)
 - **Honest service management** — start/stop/restart Ollama and the AI service with real status reporting (WebUI buttons, TUI right-click menus, CLI commands), plus per-service log viewing
@@ -98,6 +135,9 @@ uv sync --extra dev --extra build
 # Copy and edit environment
 cp .env.example .env
 # Edit .env with your API keys
+
+# Build the WebUI (lloom-server serves webui/dist)
+cd webui && npm install && npm run build && cd ..
 
 # Run the Rust server (Web UI on :7861)
 cargo run -p lloom-server
@@ -151,6 +191,7 @@ All configuration is via environment variables in `.env`:
 | `LLOOM_AI_SERVICE_URL` | `http://localhost:7862` | Python AI micro-service URL |
 | `LLOOM_DATA_DIR` | `./data` | Data directory (SQLite, conversations) |
 | `OLLAMA_API_BASE` | `http://localhost:11434` | Ollama endpoint |
+| `LLOOM_PINNED_MODE` | `soft` | Pinned mode: `soft` = soft prior (+0.3 bonus), `hard` = forced appointment |
 
 ## REST API
 
@@ -179,10 +220,13 @@ All configuration is via environment variables in `.env`:
 | POST | `/api/services/smart-restart` | Restart AI service after config change |
 | POST | `/api/system/open-folder` | Open a folder |
 | POST | `/api/system/open-web` | Open a URL |
+| POST | `/api/system/cli` | Run a CLI command |
 | GET | `/api/pricing/specs` | List all PriceSpecs |
 | PUT | `/api/pricing/specs/{provider}/{model}` | Manual price override |
 | POST | `/api/pricing/specs/{provider}/{model}/accept` | Accept refreshed price (force manual) |
 | POST | `/api/pricing/refresh` | Trigger remote price refresh job |
+| GET | `/api/pricing/reference` | OpenRouter reference prices joined with local prices (deviation %) |
+| POST | `/api/pricing/reference/refresh` | Manually refresh reference prices |
 | GET | `/api/pricing/calibration` | Calibration curve |
 | GET | `/api/probe/stats` | Probe spend/budget stats |
 | PUT | `/api/probe/budget` | Adjust probe monthly budget |
@@ -261,7 +305,6 @@ lloom-cli chat "hi" --interactive
 # --session and conversation show/delete accept an ID OR a title (prefix)
 # match; run `lloom-cli conversation list` to see what's available.
 ```
-```
 
 ### TUI (`tui/`)
 
@@ -303,22 +346,45 @@ LLooM/
 │                                 # models.rs, config.rs, error.rs
 ├── crates/lloom-server/          # Main server (REST + WebUI)
 ├── crates/lloom-cli/             # CLI (clap, links lloom-core)
+├── webui/                        # WebUI frontend (React + Vite + Ant Design)
+│   ├── src/                      # pages: Overview/Usage/Chat/Models/Pricing/Settings
+│   └── dist/                     # build output (served by lloom-server)
 ├── tui/                          # TUI (OpenTUI + SolidJS, bun)
 │   ├── src/                      # app.tsx, index.tsx, routes/, ui/
 │   └── package.json
-├── webui/                        # WebUI frontend (React + Vite + Ant Design)
-│   ├── src/                      # pages: Overview/Usage/Chat/Models/Settings
-│   └── dist/                     # build output (served by lloom-server)
 ├── api/ai_service.py             # Python AI micro-service (litellm wrapper)
+├── assets/                       # Image assets for README/docs
 ├── scripts/
 │   ├── build.sh                  # Cross-platform build (with dep checks)
 │   ├── download_ollama.sh        # Cross-platform Ollama download
+│   ├── aiq_replay.py             # AIQ offline replay
 │   └── smoke_test.sh             # 19-check smoke test
 ├── ai_service.spec               # PyInstaller spec (AI micro-service)
 ├── ARCHITECTURE.md               # Layer breakdown + REST reference
 ├── pyproject.toml                # Python project config (AI service)
 └── .env.example                  # Environment template
 ```
+
+## Roadmap
+
+### Near-term
+
+- [ ] **OpenAI-compatible proxy** — `POST /v1/chat/completions` + `GET /v1/models`, so any OpenAI client (ChatBox / Open WebUI / immersive translate / agent frameworks) gets score-based routing, caching and budget tiers with zero changes
+- [ ] **Parallel subtask execution** — run independent subtasks concurrently to cut orchestration latency
+- [ ] **Prometheus metrics export** — `GET /metrics`: per-model/task-type/budget-tier counters, cache hits, fallback events, routing overhead
+
+### Mid-term
+
+- [ ] **Closed-loop weight suggestions** — offline grid search over (cost, quality, latency) weights via replay, adopted after human review
+- [ ] **Bill reconciliation** — reconcile cloud-provider invoices against recorded actual costs, report deviations
+- [ ] **Multi-tenant / MCP gateway** — pending decision gates (G1/G2)
+
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — layer breakdown + REST API reference
+- [TEST-GUIDE.md](TEST-GUIDE.md) — feature test guide
+- [ROUTING-PLAN.md](ROUTING-PLAN.md) / [PRICING-PLAN.md](PRICING-PLAN.md) / [CONTEXT-PLAN.md](CONTEXT-PLAN.md) — routing / pricing / context design docs
+- [LLooMprogress.md](LLooMprogress.md) — progress ledger
 
 ## License
 
