@@ -9,6 +9,7 @@ use crate::config;
 use crate::conversations;
 use crate::db;
 use crate::error::{AppError, Result};
+use crate::model_dto;
 use crate::models::*;
 use crate::pricing;
 use crate::router;
@@ -182,20 +183,29 @@ async fn list_models(Query(q): Query<Value>) -> Result<Json<Value>> {
         .get("active_only")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    Ok(Json(json!({ "models": db::list_models(active_only)? })))
+    let dtos: Vec<model_dto::ModelDto> =
+        db::list_models(active_only)?.iter().map(model_dto::ModelDto::from).collect();
+    Ok(Json(json!({ "models": dtos })))
 }
 
-async fn register_model(Json(m): Json<Model>) -> Result<Json<Value>> {
+async fn register_model(Json(c): Json<model_dto::ModelCreate>) -> Result<Json<Value>> {
+    let m = Model::try_from(c)?;
     let id = db::insert_model(&m)?;
     Ok(Json(json!({ "id": id, "name": m.name })))
 }
 
-async fn get_model(Path(name): Path<String>) -> Result<Json<Model>> {
-    Ok(Json(db::get_model(&name)?))
+async fn get_model(Path(name): Path<String>) -> Result<Json<model_dto::ModelDto>> {
+    Ok(Json(model_dto::ModelDto::from(&db::get_model(&name)?)))
 }
 
-async fn update_model(Path(name): Path<String>, Json(updates): Json<serde_json::Map<String, Value>>) -> Result<Json<Value>> {
-    if !db::update_model(&name, &updates)? {
+async fn update_model(
+    Path(name): Path<String>,
+    Json(patch): Json<model_dto::ModelPatch>,
+) -> Result<Json<Value>> {
+    let existing = db::get_model_any(&name)?;
+    let after = patch.resolve_against(&existing)?;
+    let updates = model_dto::ModelPatch::diff_updates(&existing, &after);
+    if !updates.is_empty() && !db::update_model(&name, &updates)? {
         return Err(AppError::NotFound(format!("model '{name}'")));
     }
     Ok(Json(json!({ "updated": true })))
@@ -282,8 +292,7 @@ async fn get_config() -> Json<Value> {
                 || upper.ends_with("_TOKEN")
                 || upper.ends_with("_SECRET");
             if is_secret && !v.is_empty() {
-                let tail: String = v.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
-                (k.clone(), if v.len() <= 4 { "****".to_string() } else { format!("****{tail}") })
+                (k.clone(), model_dto::mask_secret(v))
             } else {
                 (k.clone(), v.clone())
             }

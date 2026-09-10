@@ -623,6 +623,19 @@ pub fn get_model(name: &str) -> Result<Model> {
     Ok(row)
 }
 
+/// 不筛 is_active 的读取（更新停用模型时用）。
+pub fn get_model_any(name: &str) -> Result<Model> {
+    let conn = open()?;
+    let mut stmt = conn.prepare("SELECT * FROM models WHERE name = ?1")?;
+    let row = stmt
+        .query_row(params![name], |r| Ok(Model::from(model_from_row(r)?)))
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(name.to_string()),
+            other => other.into(),
+        })?;
+    Ok(row)
+}
+
 pub fn list_models(active_only: bool) -> Result<Vec<Model>> {
     let conn = open()?;
     let q = if active_only {

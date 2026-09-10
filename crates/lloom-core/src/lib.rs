@@ -18,6 +18,7 @@ pub mod db;
 pub mod error;
 pub mod health;
 pub mod metadata;
+pub mod model_dto;
 pub mod models;
 pub mod openai_compat;
 pub mod pricing;
