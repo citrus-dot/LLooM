@@ -46,3 +46,4 @@ Thumbs.db
 # Logs
 *.log
 webui/tsconfig.tsbuildinfo
+README-preview*.html
