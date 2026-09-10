@@ -131,6 +131,9 @@ enum ModelsCmd {
         /// API base URL (e.g. http://localhost:11434)
         #[arg(long)]
         api_base: Option<String>,
+        /// API key for this model (sk-... literal, or env var name like DASHSCOPE_API_KEY)
+        #[arg(long)]
+        api_key: Option<String>,
         /// Input cost per token (e.g. 0.000001)
         #[arg(long)]
         input_cost: Option<f64>,
@@ -154,6 +157,9 @@ enum ModelsCmd {
         /// New API base URL
         #[arg(long)]
         api_base: Option<String>,
+        /// New API key (sk-... literal, or env var name like DASHSCOPE_API_KEY)
+        #[arg(long)]
+        api_key: Option<String>,
         /// New task type
         #[arg(long)]
         task_type: Option<String>,
@@ -355,13 +361,13 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
             }
             println!("共 {} 个模型", models.len());
         }
-        ModelsCmd::Add { name, provider, model, api_base, input_cost, output_cost, task_type } => {
+        ModelsCmd::Add { name, provider, model, api_base, api_key, input_cost, output_cost, task_type } => {
             let body = serde_json::json!({
                 "name": name,
                 "provider": provider,
                 "litellm_model": model,
                 "api_base": api_base.unwrap_or_default(),
-                "api_key_env": "",
+                "api_key_env": api_key.unwrap_or_default(),
                 "task_type": task_type.unwrap_or_else(|| "general".into()),
                 "input_cost_per_token": input_cost.unwrap_or(0.0),
                 "output_cost_per_token": output_cost.unwrap_or(0.0),
@@ -370,7 +376,7 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
             let r = post(client, "/api/models", body).await?;
             println!("✓ 模型已注册 (id={}, name={})", r["id"], r["name"]);
         }
-        ModelsCmd::Update { name, input_cost, output_cost, api_base, task_type } => {
+        ModelsCmd::Update { name, input_cost, output_cost, api_base, api_key, task_type } => {
             let mut updates = serde_json::Map::new();
             if let Some(v) = input_cost {
                 updates.insert("input_cost_per_token".into(), serde_json::json!(v));
@@ -380,6 +386,9 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
             }
             if let Some(v) = api_base {
                 updates.insert("api_base".into(), serde_json::json!(v));
+            }
+            if let Some(v) = api_key {
+                updates.insert("api_key_env".into(), serde_json::json!(v));
             }
             if let Some(v) = task_type {
                 updates.insert("task_type".into(), serde_json::json!(v));
