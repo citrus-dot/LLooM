@@ -22,7 +22,14 @@ fn default_local_base(compat: &LocalCompat) -> &'static str {
 
 /// 密钥掩码：`****` + 末 4 位（与 get_config 的 env 掩码同一约定）。
 pub(crate) fn mask_secret(v: &str) -> String {
-    let tail: String = v.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = v
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     if v.len() <= 4 {
         "****".to_string()
     } else {
@@ -76,8 +83,11 @@ impl TryFrom<ModelCreate> for Model {
                 if ApiKeyRef::parse(c.api_key.as_deref().unwrap_or_default()).is_some() {
                     return Err(AppError::InvalidRequest("本地模型不配置 API Key".into()));
                 }
-                let compat =
-                    c.compat.as_deref().map(LocalCompat::parse).unwrap_or(LocalCompat::Ollama);
+                let compat = c
+                    .compat
+                    .as_deref()
+                    .map(LocalCompat::parse)
+                    .unwrap_or(LocalCompat::Ollama);
                 let api_base = match c.api_base.as_deref().filter(|s| !s.is_empty()) {
                     Some(b) => b.to_string(),
                     None => default_local_base(&compat).to_string(),
@@ -85,11 +95,10 @@ impl TryFrom<ModelCreate> for Model {
                 Backend::Local { compat, api_base }
             }
             "cloud" => {
-                let provider = c
-                    .provider
-                    .as_deref()
-                    .map(Provider::parse)
-                    .ok_or_else(|| AppError::InvalidRequest("云端模型必须指定 provider".into()))?;
+                let provider =
+                    c.provider.as_deref().map(Provider::parse).ok_or_else(|| {
+                        AppError::InvalidRequest("云端模型必须指定 provider".into())
+                    })?;
                 Backend::Cloud {
                     provider,
                     api_base: c.api_base.clone().filter(|s| !s.is_empty()),
@@ -173,20 +182,21 @@ impl ModelPatch {
         if let Some(kind) = self.kind.as_deref() {
             match kind {
                 "local" => {
-                    if let Some(k) =
-                        self.api_key.as_deref().filter(|s| !s.is_empty() && !is_mask_sentinel(s))
+                    if let Some(k) = self
+                        .api_key
+                        .as_deref()
+                        .filter(|s| !s.is_empty() && !is_mask_sentinel(s))
                     {
                         let _ = k;
                         return Err(AppError::InvalidRequest("本地模型不配置 API Key".into()));
                     }
-                    let compat = self
-                        .compat
-                        .as_deref()
-                        .map(LocalCompat::parse)
-                        .unwrap_or(match &m.backend {
-                            Backend::Local { compat, .. } => compat.clone(),
-                            _ => LocalCompat::Ollama,
-                        });
+                    let compat =
+                        self.compat.as_deref().map(LocalCompat::parse).unwrap_or(
+                            match &m.backend {
+                                Backend::Local { compat, .. } => compat.clone(),
+                                _ => LocalCompat::Ollama,
+                            },
+                        );
                     let api_base = match self.api_base.as_deref().filter(|s| !s.is_empty()) {
                         Some(b) => b.to_string(),
                         None => default_local_base(&compat).to_string(),
@@ -204,7 +214,9 @@ impl ModelPatch {
                     let api_base = match self.api_base.as_deref() {
                         Some(b) if !b.is_empty() => Some(b.to_string()),
                         Some(_) => None, // 显式清空
-                        None => Some(m.api_base()).filter(|s| !s.is_empty()).map(String::from),
+                        None => Some(m.api_base())
+                            .filter(|s| !s.is_empty())
+                            .map(String::from),
                     };
                     let api_key = match self.api_key.as_deref() {
                         Some(k) if is_mask_sentinel(k) => ApiKeyRef::parse(m.api_key_env()),
@@ -212,7 +224,11 @@ impl ModelPatch {
                         Some(_) => None, // 显式清空
                         None => ApiKeyRef::parse(m.api_key_env()),
                     };
-                    m.backend = Backend::Cloud { provider, api_base, api_key };
+                    m.backend = Backend::Cloud {
+                        provider,
+                        api_base,
+                        api_key,
+                    };
                 }
                 other => {
                     return Err(AppError::InvalidRequest(format!(
@@ -229,19 +245,29 @@ impl ModelPatch {
                     if let Some(b) = self.api_base.as_deref().filter(|s| !s.is_empty()) {
                         *api_base = b.to_string();
                     }
-                    if let Some(k) =
-                        self.api_key.as_deref().filter(|s| !s.is_empty() && !is_mask_sentinel(s))
+                    if let Some(k) = self
+                        .api_key
+                        .as_deref()
+                        .filter(|s| !s.is_empty() && !is_mask_sentinel(s))
                     {
                         let _ = k;
                         return Err(AppError::InvalidRequest("本地模型不配置 API Key".into()));
                     }
                 }
-                Backend::Cloud { provider, api_base, api_key } => {
+                Backend::Cloud {
+                    provider,
+                    api_base,
+                    api_key,
+                } => {
                     if let Some(p) = self.provider.as_deref() {
                         *provider = Provider::parse(p);
                     }
                     if let Some(b) = self.api_base.as_deref() {
-                        *api_base = if b.is_empty() { None } else { Some(b.to_string()) };
+                        *api_base = if b.is_empty() {
+                            None
+                        } else {
+                            Some(b.to_string())
+                        };
                     }
                     if let Some(k) = self.api_key.as_deref() {
                         if !is_mask_sentinel(k) {
@@ -321,7 +347,11 @@ impl ModelPatch {
             rb.api_key_env != ra.api_key_env,
             json!(ra.api_key_env),
         );
-        put("task_type", rb.task_type != ra.task_type, json!(ra.task_type));
+        put(
+            "task_type",
+            rb.task_type != ra.task_type,
+            json!(ra.task_type),
+        );
         put(
             "input_cost_per_token",
             rb.input_cost_per_token != ra.input_cost_per_token,
@@ -333,7 +363,11 @@ impl ModelPatch {
             json!(ra.output_cost_per_token),
         );
         put("rpm", rb.rpm != ra.rpm, json!(ra.rpm));
-        put("is_active", rb.is_active != ra.is_active, json!(ra.is_active));
+        put(
+            "is_active",
+            rb.is_active != ra.is_active,
+            json!(ra.is_active),
+        );
         put(
             "capability_tier",
             rb.capability_tier != ra.capability_tier,
@@ -406,12 +440,8 @@ pub struct ModelDto {
 impl From<&Model> for ModelDto {
     fn from(m: &Model) -> Self {
         let (kind, compat, provider) = match &m.backend {
-            Backend::Cloud { provider, .. } => {
-                ("cloud", None, Some(provider.as_str().to_string()))
-            }
-            Backend::Local { compat, .. } => {
-                ("local", Some(compat.as_str().to_string()), None)
-            }
+            Backend::Cloud { provider, .. } => ("cloud", None, Some(provider.as_str().to_string())),
+            Backend::Local { compat, .. } => ("local", Some(compat.as_str().to_string()), None),
         };
         let raw_key = m.api_key_env();
         ModelDto {
@@ -422,7 +452,11 @@ impl From<&Model> for ModelDto {
             provider,
             litellm_model: m.litellm_model.clone(),
             api_base: m.api_base().to_string(),
-            api_key: if raw_key.is_empty() { String::new() } else { mask_secret(raw_key) },
+            api_key: if raw_key.is_empty() {
+                String::new()
+            } else {
+                mask_secret(raw_key)
+            },
             task_type: m.task_type.clone(),
             input_cost_per_token: m.input_cost_per_token,
             output_cost_per_token: m.output_cost_per_token,
@@ -448,20 +482,16 @@ mod tests {
 
     #[test]
     fn create_local_fills_defaults_and_rejects_key() {
-        let c: ModelCreate = serde_json::from_str(
-            r#"{"name":"qwen3:8b","kind":"local"}"#,
-        )
-        .unwrap();
+        let c: ModelCreate = serde_json::from_str(r#"{"name":"qwen3:8b","kind":"local"}"#).unwrap();
         let m = Model::try_from(c).unwrap();
         assert!(m.is_local());
         assert_eq!(m.api_base(), "http://localhost:11434");
         assert_eq!(m.litellm_model, "ollama/qwen3:8b");
         assert_eq!(m.api_key_env(), "");
 
-        let bad: ModelCreate = serde_json::from_str(
-            r#"{"name":"x","kind":"local","api_key":"DASHSCOPE_API_KEY"}"#,
-        )
-        .unwrap();
+        let bad: ModelCreate =
+            serde_json::from_str(r#"{"name":"x","kind":"local","api_key":"DASHSCOPE_API_KEY"}"#)
+                .unwrap();
         assert!(Model::try_from(bad).is_err(), "本地模型带 key 必须拒收");
     }
 
@@ -489,10 +519,9 @@ mod tests {
 
     #[test]
     fn local_openai_compat_defaults_and_roundtrip_kind() {
-        let c: ModelCreate = serde_json::from_str(
-            r#"{"name":"qwen2.5-7b","kind":"local","compat":"openai"}"#,
-        )
-        .unwrap();
+        let c: ModelCreate =
+            serde_json::from_str(r#"{"name":"qwen2.5-7b","kind":"local","compat":"openai"}"#)
+                .unwrap();
         let m = Model::try_from(c).unwrap();
         assert_eq!(m.api_base(), "http://localhost:1234/v1");
         assert_eq!(m.litellm_model, "openai/qwen2.5-7b");
@@ -505,8 +534,7 @@ mod tests {
         if let Backend::Cloud { api_key, .. } = &mut cloud.backend {
             *api_key = Some(ApiKeyRef::parse("DASHSCOPE_API_KEY").unwrap());
         }
-        let patch: ModelPatch =
-            serde_json::from_str(r#"{"kind":"local"}"#).unwrap();
+        let patch: ModelPatch = serde_json::from_str(r#"{"kind":"local"}"#).unwrap();
         let after = patch.resolve_against(&cloud).unwrap();
         assert!(after.is_local());
         assert_eq!(after.api_key_env(), "");
@@ -524,20 +552,21 @@ mod tests {
         if let Backend::Cloud { api_key, .. } = &mut cloud.backend {
             *api_key = Some(ApiKeyRef::parse("DASHSCOPE_API_KEY").unwrap());
         }
-        let patch: ModelPatch = serde_json::from_str(
-            r#"{"api_key":"****KEY_","input_cost_per_token":1e-6}"#,
-        )
-        .unwrap();
+        let patch: ModelPatch =
+            serde_json::from_str(r#"{"api_key":"****KEY_","input_cost_per_token":1e-6}"#).unwrap();
         let after = patch.resolve_against(&cloud).unwrap();
-        assert_eq!(after.api_key_env(), "DASHSCOPE_API_KEY", "掩码哨兵保持原 key");
+        assert_eq!(
+            after.api_key_env(),
+            "DASHSCOPE_API_KEY",
+            "掩码哨兵保持原 key"
+        );
         assert_eq!(after.input_cost_per_token, 1e-6);
     }
 
     #[test]
     fn patch_local_with_key_is_rejected() {
         let local = Model::local_fixture("qwen3:8b", LocalCompat::Ollama);
-        let patch: ModelPatch =
-            serde_json::from_str(r#"{"api_key":"sk-abc123"}"#).unwrap();
+        let patch: ModelPatch = serde_json::from_str(r#"{"api_key":"sk-abc123"}"#).unwrap();
         assert!(patch.resolve_against(&local).is_err());
     }
 

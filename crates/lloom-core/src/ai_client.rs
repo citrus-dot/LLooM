@@ -4,9 +4,9 @@
 use crate::config;
 use crate::error::{AppError, Result};
 use crate::models::Model;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use futures::Stream;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSpec {
@@ -26,7 +26,9 @@ impl From<&Model> for ModelSpec {
     fn from(m: &Model) -> Self {
         // api_base/api_key 的 env 解析只发生在出进程边界（这里）；domain 层存原始值。
         let api_key = match &m.backend {
-            crate::models::Backend::Cloud { api_key: Some(k), .. } => k.resolve(),
+            crate::models::Backend::Cloud {
+                api_key: Some(k), ..
+            } => k.resolve(),
             _ => String::new(),
         };
         Self {
@@ -95,7 +97,10 @@ pub async fn health() -> AiHealth {
         .send()
         .await
     else {
-        return AiHealth { status: "down".to_string(), ready: false };
+        return AiHealth {
+            status: "down".to_string(),
+            ready: false,
+        };
     };
     resp.json::<AiHealth>().await.unwrap_or(AiHealth {
         status: "down".to_string(),
@@ -104,7 +109,12 @@ pub async fn health() -> AiHealth {
 }
 
 /// Non-streaming chat completion.
-pub async fn chat(spec: &ModelSpec, messages: &[Value], max_tokens: i64, temperature: f64) -> Result<ChatResult> {
+pub async fn chat(
+    spec: &ModelSpec,
+    messages: &[Value],
+    max_tokens: i64,
+    temperature: f64,
+) -> Result<ChatResult> {
     let url = format!("{}/v1/chat", base_url());
     let body = json!({
         "model": spec,
@@ -151,6 +161,7 @@ pub async fn classify(text: &str, classifier: &ModelSpec, valid_types: &[&str]) 
 /// persisted rolling summary so it is not recomputed on every request.
 #[allow(clippy::too_many_arguments)]
 pub async fn orchestrate_stream(
+    db: &crate::db::Db,
     query: &str,
     history: &[Value],
     sr_domain: &str,
@@ -168,7 +179,7 @@ pub async fn orchestrate_stream(
         "sr_domain": sr_domain,
         "models": models,
         "cache_dir": cache_dir,
-        "similarity_threshold": config::cache_threshold(),
+        "similarity_threshold": config::cache_threshold(db),
         "summary_upto": summary_upto,
         "assignments": assignments,
     });
@@ -313,5 +324,8 @@ pub async fn cache_cleanup() -> Result<Value> {
 
 fn mk_event(name: String, data: &str) -> SseEvent {
     let parsed = serde_json::from_str::<Value>(data).unwrap_or(Value::String(data.to_string()));
-    SseEvent { event: name, data: parsed }
+    SseEvent {
+        event: name,
+        data: parsed,
+    }
 }

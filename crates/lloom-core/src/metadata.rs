@@ -193,7 +193,11 @@ mod tests {
     fn model(name: &str, provider: &str, api_base: &str) -> Model {
         let mut m = Model::fixture(name, provider);
         if let Backend::Cloud { api_base: b, .. } = &mut m.backend {
-            *b = if api_base.is_empty() { None } else { Some(api_base.to_string()) };
+            *b = if api_base.is_empty() {
+                None
+            } else {
+                Some(api_base.to_string())
+            };
         }
         m
     }
@@ -285,8 +289,20 @@ mod tests {
         )
         .unwrap();
         let m = model("deepseek-v3", "dashscope", "");
-        assert_eq!(cold_start_quality_in(&m, "coding", &dir), Some(0.8), "coding 0.8");
-        assert_eq!(cold_start_quality_in(&m, "math_logic", &dir), Some(0.5), "math 0.5 ≠ coding");
-        assert_eq!(cold_start_quality_in(&m, "general", &dir), None, "未登记任务无冷启动分");
+        assert_eq!(
+            cold_start_quality_in(&m, "coding", &dir),
+            Some(0.8),
+            "coding 0.8"
+        );
+        assert_eq!(
+            cold_start_quality_in(&m, "math_logic", &dir),
+            Some(0.5),
+            "math 0.5 ≠ coding"
+        );
+        assert_eq!(
+            cold_start_quality_in(&m, "general", &dir),
+            None,
+            "未登记任务无冷启动分"
+        );
     }
 }

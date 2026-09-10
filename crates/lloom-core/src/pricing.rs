@@ -20,13 +20,13 @@ pub struct UsageDetail {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     #[serde(default)]
-    pub cached_tokens: i64,          // prompt_tokens_details.cached_tokens
+    pub cached_tokens: i64, // prompt_tokens_details.cached_tokens
     #[serde(default)]
-    pub reasoning_tokens: i64,       // completion_tokens_details.reasoning_tokens
+    pub reasoning_tokens: i64, // completion_tokens_details.reasoning_tokens
     #[serde(default)]
-    pub cache_creation_tokens: i64,  // cache_creation_input_tokens
+    pub cache_creation_tokens: i64, // cache_creation_input_tokens
     #[serde(default)]
-    pub field_missing: bool,         // usage 缺 cached_tokens 字段（校准记账，不告警）
+    pub field_missing: bool, // usage 缺 cached_tokens 字段（校准记账，不告警）
 }
 
 // ── PriceSpec ──
@@ -40,7 +40,7 @@ pub struct TierBand {
     #[serde(default)]
     pub output_cost: f64,
     #[serde(default)]
-    pub cache_read_cost: Option<f64>,   // None = 该档无缓存计价区分（命中按原价）
+    pub cache_read_cost: Option<f64>, // None = 该档无缓存计价区分（命中按原价）
     #[serde(default)]
     pub cache_write_cost: Option<f64>,
     #[serde(default)]
@@ -51,13 +51,13 @@ pub struct TierBand {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ZoneRule {
     #[serde(default)]
-    pub days: Option<Vec<String>>,   // ["mon",...]；None = 不限工作日（holidays 规则用）
+    pub days: Option<Vec<String>>, // ["mon",...]；None = 不限工作日（holidays 规则用）
     #[serde(default = "default_star")]
-    pub hours: String,               // "*" 或 "9-12,14-18"
+    pub hours: String, // "*" 或 "9-12,14-18"
     #[serde(default = "default_one")]
     pub multiplier: f64,
     #[serde(default)]
-    pub holidays: bool,              // true = 仅节假日命中
+    pub holidays: bool, // true = 仅节假日命中
 }
 
 fn default_star() -> String {
@@ -71,9 +71,9 @@ fn default_one() -> f64 {
 #[derive(Debug, Clone, Default)]
 pub struct Zone {
     pub provider: String,
-    pub tz_offset_hours: i32,        // 北京时间 +8（Asia/Shanghai 无夏令时）
+    pub tz_offset_hours: i32, // 北京时间 +8（Asia/Shanghai 无夏令时）
     pub rules: Vec<ZoneRule>,
-    pub holidays: HashSet<String>,   // "YYYY-MM-DD"
+    pub holidays: HashSet<String>, // "YYYY-MM-DD"
 }
 
 /// 主表 price_specs 行（DB 反序列化用）
@@ -351,10 +351,7 @@ fn hours_match(spec: &str, hh: u32) -> bool {
     }
     for part in spec.split(',') {
         let mut iter = part.split('-');
-        let lo: u32 = iter
-            .next()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0);
+        let lo: u32 = iter.next().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
         let hi: u32 = iter
             .next()
             .and_then(|s| s.trim().parse().ok())
@@ -420,8 +417,12 @@ impl PriceSpec {
 
     /// 时段系数。规则缺失/未命中 → 1.0（不优惠、不报错，校准层会暴露）
     pub fn zone_multiplier(&self, t_epoch_secs: i64, zr: &ZoneResolver) -> f64 {
-        let Some(zref) = &self.zone_ref else { return 1.0; };
-        let Some(zone) = zr.get(zref) else { return 1.0; };
+        let Some(zref) = &self.zone_ref else {
+            return 1.0;
+        };
+        let Some(zone) = zr.get(zref) else {
+            return 1.0;
+        };
         zone.multiplier_at(t_epoch_secs)
     }
 
@@ -440,7 +441,12 @@ impl PriceSpec {
     }
 
     /// 有效输入单价（路由评分用）：命中率期望加权
-    pub fn effective_input_cost(&self, hit_rate_ewma: f64, t_epoch_secs: i64, zr: &ZoneResolver) -> f64 {
+    pub fn effective_input_cost(
+        &self,
+        hit_rate_ewma: f64,
+        t_epoch_secs: i64,
+        zr: &ZoneResolver,
+    ) -> f64 {
         let z = self.zone_multiplier(t_epoch_secs, zr);
         let p_read = self.cache_read_cost.unwrap_or(self.input_cost); // 无区分=不优惠
         let h = hit_rate_ewma.clamp(0.0, 1.0);
@@ -479,8 +485,7 @@ impl Zone {
             8 // 本项目仅支持北京时间；其余时区留待未来
         };
         let rules = serde_json::from_str(rule_json).unwrap_or_default();
-        let holidays: HashSet<String> =
-            serde_json::from_str(holidays_json).unwrap_or_default();
+        let holidays: HashSet<String> = serde_json::from_str(holidays_json).unwrap_or_default();
         Zone {
             provider: provider.to_string(),
             tz_offset_hours,
@@ -503,18 +508,16 @@ impl Zone {
             _ => "sun",
         }
         .to_string();
-        let is_holiday = self.holidays.contains(&holiday_key(t_epoch_secs, self.tz_offset_hours));
+        let is_holiday = self
+            .holidays
+            .contains(&holiday_key(t_epoch_secs, self.tz_offset_hours));
         for rule in &self.rules {
             let day_ok = rule
                 .days
                 .as_ref()
                 .map(|d| d.contains(&dow_name))
                 .unwrap_or(true);
-            let hit = if rule.holidays {
-                is_holiday
-            } else {
-                day_ok
-            };
+            let hit = if rule.holidays { is_holiday } else { day_ok };
             if !hit {
                 continue;
             }
@@ -618,7 +621,11 @@ mod tests {
     // ── PR-x OpenRouter 参考层 ──
 
     fn or(id: &str, i: f64, o: f64) -> OpenRouterPrice {
-        OpenRouterPrice { id: id.into(), input_cost: i, output_cost: o }
+        OpenRouterPrice {
+            id: id.into(),
+            input_cost: i,
+            output_cost: o,
+        }
     }
 
     #[test]
@@ -632,7 +639,10 @@ mod tests {
         let out = parse_openrouter_prices(raw);
         assert_eq!(out.len(), 2, "free 与非法值应被跳过");
         assert_eq!(out[0].id, "qwen/qwen-plus");
-        assert!((out[1].input_cost - 2.7e-7).abs() < 1e-15, "数字型 pricing 也应支持");
+        assert!(
+            (out[1].input_cost - 2.7e-7).abs() < 1e-15,
+            "数字型 pricing 也应支持"
+        );
     }
 
     #[test]
@@ -663,7 +673,10 @@ mod tests {
         };
         let cost = s.actual_cost(&u, 0, &ZoneResolver::new());
         let expected = 5_000.0 * 3.47e-7 + 5_000.0 * 6.94e-8 + 100.0 * 1.389e-6;
-        assert!((cost - expected).abs() < 1e-12, "cost={cost} expected={expected}");
+        assert!(
+            (cost - expected).abs() < 1e-12,
+            "cost={cost} expected={expected}"
+        );
     }
 
     #[test]
@@ -697,8 +710,16 @@ mod tests {
     fn tier_band_boundary() {
         let s = test_spec();
         let zr = ZoneResolver::new();
-        let u1 = UsageDetail { prompt_tokens: 32768, completion_tokens: 0, ..Default::default() };
-        let u2 = UsageDetail { prompt_tokens: 32769, completion_tokens: 0, ..Default::default() };
+        let u1 = UsageDetail {
+            prompt_tokens: 32768,
+            completion_tokens: 0,
+            ..Default::default()
+        };
+        let u2 = UsageDetail {
+            prompt_tokens: 32769,
+            completion_tokens: 0,
+            ..Default::default()
+        };
         let c1 = s.actual_cost(&u1, 0, &zr);
         let c2 = s.actual_cost(&u2, 0, &zr);
         assert!((c1 - 32768.0 * 3.47e-7).abs() < 1e-12);
@@ -791,7 +812,10 @@ mod tests {
         let z = deepseek_zone();
         // 周一 17:00 处于高峰段 14-18 → 下一谷时 18:00
         let t = beijing_epoch(2026, 8, 24, 17, 0, 8);
-        assert_eq!(z.first_valley_epoch(t, 7200), Some(beijing_epoch(2026, 8, 24, 18, 0, 8)));
+        assert_eq!(
+            z.first_valley_epoch(t, 7200),
+            Some(beijing_epoch(2026, 8, 24, 18, 0, 8))
+        );
     }
 
     #[test]
@@ -799,7 +823,10 @@ mod tests {
         let z = deepseek_zone();
         // 周一 10:00 高峰 9-12 → 下一谷时 12:00
         let t = beijing_epoch(2026, 8, 24, 10, 0, 8);
-        assert_eq!(z.first_valley_epoch(t, 7200), Some(beijing_epoch(2026, 8, 24, 12, 0, 8)));
+        assert_eq!(
+            z.first_valley_epoch(t, 7200),
+            Some(beijing_epoch(2026, 8, 24, 12, 0, 8))
+        );
     }
 
     #[test]
@@ -856,8 +883,11 @@ mod tests {
             + 12_000.0 * 1e-7                  // cached
             + 8_000.0 * 1.25e-6                // cache creation (write)
             + 500.0 * 3e-6                     // output
-            + 50.0 * 3e-6;                     // reasoning
-        assert!((cost - expected).abs() < 1e-9, "cost={cost} expected={expected}");
+            + 50.0 * 3e-6; // reasoning
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "cost={cost} expected={expected}"
+        );
     }
 
     // ── P2.a 远端价格解析 ──

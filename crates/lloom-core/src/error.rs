@@ -7,6 +7,9 @@ pub enum AppError {
     #[error("database error: {0}")]
     Db(#[from] rusqlite::Error),
 
+    #[error("connection pool error: {0}")]
+    Pool(#[from] r2d2::Error),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -40,6 +43,7 @@ impl AppError {
             AppError::Conflict(_) => 409,
             AppError::InvalidRequest(_) => 400,
             AppError::Db(_)
+            | AppError::Pool(_)
             | AppError::Io(_)
             | AppError::Json(_)
             | AppError::AiService(_)

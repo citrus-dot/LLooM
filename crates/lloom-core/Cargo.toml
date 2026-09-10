@@ -8,10 +8,11 @@ description = "LLooM business core — Rust server, routing, security, process m
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.35"
 regex = "1"
 fancy-regex = "0.19"
 thiserror = "2"
-anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "sync"] }
 axum = { version = "0.8", features = ["http1", "json", "tokio", "query", "macros"] }
 reqwest = { version = "0.13", features = ["json", "stream"] }

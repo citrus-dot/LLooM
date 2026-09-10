@@ -10,7 +10,11 @@ use serde_json::Value;
 use std::process::exit;
 
 #[derive(Parser)]
-#[command(name = "lloom-cli", version, about = "LLooM — intelligent LLM routing platform CLI")]
+#[command(
+    name = "lloom-cli",
+    version,
+    about = "LLooM — intelligent LLM routing platform CLI"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -239,7 +243,11 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Models(c) => cmd_models(&client, c).await?,
         Command::Budgets(c) => cmd_budgets(&client, c).await?,
         Command::Usage => cmd_usage(&client).await?,
-        Command::Chat { query, session, interactive } => cmd_chat(&client, &query, session.as_deref(), interactive).await?,
+        Command::Chat {
+            query,
+            session,
+            interactive,
+        } => cmd_chat(&client, &query, session.as_deref(), interactive).await?,
         Command::Orchestrate { query } => cmd_orchestrate(&client, &query).await?,
         Command::Conversation(c) => cmd_conversation(&client, c).await?,
         Command::Config(c) => cmd_config(&client, c).await?,
@@ -257,8 +265,16 @@ async fn get(client: &Client, path: &str) -> Result<Value, Box<dyn std::error::E
     Ok(res.json().await?)
 }
 
-async fn post(client: &Client, path: &str, body: Value) -> Result<Value, Box<dyn std::error::Error>> {
-    let res = client.post(format!("{BASE}{path}")).json(&body).send().await?;
+async fn post(
+    client: &Client,
+    path: &str,
+    body: Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let res = client
+        .post(format!("{BASE}{path}"))
+        .json(&body)
+        .send()
+        .await?;
     if !res.status().is_success() {
         return Err(format!("HTTP {}", res.status()).into());
     }
@@ -335,18 +351,44 @@ async fn cmd_service(client: &Client, cmd: ServiceCmd) -> Result<(), Box<dyn std
             }
         }
         ServiceCmd::Apply { keys } => {
-            let r = post(client, "/api/services/smart-restart", serde_json::json!({ "changed_keys": keys })).await?;
+            let r = post(
+                client,
+                "/api/services/smart-restart",
+                serde_json::json!({ "changed_keys": keys }),
+            )
+            .await?;
             if r["ok"].as_bool().unwrap_or(false) {
                 let restarted = r["restarted"].as_array().cloned().unwrap_or_default();
-                println!("✓ 配置已生效，已重启: {}", restarted.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "));
+                println!(
+                    "✓ 配置已生效，已重启: {}",
+                    restarted
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             } else {
                 let errors = r["errors"].as_array().cloned().unwrap_or_default();
-                eprintln!("✗ 重启失败: {}", errors.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("; "));
+                eprintln!(
+                    "✗ 重启失败: {}",
+                    errors
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                );
             }
         }
         ServiceCmd::Shutdown => {
             let r = post(client, "/api/shutdown", Value::Null).await?;
-            println!("{}", if r["shutting_down"].as_bool().unwrap_or(false) { "正在关闭全部服务..." } else { "关闭请求已发送" });
+            println!(
+                "{}",
+                if r["shutting_down"].as_bool().unwrap_or(false) {
+                    "正在关闭全部服务..."
+                } else {
+                    "关闭请求已发送"
+                }
+            );
         }
     }
     Ok(())
@@ -376,13 +418,28 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
                         m["litellm_model"].as_str().unwrap_or(""),
                         m["input_cost_per_token"].as_f64().unwrap_or(0.0),
                         m["output_cost_per_token"].as_f64().unwrap_or(0.0),
-                        if m["task_type"].as_str().unwrap_or("").is_empty() { "" } else { m["task_type"].as_str().unwrap_or("") },
+                        if m["task_type"].as_str().unwrap_or("").is_empty() {
+                            ""
+                        } else {
+                            m["task_type"].as_str().unwrap_or("")
+                        },
                     );
                 }
             }
             println!("共 {} 个模型", models.len());
         }
-        ModelsCmd::Add { name, kind, compat, provider, model, api_base, api_key, input_cost, output_cost, task_type } => {
+        ModelsCmd::Add {
+            name,
+            kind,
+            compat,
+            provider,
+            model,
+            api_base,
+            api_key,
+            input_cost,
+            output_cost,
+            task_type,
+        } => {
             let is_local = match kind.as_deref() {
                 Some("local") => true,
                 Some("cloud") => false,
@@ -426,7 +483,17 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
             let r = post(client, "/api/models", body).await?;
             println!("✓ 模型已注册 (id={}, name={})", r["id"], r["name"]);
         }
-        ModelsCmd::Update { name, kind, compat, provider, input_cost, output_cost, api_base, api_key, task_type } => {
+        ModelsCmd::Update {
+            name,
+            kind,
+            compat,
+            provider,
+            input_cost,
+            output_cost,
+            api_base,
+            api_key,
+            task_type,
+        } => {
             let mut updates = serde_json::Map::new();
             if let Some(v) = kind {
                 updates.insert("kind".into(), serde_json::json!(v));
@@ -500,7 +567,12 @@ async fn cmd_budgets(client: &Client, cmd: BudgetsCmd) -> Result<(), Box<dyn std
                 }
             }
         }
-        BudgetsCmd::Set { scope, scope_id, max_budget, duration } => {
+        BudgetsCmd::Set {
+            scope,
+            scope_id,
+            max_budget,
+            duration,
+        } => {
             let r = post(client, "/api/budgets", serde_json::json!({
                 "scope": scope, "scope_id": scope_id, "max_budget": max_budget, "duration": duration,
             })).await?;
@@ -509,16 +581,29 @@ async fn cmd_budgets(client: &Client, cmd: BudgetsCmd) -> Result<(), Box<dyn std
             }
         }
         BudgetsCmd::Check { scope, scope_id } => {
-            let r: Value = get(client, &format!(
-                "/api/budgets/check?scope={}&scope_id={}", urlencode(&scope), urlencode(&scope_id)
-            )).await?;
+            let r: Value = get(
+                client,
+                &format!(
+                    "/api/budgets/check?scope={}&scope_id={}",
+                    urlencode(&scope),
+                    urlencode(&scope_id)
+                ),
+            )
+            .await?;
             let spent = r["spent"].as_f64().unwrap_or(0.0);
             let max = r["budget"]["max_budget"].as_f64();
             match max {
                 Some(m) => {
                     let within = r["within_budget"].as_bool().unwrap_or(false);
                     println!("  预算: ${:.2} / ${:.2} (已用 ${:.2})", spent, m, spent);
-                    println!("  状态: {}", if within { "✓ 在预算内" } else { "✗ 超出预算" });
+                    println!(
+                        "  状态: {}",
+                        if within {
+                            "✓ 在预算内"
+                        } else {
+                            "✗ 超出预算"
+                        }
+                    );
                 }
                 None => println!("  未设置预算: {scope}/{scope_id}"),
             }
@@ -532,7 +617,10 @@ async fn cmd_budgets(client: &Client, cmd: BudgetsCmd) -> Result<(), Box<dyn std
 async fn cmd_usage(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     let stats: Value = get(client, "/api/stats").await?;
     let usage: Value = get(client, "/api/usage").await?;
-    println!("累计花费: ${:.6}", stats["total_spend"].as_f64().unwrap_or(0.0));
+    println!(
+        "累计花费: ${:.6}",
+        stats["total_spend"].as_f64().unwrap_or(0.0)
+    );
     let rows = usage["usage"].as_array().cloned().unwrap_or_default();
     if rows.is_empty() {
         println!("(无用量记录)");
@@ -557,7 +645,10 @@ async fn cmd_usage(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
 /// Resolve a --session argument: if it's already a valid ID, use as-is;
 /// otherwise treat it as a conversation title (or prefix) and pick the first
 /// match. Errors if nothing matches.
-async fn resolve_session_id(client: &Client, input: &str) -> Result<String, Box<dyn std::error::Error>> {
+async fn resolve_session_id(
+    client: &Client,
+    input: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     // Fast path: assume it's an ID and see if the conversation exists.
     if let Ok(conv) = get(client, &format!("/api/conversations/{input}")).await {
         if conv.get("id").is_some() || conv.get("messages").is_some() {
@@ -566,7 +657,10 @@ async fn resolve_session_id(client: &Client, input: &str) -> Result<String, Box<
     }
     // Title match against the conversation list.
     let data: Value = get(client, "/api/conversations").await?;
-    let convs = data["conversations"].as_array().cloned().unwrap_or_default();
+    let convs = data["conversations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let lower = input.to_lowercase();
     for c in &convs {
         let title = c["title"].as_str().unwrap_or("").to_lowercase();
@@ -577,7 +671,12 @@ async fn resolve_session_id(client: &Client, input: &str) -> Result<String, Box<
     Err(format!("找不到会话: {input}（先用 lloom-cli conversation list 查看）").into())
 }
 
-async fn cmd_chat(client: &Client, query: &str, session: Option<&str>, interactive: bool) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_chat(
+    client: &Client,
+    query: &str,
+    session: Option<&str>,
+    interactive: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     // history holds the conversation so far (role/content pairs).
     let mut history: Vec<Value> = Vec::new();
     if let Some(id) = session {
@@ -618,7 +717,10 @@ async fn cmd_chat(client: &Client, query: &str, session: Option<&str>, interacti
             return Ok(());
         }
         let input = line.trim().to_string();
-        if input.is_empty() || input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
+        if input.is_empty()
+            || input.eq_ignore_ascii_case("exit")
+            || input.eq_ignore_ascii_case("quit")
+        {
             return Ok(());
         }
         history.push(serde_json::json!({ "role": "user", "content": input }));
@@ -626,7 +728,10 @@ async fn cmd_chat(client: &Client, query: &str, session: Option<&str>, interacti
 }
 
 /// POST /api/chat/stream, printing tokens as they arrive; returns the full reply.
-async fn stream_chat(client: &Client, messages: &[Value]) -> Result<String, Box<dyn std::error::Error>> {
+async fn stream_chat(
+    client: &Client,
+    messages: &[Value],
+) -> Result<String, Box<dyn std::error::Error>> {
     use futures_util::StreamExt;
     use std::io::Write;
     let res = client
@@ -662,11 +767,17 @@ async fn stream_chat(client: &Client, messages: &[Value]) -> Result<String, Box<
     Ok(reply)
 }
 
-async fn cmd_conversation(client: &Client, cmd: ConversationCmd) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_conversation(
+    client: &Client,
+    cmd: ConversationCmd,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         ConversationCmd::List => {
             let data: Value = get(client, "/api/conversations").await?;
-            let convs = data["conversations"].as_array().cloned().unwrap_or_default();
+            let convs = data["conversations"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
             if convs.is_empty() {
                 println!("(无会话)");
             }
@@ -690,7 +801,14 @@ async fn cmd_conversation(client: &Client, cmd: ConversationCmd) -> Result<(), B
         ConversationCmd::Delete { id } => {
             let resolved = resolve_session_id(client, &id).await?;
             let r = del(client, &format!("/api/conversations/{resolved}")).await?;
-            println!("{}", if r["deleted"].as_bool().unwrap_or(false) { "已删除" } else { "删除失败" });
+            println!(
+                "{}",
+                if r["deleted"].as_bool().unwrap_or(false) {
+                    "已删除"
+                } else {
+                    "删除失败"
+                }
+            );
         }
         ConversationCmd::Rename { id, title } => {
             let resolved = resolve_session_id(client, &id).await?;
@@ -701,10 +819,22 @@ async fn cmd_conversation(client: &Client, cmd: ConversationCmd) -> Result<(), B
                 .await?
                 .json::<Value>()
                 .await?;
-            println!("{}", if r["renamed"].as_bool().unwrap_or(false) { "已重命名" } else { "重命名失败" });
+            println!(
+                "{}",
+                if r["renamed"].as_bool().unwrap_or(false) {
+                    "已重命名"
+                } else {
+                    "重命名失败"
+                }
+            );
         }
         ConversationCmd::New => {
-            let r = post(client, "/api/conversations", serde_json::json!({ "messages": [] })).await?;
+            let r = post(
+                client,
+                "/api/conversations",
+                serde_json::json!({ "messages": [] }),
+            )
+            .await?;
             println!("新建会话: {}", r["id"].as_str().unwrap_or(""));
         }
     }
@@ -836,7 +966,12 @@ async fn cmd_config(client: &Client, cmd: ConfigCmd) -> Result<(), Box<dyn std::
             }
         }
         ConfigCmd::Set { key, value } => {
-            let r = post(client, "/api/config", serde_json::json!({ "updates": { key.clone(): value } })).await?;
+            let r = post(
+                client,
+                "/api/config",
+                serde_json::json!({ "updates": { key.clone(): value } }),
+            )
+            .await?;
             let updated = r["updated"].as_array().cloned().unwrap_or_default();
             if !updated.is_empty() {
                 println!("✓ 已设置 {key}");

@@ -99,7 +99,8 @@ fn month_key_now() -> String {
 
 impl ProbeBudget {
     pub fn set_monthly_limit_usd(&self, usd: f64) {
-        self.monthly_limit_usd.store((usd * 1e6).max(0.0) as u64, Ordering::Relaxed);
+        self.monthly_limit_usd
+            .store((usd * 1e6).max(0.0) as u64, Ordering::Relaxed);
     }
     pub fn monthly_limit_usd(&self) -> f64 {
         self.monthly_limit_usd.load(Ordering::Relaxed) as f64 / 1e6
@@ -116,7 +117,9 @@ impl ProbeBudget {
         }
         self.roll_month_if_needed();
         let mut freq = self.freq.lock().unwrap();
-        let f = freq.entry((provider.to_string(), model.to_string())).or_insert(Freq::Hourly);
+        let f = freq
+            .entry((provider.to_string(), model.to_string()))
+            .or_insert(Freq::Hourly);
         if *f == Freq::SuspendedCloud {
             return false;
         }
@@ -137,21 +140,32 @@ impl ProbeBudget {
     pub fn charge(&self, _provider: &str, _model: &str, cost_usd: f64) {
         self.roll_month_if_needed();
         if cost_usd > 0.0 {
-            self.spent_this_month.fetch_add((cost_usd * 1e6) as u64, Ordering::Relaxed);
+            self.spent_this_month
+                .fetch_add((cost_usd * 1e6) as u64, Ordering::Relaxed);
         }
     }
 
     pub fn note_failure(&self, provider: &str, model: &str) -> u32 {
         let mut f = self.failures.lock().unwrap();
-        let c = f.entry((provider.to_string(), model.to_string())).or_insert(0);
+        let c = f
+            .entry((provider.to_string(), model.to_string()))
+            .or_insert(0);
         *c += 1;
         *c
     }
     pub fn note_success(&self, provider: &str, model: &str) {
-        self.failures.lock().unwrap().remove(&(provider.to_string(), model.to_string()));
+        self.failures
+            .lock()
+            .unwrap()
+            .remove(&(provider.to_string(), model.to_string()));
     }
     pub fn failure_count(&self, provider: &str, model: &str) -> u32 {
-        *self.failures.lock().unwrap().get(&(provider.to_string(), model.to_string())).unwrap_or(&0)
+        *self
+            .failures
+            .lock()
+            .unwrap()
+            .get(&(provider.to_string(), model.to_string()))
+            .unwrap_or(&0)
     }
 
     fn roll_month_if_needed(&self) {
@@ -179,16 +193,21 @@ fn is_cloud(m: &Model) -> bool {
 
 /// 后台探针循环：每小时一轮。由 `server::spawn_background_jobs` 挂载。
 /// PR-8：当有分时渠道正处高峰且 2h 内进谷时，本轮探针先挪到谷时窗口执行（DeepSeek 直接半价）。
-pub async fn probe_loop() {
+pub async fn probe_loop(db: crate::db::Db) {
     let mut ticker = tokio::time::interval(Duration::from_secs(3600));
     loop {
         ticker.tick().await;
         // PR-8 谷时对齐：可延迟后台任务（探针）避开高峰成本
-        if let Some(wait) = valley_wait_secs(crate::server::zone_resolver(), crate::server::now_epoch_secs()) {
-            eprintln!("[core] probe deferring {wait}s to next valley window (peak-hour cost avoidance)");
+        if let Some(wait) = valley_wait_secs(
+            crate::server::zone_resolver(&db),
+            crate::server::now_epoch_secs(),
+        ) {
+            eprintln!(
+                "[core] probe deferring {wait}s to next valley window (peak-hour cost avoidance)"
+            );
             tokio::time::sleep(Duration::from_secs(wait)).await;
         }
-        if let Err(e) = run_probe_round().await {
+        if let Err(e) = run_probe_round(&db).await {
             eprintln!("[core] probe round failed: {e}");
         }
     }
@@ -200,8 +219,8 @@ fn valley_wait_secs(zr: &pricing::ZoneResolver, now: i64) -> Option<u64> {
     router::next_valley_epoch(zr, now).map(|v| (v - now).max(0) as u64)
 }
 
-async fn run_probe_round() -> std::result::Result<(), crate::error::AppError> {
-    let models = db::list_models(true)?;
+async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::error::AppError> {
+    let models = db.list_models(true)?;
     for m in &models {
         if !is_cloud(m) {
             continue; // 本轮只探云端；本地免费通道探针留待后续扩展
@@ -218,13 +237,17 @@ async fn run_probe_round() -> std::result::Result<(), crate::error::AppError> {
         match ai_client::chat(&spec, &msgs, 8, 0.0).await {
             Ok(res) => {
                 budget().note_success(&m.provider_name(), &m.name);
-                let cost = record_probe_usage(m, &res.usage, false);
+                let cost = record_probe_usage(db, m, &res.usage, false);
                 budget().charge(&m.provider_name(), &m.name, cost);
             }
             Err(e) => {
                 let n = budget().note_failure(&m.provider_name(), &m.name);
-                record_probe_failure(m);
-                eprintln!("[core] probe {}/{} failed ({n} consecutive): {e}", m.provider_name(), m.name);
+                record_probe_failure(db, m);
+                eprintln!(
+                    "[core] probe {}/{} failed ({n} consecutive): {e}",
+                    m.provider_name(),
+                    m.name
+                );
                 continue;
             }
         }
@@ -233,19 +256,24 @@ async fn run_probe_round() -> std::result::Result<(), crate::error::AppError> {
             Ok(res) => {
                 budget().note_success(&m.provider_name(), &m.name);
                 let hit = res.usage.cached_tokens > 0;
-                let cost = record_probe_usage(m, &res.usage, hit);
+                let cost = record_probe_usage(db, m, &res.usage, hit);
                 budget().charge(&m.provider_name(), &m.name, cost);
                 if !hit {
                     eprintln!(
                         "[core] probe {}/{} cache-verify MISS (cached_tokens=0) — 校准层将核对表价",
-                        m.provider_name(), m.name
+                        m.provider_name(),
+                        m.name
                     );
                 }
             }
             Err(e) => {
                 let n = budget().note_failure(&m.provider_name(), &m.name);
-                record_probe_failure(m);
-                eprintln!("[core] probe {}/{} round-2 failed ({n} consecutive): {e}", m.provider_name(), m.name);
+                record_probe_failure(db, m);
+                eprintln!(
+                    "[core] probe {}/{} round-2 failed ({n} consecutive): {e}",
+                    m.provider_name(),
+                    m.name
+                );
             }
         }
     }
@@ -254,26 +282,31 @@ async fn run_probe_round() -> std::result::Result<(), crate::error::AppError> {
 
 /// 探针成功记账（task_type='probe'；act_cost 由 Rust 按 PriceSpec 分项计算）。
 /// 返回实际成本（USD）供预算扣费。
-fn record_probe_usage(m: &Model, usage: &pricing::UsageDetail, hit: bool) -> f64 {
-    let (act_cost, zm) = match db::get_price_spec(&m.provider_name(), &m.name) {
+fn record_probe_usage(
+    db: &crate::db::Db,
+    m: &Model,
+    usage: &pricing::UsageDetail,
+    hit: bool,
+) -> f64 {
+    let (act_cost, zm) = match db.get_price_spec(&m.provider_name(), &m.name) {
         Ok(Some(ps)) => {
-            let zr = crate::server::zone_resolver();
+            let zr = crate::server::zone_resolver(db);
             let t = crate::server::now_epoch_secs();
             (ps.actual_cost(usage, t, zr), ps.zone_multiplier(t, zr))
         }
         _ => (0.0, 1.0),
     };
-    let _ = db::insert_usage(
-        &m.name,
-        "default",
-        usage.prompt_tokens,
-        usage.completion_tokens,
-        act_cost,
-        Some("probe"),
-        hit,
-        None, // P1.a：探针非用户请求，不标 latency/request_id
-        None,
-        Some(&db::UsageExtra {
+    let _ = db.insert_usage(&db::UsageRecord {
+        model_name: &m.name,
+        user_id: "default",
+        input_tokens: usage.prompt_tokens,
+        output_tokens: usage.completion_tokens,
+        cost: act_cost,
+        task_type: Some("probe"),
+        cache_hit: hit,
+        latency_ms: None, // P1.a：探针非用户请求，不标 latency/request_id
+        request_id: None,
+        extra: Some(db::UsageExtra {
             cached_tokens: usage.cached_tokens,
             reasoning_tokens: usage.reasoning_tokens,
             est_cost: 0.0,
@@ -284,23 +317,23 @@ fn record_probe_usage(m: &Model, usage: &pricing::UsageDetail, hit: bool) -> f64
             cache_saved_cost: 0.0,
             api_source: None,
         }),
-    );
+    });
     act_cost
 }
 
 /// 探针失败记账：cost=-1 哨兵（stats 用 cost<0 计数）。
-fn record_probe_failure(m: &Model) {
-    let _ = db::insert_usage(
-        &m.name,
-        "default",
-        0,
-        0,
-        FAIL_SENTINEL_COST,
-        Some("probe"),
-        false,
-        None, // P1.a：探针非用户请求，不标 latency/request_id
-        None,
-        Some(&db::UsageExtra {
+fn record_probe_failure(db: &crate::db::Db, m: &Model) {
+    let _ = db.insert_usage(&db::UsageRecord {
+        model_name: &m.name,
+        user_id: "default",
+        input_tokens: 0,
+        output_tokens: 0,
+        cost: FAIL_SENTINEL_COST,
+        task_type: Some("probe"),
+        cache_hit: false,
+        latency_ms: None, // P1.a：探针非用户请求，不标 latency/request_id
+        request_id: None,
+        extra: Some(db::UsageExtra {
             cached_tokens: 0,
             reasoning_tokens: 0,
             est_cost: 0.0,
@@ -311,7 +344,7 @@ fn record_probe_failure(m: &Model) {
             cache_saved_cost: 0.0,
             api_source: None,
         }),
-    );
+    });
 }
 
 #[cfg(test)]
@@ -331,7 +364,7 @@ mod tests {
     #[test]
     fn budget_hard_cap_and_downshift() {
         let b = test_budget(2000, "2099-01"); // $0.002 总预算
-        // 轮 1-3：预算内（spent 600/1200/1800 < 2000）
+                                              // 轮 1-3：预算内（spent 600/1200/1800 < 2000）
         assert!(b.try_charge("dashscope", "qwen3-max", 0.0006));
         b.charge("dashscope", "qwen3-max", 0.0006);
         assert!(b.try_charge("dashscope", "qwen3-max", 0.0006));
@@ -366,7 +399,10 @@ mod tests {
         for _ in 0..FAIL_PAUSE_THRESHOLD {
             b.note_failure("dashscope", "qwen3-max");
         }
-        assert_eq!(b.failure_count("dashscope", "qwen3-max"), FAIL_PAUSE_THRESHOLD);
+        assert_eq!(
+            b.failure_count("dashscope", "qwen3-max"),
+            FAIL_PAUSE_THRESHOLD
+        );
         b.note_success("dashscope", "qwen3-max");
         assert_eq!(b.failure_count("dashscope", "qwen3-max"), 0);
     }

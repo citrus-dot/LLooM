@@ -169,7 +169,11 @@ impl Backend {
 impl Serialize for Backend {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let v = match self {
-            Backend::Cloud { provider, api_base, api_key } => json!({
+            Backend::Cloud {
+                provider,
+                api_base,
+                api_key,
+            } => json!({
                 "kind": "cloud",
                 "provider": provider.as_str(),
                 "api_base": api_base.clone().unwrap_or_default(),
@@ -199,14 +203,18 @@ impl<'de> Deserialize<'de> for Backend {
             }),
             Some("cloud") => Ok(Backend::Cloud {
                 provider: Provider::parse(get_str("provider")),
-                api_base: Some(get_str("api_base")).filter(|s| !s.is_empty()).map(String::from),
+                api_base: Some(get_str("api_base"))
+                    .filter(|s| !s.is_empty())
+                    .map(String::from),
                 api_key: ApiKeyRef::parse(get_str("api_key")),
             }),
             Some(other) => Err(de::Error::custom(format!("unknown backend kind '{other}'"))),
             // 缺 kind 时按云端宽容解析（存量 DTO 兼容）
             None => Ok(Backend::Cloud {
                 provider: Provider::parse(get_str("provider")),
-                api_base: Some(get_str("api_base")).filter(|s| !s.is_empty()).map(String::from),
+                api_base: Some(get_str("api_base"))
+                    .filter(|s| !s.is_empty())
+                    .map(String::from),
                 api_key: ApiKeyRef::parse(get_str("api_key")),
             }),
         }
@@ -270,8 +278,14 @@ impl Model {
     pub fn provider_name(&self) -> &str {
         match &self.backend {
             Backend::Cloud { provider, .. } => provider.as_str(),
-            Backend::Local { compat: LocalCompat::Ollama, .. } => "ollama",
-            Backend::Local { compat: LocalCompat::OpenAiCompat, .. } => "custom",
+            Backend::Local {
+                compat: LocalCompat::Ollama,
+                ..
+            } => "ollama",
+            Backend::Local {
+                compat: LocalCompat::OpenAiCompat,
+                ..
+            } => "custom",
         }
     }
 
@@ -286,7 +300,9 @@ impl Model {
     /// key 引用原文（env 名或字面密钥）；本地模型恒为空。
     pub fn api_key_env(&self) -> &str {
         match &self.backend {
-            Backend::Cloud { api_key: Some(k), .. } => k.raw(),
+            Backend::Cloud {
+                api_key: Some(k), ..
+            } => k.raw(),
             _ => "",
         }
     }

@@ -12,7 +12,6 @@
 //! plus the number of leading messages it covers (seq < summary_upto).
 
 use crate::config;
-use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::ConversationMeta;
 use rusqlite::params;
@@ -23,9 +22,14 @@ use serde_json::{json, Value};
 /// from the URL path `/api/conversations/{id}`. Returns an error on violation.
 fn validate_id(id: &str) -> Result<()> {
     if id.is_empty() {
-        return Err(AppError::InvalidRequest("conversation id is empty".to_string()));
+        return Err(AppError::InvalidRequest(
+            "conversation id is empty".to_string(),
+        ));
     }
-    if id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         Ok(())
     } else {
         Err(AppError::InvalidRequest(format!(
@@ -79,7 +83,7 @@ fn new_id() -> String {
 /// Import any `data/conversations/*.json` file that is not yet in the DB.
 /// Idempotent: already-imported ids are skipped, files are never modified or
 /// deleted (they remain as a rollback backup).
-pub fn migrate_json_dir() -> Result<usize> {
+pub fn migrate_json_dir(db: &crate::db::Db) -> Result<usize> {
     let dir = config::conversations_dir();
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
@@ -91,13 +95,19 @@ pub fn migrate_json_dir() -> Result<usize> {
         if path.extension().map(|e| e != "json").unwrap_or(true) {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
-        let Ok(data) = serde_json::from_str::<Value>(&content) else { continue };
-        let Some(id) = data["id"].as_str() else { continue };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(data) = serde_json::from_str::<Value>(&content) else {
+            continue;
+        };
+        let Some(id) = data["id"].as_str() else {
+            continue;
+        };
         if id.is_empty() || validate_id(id).is_err() {
             continue;
         }
-        let conn = match db::open_fk() {
+        let conn = match db.conn() {
             Ok(c) => c,
             Err(_) => continue,
         };
@@ -120,8 +130,16 @@ pub fn migrate_json_dir() -> Result<usize> {
             &conn,
             id,
             &title,
-            if created_at.is_empty() { &now } else { &created_at },
-            if updated_at.is_empty() { &now } else { &updated_at },
+            if created_at.is_empty() {
+                &now
+            } else {
+                &created_at
+            },
+            if updated_at.is_empty() {
+                &now
+            } else {
+                &updated_at
+            },
             data["messages"].as_array(),
         )
         .is_ok()
@@ -151,7 +169,10 @@ fn import_conversation(
         for (i, m) in msgs.iter().enumerate() {
             let role = m["role"].as_str().unwrap_or("user");
             let content = m["content"].as_str().unwrap_or("");
-            let meta = m.get("meta").filter(|v| !v.is_null()).map(|v| v.to_string());
+            let meta = m
+                .get("meta")
+                .filter(|v| !v.is_null())
+                .map(|v| v.to_string());
             conn.execute(
                 "INSERT INTO messages (conv_id, seq, role, content, meta, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -164,8 +185,8 @@ fn import_conversation(
 
 // ── Listing / loading ──
 
-pub fn list() -> Result<Vec<ConversationMeta>> {
-    let conn = db::open()?;
+pub fn list(db: &crate::db::Db) -> Result<Vec<ConversationMeta>> {
+    let conn = db.conn()?;
     let mut stmt = conn.prepare(
         "SELECT c.id, c.title, c.updated_at,
                 (SELECT COUNT(*) FROM messages m WHERE m.conv_id = c.id) AS msg_count
@@ -192,9 +213,9 @@ pub fn list() -> Result<Vec<ConversationMeta>> {
 /// assistant message stuck in `generating` (service crashed mid-answer) is
 /// marked `interrupted` — persisted and returned — so the UI can show a
 /// retry affordance instead of a silent hole.
-pub fn load(id: &str) -> Result<Value> {
+pub fn load(db: &crate::db::Db, id: &str) -> Result<Value> {
     validate_id(id)?;
-    let conn = db::open()?;
+    let conn = db.conn()?;
     let (title, created_at, updated_at, summary, summary_upto): (String, String, String, Option<String>, i64) = conn
         .query_row(
             "SELECT title, created_at, updated_at, summary, summary_upto FROM conversations WHERE id = ?1",
@@ -262,9 +283,9 @@ pub fn load(id: &str) -> Result<Value> {
     Ok(doc)
 }
 
-pub fn delete(id: &str) -> Result<()> {
+pub fn delete(db: &crate::db::Db, id: &str) -> Result<()> {
     validate_id(id)?;
-    let conn = db::open_fk()?;
+    let conn = db.conn()?;
     let n = conn.execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
     if n == 0 {
         return Err(AppError::NotFound(format!("conversation '{id}'")));
@@ -281,9 +302,9 @@ pub fn delete(id: &str) -> Result<()> {
 }
 
 /// Rename a conversation. Bumps `updated_at` so the list re-sorts to the top.
-pub fn rename(id: &str, title: &str) -> Result<()> {
+pub fn rename(db: &crate::db::Db, id: &str, title: &str) -> Result<()> {
     validate_id(id)?;
-    let conn = db::open()?;
+    let conn = db.conn()?;
     let n = conn.execute(
         "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
         params![title, now_iso(), id],
@@ -309,13 +330,22 @@ pub fn auto_title(messages: &[Value]) -> String {
 
 /// Legacy full-save semantics (POST /api/conversations): creates the
 /// conversation if needed and replaces its messages atomically. Returns the id.
-pub fn save_or_create(req_id: &str, title: &str, messages: &[Value]) -> Result<String> {
+pub fn save_or_create(
+    db: &crate::db::Db,
+    req_id: &str,
+    title: &str,
+    messages: &[Value],
+) -> Result<String> {
     // Resolve the id first: an empty client id means "server generates one"
     // (WebUI's first-save path). Validation must run on the RESOLVED id, not
     // the raw input — validating before the fallback made that path a dead 400.
-    let id = if req_id.is_empty() { new_id() } else { req_id.to_string() };
+    let id = if req_id.is_empty() {
+        new_id()
+    } else {
+        req_id.to_string()
+    };
     validate_id(&id)?;
-    let mut conn = db::open_fk()?;
+    let mut conn = db.conn()?;
     let now = now_iso();
     let existing: Option<(String, String)> = conn
         .query_row(
@@ -330,11 +360,19 @@ pub fn save_or_create(req_id: &str, title: &str, messages: &[Value]) -> Result<S
     // auto-title from the first user message.
     let (final_title, created_at) = match &existing {
         Some((t, c)) => (
-            if title.is_empty() { t.clone() } else { title.to_string() },
+            if title.is_empty() {
+                t.clone()
+            } else {
+                title.to_string()
+            },
             c.clone(),
         ),
         None => (
-            if title.is_empty() { auto_title(messages) } else { title.to_string() },
+            if title.is_empty() {
+                auto_title(messages)
+            } else {
+                title.to_string()
+            },
             now.clone(),
         ),
     };
@@ -352,7 +390,10 @@ pub fn save_or_create(req_id: &str, title: &str, messages: &[Value]) -> Result<S
     for (i, m) in messages.iter().enumerate() {
         let role = m["role"].as_str().unwrap_or("user");
         let content = m["content"].as_str().unwrap_or("");
-        let meta = m.get("meta").filter(|v| !v.is_null()).map(|v| v.to_string());
+        let meta = m
+            .get("meta")
+            .filter(|v| !v.is_null())
+            .map(|v| v.to_string());
         tx.execute(
             "INSERT INTO messages (conv_id, seq, role, content, meta, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -368,6 +409,7 @@ pub fn save_or_create(req_id: &str, title: &str, messages: &[Value]) -> Result<S
 /// Append one message to a conversation. Returns its seq. Creates the
 /// conversation row if it does not exist yet (title auto-derived).
 pub fn append_message(
+    db: &crate::db::Db,
     conv_id: &str,
     role: &str,
     content: &str,
@@ -375,9 +417,11 @@ pub fn append_message(
 ) -> Result<(String, i64)> {
     validate_id(conv_id)?;
     if content.len() > 512 * 1024 {
-        return Err(AppError::InvalidRequest("message too large (>512KB)".to_string()));
+        return Err(AppError::InvalidRequest(
+            "message too large (>512KB)".to_string(),
+        ));
     }
-    let conn = db::open_fk()?;
+    let conn = db.conn()?;
     let exists: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ?1)",
@@ -427,13 +471,14 @@ pub fn append_message(
 /// Update an existing message's content and/or meta (phase 2 of the
 /// two-phase persistence: fill in the assistant reply after the stream ends).
 pub fn update_message(
+    db: &crate::db::Db,
     conv_id: &str,
     seq: i64,
     content: Option<&str>,
     meta: Option<&Value>,
 ) -> Result<()> {
     validate_id(conv_id)?;
-    let conn = db::open()?;
+    let conn = db.conn()?;
     if content.is_some() {
         let n = conn.execute(
             "UPDATE messages SET content = ?1 WHERE conv_id = ?2 AND seq = ?3",
@@ -465,9 +510,13 @@ pub fn update_message(
 /// current-turn pair (user query + assistant placeholder appended by the
 /// frontend before the call). Also marks any stale `generating` tail as
 /// `interrupted` (crash recovery).
-pub fn load_history_for_orchestrate(conv_id: &str, query: &str) -> Result<Vec<Value>> {
+pub fn load_history_for_orchestrate(
+    db: &crate::db::Db,
+    conv_id: &str,
+    query: &str,
+) -> Result<Vec<Value>> {
     validate_id(conv_id)?;
-    let doc = load(conv_id)?; // also performs the interrupted-marking
+    let doc = load(db, conv_id)?; // also performs the interrupted-marking
     let Some(arr) = doc["messages"].as_array() else {
         return Ok(Vec::new());
     };
@@ -507,9 +556,9 @@ pub fn load_history_for_orchestrate(conv_id: &str, query: &str) -> Result<Vec<Va
 }
 
 /// Current rolling summary + the number of leading messages it covers.
-pub fn get_summary(conv_id: &str) -> Result<(Option<String>, i64)> {
+pub fn get_summary(db: &crate::db::Db, conv_id: &str) -> Result<(Option<String>, i64)> {
     validate_id(conv_id)?;
-    let conn = db::open()?;
+    let conn = db.conn()?;
     conn.query_row(
         "SELECT summary, summary_upto FROM conversations WHERE id = ?1",
         params![conv_id],
@@ -519,9 +568,9 @@ pub fn get_summary(conv_id: &str) -> Result<(Option<String>, i64)> {
 }
 
 /// Persist a (re)computed rolling summary emitted by the AI service.
-pub fn set_summary(conv_id: &str, text: &str, upto: i64) -> Result<()> {
+pub fn set_summary(db: &crate::db::Db, conv_id: &str, text: &str, upto: i64) -> Result<()> {
     validate_id(conv_id)?;
-    let conn = db::open()?;
+    let conn = db.conn()?;
     conn.execute(
         "UPDATE conversations SET summary = ?1, summary_upto = ?2, updated_at = ?3 WHERE id = ?4",
         params![text, upto, now_iso(), conv_id],

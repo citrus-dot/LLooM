@@ -17,8 +17,9 @@ use crate::db;
 use crate::models::Model;
 use crate::router;
 use crate::security;
-use crate::server::{chat_with_failover, pick_classifier, priced_usage};
+use crate::server::{chat_with_failover, pick_classifier, priced_usage, AppState, FailoverRequest};
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -130,9 +131,7 @@ pub(crate) fn sse_frames(id: &str, created: i64, model: &str, content: &str) -> 
     let role = chunk(json!({ "role": "assistant" }), Value::Null);
     let content_frame = chunk(json!({ "content": content }), Value::Null);
     let finish = chunk(json!({}), json!("stop"));
-    format!(
-        "data: {role}\n\ndata: {content_frame}\n\ndata: {finish}\n\ndata: [DONE]\n\n"
-    )
+    format!("data: {role}\n\ndata: {content_frame}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
 }
 
 fn sse_response(body: String) -> Response {
@@ -148,11 +147,17 @@ fn sse_response(body: String) -> Response {
 // ── Handlers ──
 
 fn proxy_token() -> Option<String> {
-    std::env::var("LLOOM_PROXY_TOKEN").ok().filter(|s| !s.trim().is_empty())
+    std::env::var("LLOOM_PROXY_TOKEN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
 /// `POST /v1/chat/completions`
-pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequest>) -> Response {
+pub async fn chat_completions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<OpenAiChatRequest>,
+) -> Response {
     if !bearer_ok(&headers, proxy_token().as_deref()) {
         return error_response(
             StatusCode::UNAUTHORIZED,
@@ -187,7 +192,7 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
         req.messages.clone()
     };
 
-    let models = match db::list_models(true) {
+    let models = match state.db.list_models(true) {
         Ok(m) if !m.is_empty() => m,
         Ok(_) => {
             return error_response(
@@ -210,7 +215,14 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
     let classifier = pick_classifier(&models);
     let registered: Vec<&str> = models.iter().map(|m| m.name.as_str()).collect();
     let route_param = resolve_model_param(&req.model, &registered);
-    let routing = router::route(&route_param, &user_text, classifier.as_ref(), None).await;
+    let routing = router::route(
+        &state.db,
+        &route_param,
+        &user_text,
+        classifier.as_ref(),
+        None,
+    )
+    .await;
 
     let Some(primary) = models.iter().find(|m| m.name == routing.model) else {
         return error_response(
@@ -232,22 +244,26 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
             .unwrap_or(0)
     );
     let decision_id = if routing.method != "direct" {
-        db::insert_routing_decision(
-            &request_id,
-            &routing.task_type,
-            &routing.band,
-            &serde_json::to_string(&json!({
-                "method": routing.method,
-                "api": "openai_compat",
-                "budget_tier": routing.budget_tier,
-            }))
-            .unwrap_or_default(),
-            &serde_json::to_string(&routing.fallback_chain).unwrap_or_default(),
-            &routing.model,
-            &routing.fallback_chain.join(","),
-            0.0,
-        )
-        .unwrap_or(0)
+        let signals_json = serde_json::to_string(&json!({
+            "method": routing.method,
+            "api": "openai_compat",
+            "budget_tier": routing.budget_tier,
+        }))
+        .unwrap_or_default();
+        let candidates_json = serde_json::to_string(&routing.fallback_chain).unwrap_or_default();
+        state
+            .db
+            .insert_routing_decision(&db::RoutingDecisionRecord {
+                request_id: &request_id,
+                task_type: &routing.task_type,
+                band: &routing.band,
+                signals_json: &signals_json,
+                candidates_json: &candidates_json,
+                selected: &routing.model,
+                fallback_chain: &routing.fallback_chain.join(","),
+                routing_ms: 0.0,
+            })
+            .unwrap_or(0)
     } else {
         0
     };
@@ -259,20 +275,25 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
 
     let chat_start = std::time::Instant::now();
     let result = chat_with_failover(
-        &models,
-        &routing_task_type,
-        &routing.model,
-        &routing.fallback_chain,
-        &processed_messages,
-        max_tokens,
-        temperature,
+        &state.db,
+        FailoverRequest {
+            models: &models,
+            task_type: &routing_task_type,
+            primary: &routing.model,
+            fallback_chain: &routing.fallback_chain,
+            messages: &processed_messages,
+            max_tokens,
+            temperature,
+        },
     )
     .await;
 
     match result {
         Ok((res, used_model)) => {
             if decision_id > 0 {
-                let _ = db::update_routing_decision_outcome(decision_id, "success");
+                let _ = state
+                    .db
+                    .update_routing_decision_outcome(decision_id, "success");
             }
             let provider = models
                 .iter()
@@ -280,18 +301,18 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
                 .map(|m| m.provider_name())
                 .unwrap_or(primary_provider.as_str());
             let latency_ms = chat_start.elapsed().as_secs_f64() * 1000.0;
-            let (act_cost, zm) = priced_usage(provider, &used_model, &res.usage);
-            let _ = db::insert_usage(
-                &used_model,
-                "default",
-                res.usage.prompt_tokens,
-                res.usage.completion_tokens,
-                act_cost,
-                Some(&routing_task_type),
-                false,
-                Some(latency_ms),
-                Some(&request_id),
-                Some(&db::UsageExtra {
+            let (act_cost, zm) = priced_usage(&state.db, provider, &used_model, &res.usage);
+            let _ = state.db.insert_usage(&db::UsageRecord {
+                model_name: &used_model,
+                user_id: "default",
+                input_tokens: res.usage.prompt_tokens,
+                output_tokens: res.usage.completion_tokens,
+                cost: act_cost,
+                task_type: Some(&routing_task_type),
+                cache_hit: false,
+                latency_ms: Some(latency_ms),
+                request_id: Some(&request_id),
+                extra: Some(db::UsageExtra {
                     cached_tokens: res.usage.cached_tokens,
                     reasoning_tokens: res.usage.reasoning_tokens,
                     est_cost: 0.0,
@@ -302,13 +323,15 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
                     cache_saved_cost: 0.0,
                     api_source: Some("proxy".to_string()),
                 }),
-            );
-            db::upsert_model_task_score_signal(
-                &used_model,
-                &routing_task_type,
-                crate::models::QualitySignalKind::Success,
-            )
-            .ok();
+            });
+            state
+                .db
+                .upsert_model_task_score_signal(
+                    &used_model,
+                    &routing_task_type,
+                    crate::models::QualitySignalKind::Success,
+                )
+                .ok();
 
             let id = new_completion_id();
             let created = now_secs();
@@ -328,7 +351,9 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
         }
         Err(e) => {
             if decision_id > 0 {
-                let _ = db::update_routing_decision_outcome(decision_id, "failed");
+                let _ = state
+                    .db
+                    .update_routing_decision_outcome(decision_id, "failed");
             }
             let msg = e.to_string();
             if req.stream.unwrap_or(false) {
@@ -338,14 +363,19 @@ pub async fn chat_completions(headers: HeaderMap, Json(req): Json<OpenAiChatRequ
                     error_body(&msg, "server_error", "upstream_failure")
                 ))
             } else {
-                error_response(StatusCode::BAD_GATEWAY, &msg, "server_error", "upstream_failure")
+                error_response(
+                    StatusCode::BAD_GATEWAY,
+                    &msg,
+                    "server_error",
+                    "upstream_failure",
+                )
             }
         }
     }
 }
 
 /// `GET /v1/models`：激活模型列表（`auto` 恒在首位，方便客户端直接选用）。
-pub async fn models_list(headers: HeaderMap) -> Response {
+pub async fn models_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if !bearer_ok(&headers, proxy_token().as_deref()) {
         return error_response(
             StatusCode::UNAUTHORIZED,
@@ -354,7 +384,7 @@ pub async fn models_list(headers: HeaderMap) -> Response {
             "invalid_api_key",
         );
     }
-    let models: Vec<Model> = match db::list_models(true) {
+    let models: Vec<Model> = match state.db.list_models(true) {
         Ok(m) => m,
         Err(e) => {
             return error_response(
@@ -407,7 +437,10 @@ mod tests {
         assert!(bearer_ok(&h, Some("secret123")));
         assert!(!bearer_ok(&h, Some("other")));
         assert!(!bearer_ok(&headers_with(None), Some("secret123")));
-        assert!(!bearer_ok(&headers_with(Some("secret123")), Some("secret123"))); // 缺 Bearer 前缀
+        assert!(!bearer_ok(
+            &headers_with(Some("secret123")),
+            Some("secret123")
+        )); // 缺 Bearer 前缀
     }
 
     #[test]

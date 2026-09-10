@@ -40,19 +40,21 @@ fn log_file(name: &str) -> std::path::PathBuf {
 fn attach_log(c: &mut Command, log_name: &str) {
     let path = log_file(log_name);
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
-    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(f) => {
-            match f.try_clone() {
-                Ok(fe) => {
-                    c.stdout(Stdio::from(f));
-                    c.stderr(Stdio::from(fe));
-                }
-                Err(_) => {
-                    c.stdout(Stdio::from(f));
-                    c.stderr(Stdio::null());
-                }
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(f) => match f.try_clone() {
+            Ok(fe) => {
+                c.stdout(Stdio::from(f));
+                c.stderr(Stdio::from(fe));
             }
-        }
+            Err(_) => {
+                c.stdout(Stdio::from(f));
+                c.stderr(Stdio::null());
+            }
+        },
         Err(_) => {
             c.stdout(Stdio::null());
             c.stderr(Stdio::null());
@@ -68,7 +70,8 @@ fn spawn(binary: &str, args: &[&str], log: &str, cwd: Option<&str>) -> Result<Ch
         c.current_dir(dir);
     }
     attach_log(&mut c, log);
-    c.spawn().map_err(|e| AppError::Process(format!("failed to spawn {binary}: {e}")))
+    c.spawn()
+        .map_err(|e| AppError::Process(format!("failed to spawn {binary}: {e}")))
 }
 
 // ── Python AI micro-service ──
@@ -108,7 +111,11 @@ pub async fn start_ai() -> Result<Option<Child>> {
     let port = config::ai_port().to_string();
 
     // 1. PyInstaller bundle（onedir：入口二进制 + _internal/；Windows 入口名带 .exe）
-    let exe_name = if cfg!(windows) { "ai-service.exe" } else { "ai-service" };
+    let exe_name = if cfg!(windows) {
+        "ai-service.exe"
+    } else {
+        "ai-service"
+    };
     let bundled = install_dir.join("resources/ai-service").join(exe_name);
     if bundled.exists() && bundled.is_file() {
         let child = spawn(
@@ -195,8 +202,12 @@ async fn http_get(url: &str, timeout_secs: u64) -> String {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .build();
-    let Ok(client) = client else { return String::new() };
-    let Ok(resp) = client.get(url).send().await else { return String::new() };
+    let Ok(client) = client else {
+        return String::new();
+    };
+    let Ok(resp) = client.get(url).send().await else {
+        return String::new();
+    };
     resp.text().await.unwrap_or_default()
 }
 

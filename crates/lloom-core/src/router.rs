@@ -6,7 +6,6 @@
 //! Python 侧纯执行，Rust 单一决策。
 
 use crate::ai_client::ModelSpec;
-use crate::db;
 use crate::models::{Model, RoutingDecision, RoutingPolicy};
 use crate::pricing::{PriceSpec, ZoneResolver};
 use regex::Regex;
@@ -14,7 +13,13 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const VALID_TASK_TYPES: [&str; 5] = ["simple_qa", "general", "coding", "math_logic", "complex_reasoning"];
+const VALID_TASK_TYPES: [&str; 5] = [
+    "simple_qa",
+    "general",
+    "coding",
+    "math_logic",
+    "complex_reasoning",
+];
 
 // ── Regex rules (priority: complex > coding > math > simple_qa) ──
 
@@ -58,7 +63,12 @@ fn task_rules() -> &'static Vec<(&'static str, Vec<Regex>)> {
         rules
             .iter()
             .map(|(name, pats)| {
-                (*name, pats.iter().map(|p| Regex::new(p).expect("valid rule regex")).collect())
+                (
+                    *name,
+                    pats.iter()
+                        .map(|p| Regex::new(p).expect("valid rule regex"))
+                        .collect(),
+                )
             })
             .collect()
     })
@@ -92,7 +102,8 @@ pub fn is_complex(query: &str) -> bool {
     if query.chars().count() > 100 {
         return true;
     }
-    let sentences: Vec<&str> = query.split(['。', '！', '？', '.', '!', '?'])
+    let sentences: Vec<&str> = query
+        .split(['。', '！', '？', '.', '!', '?'])
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
@@ -272,7 +283,10 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
             continue;
         }
         if m.capability_tier < tier_req {
-            rejected.push(format!("{}: tier{} < 需求{tier_req}", m.name, m.capability_tier));
+            rejected.push(format!(
+                "{}: tier{} < 需求{tier_req}",
+                m.name, m.capability_tier
+            ));
             continue;
         }
         if m.context_window > 0 && input.est_in_tokens + input.est_out_tokens > m.context_window {
@@ -285,7 +299,15 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
         let ec = input
             .price_specs
             .get(&(m.provider_name().to_string(), m.name.clone()))
-            .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, cost_epoch(input), input.zones))
+            .map(|s| {
+                s.est_cost(
+                    hit_of(input, m),
+                    input.est_in_tokens,
+                    input.est_out_tokens,
+                    cost_epoch(input),
+                    input.zones,
+                )
+            })
             .unwrap_or(0.0);
         // P5.a protect：仅本地免费或零成本模型（预算耗尽推本地 Ollama 的最后一档）。
         if input.budget_tier == "protect" && !m.is_local() && ec > 0.0 {
@@ -350,7 +372,11 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
             c.score += 0.3; // PR-x pinned 强先验奖励
         }
     }
-    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let primary = candidates[0].name.clone();
     let chain = candidates[1..]
@@ -376,7 +402,12 @@ fn quality_of(input: &PlanInput, m: &Model) -> f64 {
 
 /// PR-5 §5.1：model → 缓存命中率（缺省 0，不偏袒）。
 fn hit_of(input: &PlanInput, m: &Model) -> f64 {
-    input.hit_rate.get(&m.name).copied().unwrap_or(0.0).clamp(0.0, 1.0)
+    input
+        .hit_rate
+        .get(&m.name)
+        .copied()
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0)
 }
 
 /// PR-5 §5.2：会话亲和加分——仅缓存敏感通道（spec 有 cache_read 区分）且命中本会话末模型时 +0.05。
@@ -389,7 +420,11 @@ fn sticky_bonus(input: &PlanInput, m: &Model) -> f64 {
         .get(&(m.provider_name().to_string(), m.name.clone()))
         .map(|s| s.cache_read_cost.is_some())
         .unwrap_or(false);
-    if cache_sensitive { 0.05 } else { 0.0 }
+    if cache_sensitive {
+        0.05
+    } else {
+        0.0
+    }
 }
 
 /// PR-8 谷时调度视野：当前高峰（multiplier≥1）且 2 小时内有谷时窗口的渠道，其最早谷时起始时刻。
@@ -429,7 +464,15 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
             input
                 .price_specs
                 .get(&(m.provider_name().to_string(), m.name.clone()))
-                .map(|s| s.est_cost(hit_of(input, m), input.est_in_tokens, input.est_out_tokens, cost_epoch(input), input.zones))
+                .map(|s| {
+                    s.est_cost(
+                        hit_of(input, m),
+                        input.est_in_tokens,
+                        input.est_out_tokens,
+                        cost_epoch(input),
+                        input.zones,
+                    )
+                })
                 .unwrap_or(0.0)
         })
         .collect();
@@ -443,7 +486,11 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
         .zip(ecs.iter())
         .map(|(m, &ec)| {
             let q = quality_of(input, m);
-            let norm_cost = if ec + med_ec > 0.0 { ec / (ec + med_ec) } else { 0.0 };
+            let norm_cost = if ec + med_ec > 0.0 {
+                ec / (ec + med_ec)
+            } else {
+                0.0
+            };
             let norm_latency = 0.0; // P1.a latency 落库后接入
             let mut s = input.policy.quality_weight * q
                 - input.policy.cost_weight * tier_cost_multiplier(input.budget_tier) * norm_cost
@@ -478,12 +525,13 @@ fn now_epoch() -> i64 {
 /// `model` 为 "auto"（分类 + plan() 评分）或显式模型名（direct）。
 /// direct 未注册模型由调用方（server）报错——本函数不伪造 spec。
 pub async fn route(
+    db: &crate::db::Db,
     model: &str,
     user_text: &str,
     classifier: Option<&ModelSpec>,
     last_model: Option<&str>,
 ) -> RoutingDecision {
-    let models = db::list_models(true).unwrap_or_default();
+    let models = db.list_models(true).unwrap_or_default();
     if model != "auto" && model != "auto-route" {
         let stream = models
             .iter()
@@ -504,38 +552,40 @@ pub async fn route(
     let (task_type, method) = classify(user_text, classifier).await;
     let band = band_for(&task_type, user_text);
 
-    let policy = db::get_routing_policy(&task_type)
+    let policy = db
+        .get_routing_policy(&task_type)
         .ok()
         .flatten()
         .unwrap_or_default();
 
     let mut spec_map: HashMap<(String, String), PriceSpec> = HashMap::new();
-    for spec in db::list_price_specs().unwrap_or_default() {
+    for spec in db.list_price_specs().unwrap_or_default() {
         spec_map.insert((spec.provider.clone(), spec.model.clone()), spec);
     }
     let zr = ZoneResolver::new();
-    zr.load(db::list_provider_zones().unwrap_or_default());
+    zr.load(db.list_provider_zones().unwrap_or_default());
 
     let mut quality_override = HashMap::new();
     let mut hit_rate = HashMap::new();
     for m in &models {
-        if let Some(sc) = db::get_model_task_score(&m.name, &task_type).ok().flatten() {
+        if let Some(sc) = db.get_model_task_score(&m.name, &task_type).ok().flatten() {
             if sc.sample_count >= 5 {
                 quality_override.insert(m.name.clone(), sc.ewma_quality.clamp(0.0, 1.0));
             }
         }
     }
     // PR-5 §5.1：真实缓存命中率喂 effective_input_cost（缺省 0 = 不偏袒）
-    for (k, v) in db::model_cache_hit_rate(&task_type) {
+    for (k, v) in db.model_cache_hit_rate(&task_type) {
         hit_rate.insert(k, v);
     }
 
     // est_in 粗估：中英混合 ~0.6 token/字符（编排路径已由 Python 侧 count_tokens 精确传 plan-subtask）。
     // est_out：P5.c 用该 task_type 历史 avg_out_tokens（冷启动 750），替换固定 500。
     let est_in = (user_text.chars().count() as f64 * 0.6) as i64;
-    let est_out = db::task_avg_out_tokens(&task_type).round() as i64;
+    let est_out = db.task_avg_out_tokens(&task_type).round() as i64;
     // P5.a：预算档由全局预算剩余比自动注入（无/未设全局预算 → normal）。
-    let budget_tier = db::global_budget_ratio()
+    let budget_tier = db
+        .global_budget_ratio()
         .map(budget_tier_from_ratio)
         .unwrap_or("normal");
 
@@ -595,14 +645,19 @@ pub async fn route(
 
 /// 按固定编排角色做一次 plan() 决策，返回主模型名所在 PlanOutcome。
 /// 失败时由调用方兜底（回落 models 首模型），不抛业务中断。
-pub fn plan_decision(task_type: &str, models: &[Model]) -> Result<PlanOutcome, PlanError> {
-    plan_for_task(task_type, models, 500, 1000, "normal", false)
+pub fn plan_decision(
+    db: &crate::db::Db,
+    task_type: &str,
+    models: &[Model],
+) -> Result<PlanOutcome, PlanError> {
+    plan_for_task(db, task_type, models, 500, 1000, "normal", false)
 }
 
 /// P4：子任务级/可变预算档 plan——按调用方给的预估 token 与预算档评分路由。
 /// 供 `POST /api/routing/plan-subtask` 使用（Python 每个子任务按其 task_type 独立 plan）；
 /// 无状态，仅为 plan() 的参数化封装。`deferrable` 为 PR-8：true 时按谷价估成本（B 端批/评测接入）。
 pub fn plan_for_task(
+    db: &crate::db::Db,
     task_type: &str,
     models: &[Model],
     est_in_tokens: i64,
@@ -610,29 +665,30 @@ pub fn plan_for_task(
     budget_tier: &str,
     deferrable: bool,
 ) -> Result<PlanOutcome, PlanError> {
-    let policy = db::get_routing_policy(task_type)
+    let policy = db
+        .get_routing_policy(task_type)
         .ok()
         .flatten()
         .unwrap_or_default();
 
     let mut spec_map: HashMap<(String, String), PriceSpec> = HashMap::new();
-    for spec in db::list_price_specs().unwrap_or_default() {
+    for spec in db.list_price_specs().unwrap_or_default() {
         spec_map.insert((spec.provider.clone(), spec.model.clone()), spec);
     }
     let zr = ZoneResolver::new();
-    zr.load(db::list_provider_zones().unwrap_or_default());
+    zr.load(db.list_provider_zones().unwrap_or_default());
 
     let mut quality_override = HashMap::new();
     let mut hit_rate = HashMap::new();
     for m in models {
-        if let Some(sc) = db::get_model_task_score(&m.name, task_type).ok().flatten() {
+        if let Some(sc) = db.get_model_task_score(&m.name, task_type).ok().flatten() {
             if sc.sample_count >= 5 {
                 quality_override.insert(m.name.clone(), sc.ewma_quality.clamp(0.0, 1.0));
             }
         }
     }
     // PR-5 §5.1：真实缓存命中率喂 effective_input_cost
-    for (k, v) in db::model_cache_hit_rate(task_type) {
+    for (k, v) in db.model_cache_hit_rate(task_type) {
         hit_rate.insert(k, v);
     }
 
@@ -783,12 +839,30 @@ mod tests {
 
     fn prices() -> HashMap<(String, String), PriceSpec> {
         let mut m = HashMap::new();
-        m.insert(("dashscope".into(), "qwen3.6-flash".into()), spec("dashscope", "qwen3.6-flash", 1.11e-7, 9e-7));
-        m.insert(("dashscope".into(), "qwen-plus".into()), spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7));
-        m.insert(("dashscope".into(), "deepseek-v3".into()), spec("dashscope", "deepseek-v3", 2.0e-7, 1.1e-6));
-        m.insert(("dashscope".into(), "qwen3.6-plus".into()), spec("dashscope", "qwen3.6-plus", 6.9e-7, 2.8e-6));
-        m.insert(("dashscope".into(), "qwen3-max".into()), spec("dashscope", "qwen3-max", 1.6e-6, 6.4e-6));
-        m.insert(("openai".into(), "gpt-4o".into()), spec("openai", "gpt-4o", 2.5e-6, 1.0e-5));
+        m.insert(
+            ("dashscope".into(), "qwen3.6-flash".into()),
+            spec("dashscope", "qwen3.6-flash", 1.11e-7, 9e-7),
+        );
+        m.insert(
+            ("dashscope".into(), "qwen-plus".into()),
+            spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7),
+        );
+        m.insert(
+            ("dashscope".into(), "deepseek-v3".into()),
+            spec("dashscope", "deepseek-v3", 2.0e-7, 1.1e-6),
+        );
+        m.insert(
+            ("dashscope".into(), "qwen3.6-plus".into()),
+            spec("dashscope", "qwen3.6-plus", 6.9e-7, 2.8e-6),
+        );
+        m.insert(
+            ("dashscope".into(), "qwen3-max".into()),
+            spec("dashscope", "qwen3-max", 1.6e-6, 6.4e-6),
+        );
+        m.insert(
+            ("openai".into(), "gpt-4o".into()),
+            spec("openai", "gpt-4o", 2.5e-6, 1.0e-5),
+        );
         m
     }
 
@@ -798,7 +872,9 @@ mod tests {
         let specs = HashMap::new();
         let policy = RoutingPolicy::default();
         let ctx = Ctx::new();
-        let r = plan(&base_input(&empty, &specs, "general", "medium", &policy, 100, &ctx));
+        let r = plan(&base_input(
+            &empty, &specs, "general", "medium", &policy, 100, &ctx,
+        ));
         assert!(matches!(r, Err(PlanError::NoCandidates { .. })));
     }
 
@@ -817,7 +893,9 @@ mod tests {
             ..Default::default()
         };
         let ctx = Ctx::new();
-        let r = plan(&base_input(&down, &specs, "coding", "hard", &policy, 100, &ctx));
+        let r = plan(&base_input(
+            &down, &specs, "coding", "hard", &policy, 100, &ctx,
+        ));
         match r {
             Err(PlanError::NoCandidates { report, .. }) => assert!(report.contains("health down")),
             other => panic!("expected NoCandidates, got {other:?}"),
@@ -837,7 +915,16 @@ mod tests {
             ..Default::default()
         };
         let ctx = Ctx::new();
-        let out = plan(&base_input(&models, &specs, "simple_qa", "easy", &policy, 100, &ctx)).unwrap();
+        let out = plan(&base_input(
+            &models,
+            &specs,
+            "simple_qa",
+            "easy",
+            &policy,
+            100,
+            &ctx,
+        ))
+        .unwrap();
         // 本地零成本模型胜出（质量 0.45，成本 0）
         assert_eq!(out.primary, "qwen2.5-local");
         assert!(out.fallback_chain.len() <= 2);
@@ -856,7 +943,16 @@ mod tests {
             ..Default::default()
         };
         let ctx = Ctx::new();
-        let out = plan(&base_input(&models, &specs, "complex_reasoning", "hard", &policy, 100, &ctx)).unwrap();
+        let out = plan(&base_input(
+            &models,
+            &specs,
+            "complex_reasoning",
+            "hard",
+            &policy,
+            100,
+            &ctx,
+        ))
+        .unwrap();
         // 三个 tier3（deepseek-v3/qwen3.6-plus/qwen3-max）都过门槛；高质量+低成本的 deepseek-v3 应领先
         assert!(["deepseek-v3", "qwen3.6-plus", "qwen3-max"].contains(&out.primary.as_str()));
         assert!(out.candidates.iter().all(|c| c.capability_tier >= 3));
@@ -874,9 +970,15 @@ mod tests {
             ..Default::default()
         };
         let ctx = Ctx::new();
-        let first = plan(&base_input(&models, &specs, "general", "medium", &policy, 100, &ctx)).unwrap();
+        let first = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 100, &ctx,
+        ))
+        .unwrap();
         models.retain(|m| m.name != first.primary);
-        let second = plan(&base_input(&models, &specs, "general", "medium", &policy, 100, &ctx)).unwrap();
+        let second = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 100, &ctx,
+        ))
+        .unwrap();
         assert_ne!(first.primary, second.primary);
         assert!(
             models.iter().any(|m| m.name == second.primary),
@@ -891,11 +993,16 @@ mod tests {
         let policy = RoutingPolicy::default();
         // 100K 输入：32K 本地被门槛淘汰，但 1M 窗口的 qwen3.6-plus 可接
         let ctx = Ctx::new();
-        let out = plan(&base_input(&models, &specs, "general", "medium", &policy, 100_000, &ctx)).unwrap();
+        let out = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 100_000, &ctx,
+        ))
+        .unwrap();
         assert_ne!(out.primary, "qwen2.5-local");
         // 900K：只剩 qwen3.6-plus 过窗
         models.retain(|m| m.name != "qwen3.6-plus");
-        let r = plan(&base_input(&models, &specs, "general", "medium", &policy, 900_000, &ctx));
+        let r = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 900_000, &ctx,
+        ));
         assert!(matches!(r, Err(PlanError::NoCandidates { .. })));
     }
 
@@ -911,10 +1018,19 @@ mod tests {
         };
         // 10K 输入：gpt-4o ≈$0.03、qwen3-max ≈$0.019 超 cap 被拒；平价模型仍在
         let ctx = Ctx::new();
-        let out = plan(&base_input(&models, &specs, "general", "medium", &policy, 10_000, &ctx)).unwrap();
+        let out = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 10_000, &ctx,
+        ))
+        .unwrap();
         let names: Vec<&str> = out.candidates.iter().map(|c| c.name.as_str()).collect();
-        assert!(!names.contains(&"gpt-4o"), "gpt-4o must be gated by cap: {names:?}");
-        assert!(!names.contains(&"qwen3-max"), "qwen3-max must be gated by cap: {names:?}");
+        assert!(
+            !names.contains(&"gpt-4o"),
+            "gpt-4o must be gated by cap: {names:?}"
+        );
+        assert!(
+            !names.contains(&"qwen3-max"),
+            "qwen3-max must be gated by cap: {names:?}"
+        );
         assert!(!names.contains(&"qwen2.5-local"), "tier1 gated by policy");
     }
 
@@ -935,7 +1051,16 @@ mod tests {
             m.needs_calibration = if m.name == "qwen3.6-plus" { 1 } else { 0 };
         }
         let ctx = Ctx::new();
-        let out = plan(&base_input(&models, &specs, "complex_reasoning", "hard", &policy, 100, &ctx)).unwrap();
+        let out = plan(&base_input(
+            &models,
+            &specs,
+            "complex_reasoning",
+            "hard",
+            &policy,
+            100,
+            &ctx,
+        ))
+        .unwrap();
         assert_ne!(out.primary, "qwen3.6-plus");
     }
 
@@ -959,7 +1084,10 @@ mod tests {
         assert!(out_hard.candidates[0].score.is_infinite());
         // pinned down → 两种模式都回落评分链
         let mut down = models.clone();
-        down.iter_mut().find(|m| m.name == "qwen-plus").unwrap().health_state = "down".to_string();
+        down.iter_mut()
+            .find(|m| m.name == "qwen-plus")
+            .unwrap()
+            .health_state = "down".to_string();
         let input2 = base_input(&down, &specs, "general", "medium", &policy, 100, &ctx);
         let out2 = plan_with_mode(&input2, PinnedMode::Soft).unwrap();
         assert_ne!(out2.primary, "qwen-plus");
@@ -1004,7 +1132,15 @@ mod tests {
         };
         let mut ctx = Ctx::new();
         ctx.quality.insert("deepseek-v3".to_string(), 0.1); // 实测质量崩了
-        let input = base_input(&models, &specs, "complex_reasoning", "hard", &policy, 100, &ctx);
+        let input = base_input(
+            &models,
+            &specs,
+            "complex_reasoning",
+            "hard",
+            &policy,
+            100,
+            &ctx,
+        );
         let out = plan(&input).unwrap();
         assert_ne!(out.primary, "deepseek-v3");
     }
@@ -1110,12 +1246,28 @@ mod tests {
         let ctx = Ctx::new();
         // hard 带：normal 要求 tier≥3，tight 降为 tier≥2 → 便宜的 qwen-plus(tier2) 可入候选
         let normal = {
-            let mut i = base_input(&models, &specs, "complex_reasoning", "hard", &policy, 100, &ctx);
+            let mut i = base_input(
+                &models,
+                &specs,
+                "complex_reasoning",
+                "hard",
+                &policy,
+                100,
+                &ctx,
+            );
             i.budget_tier = "normal";
             plan(&i).unwrap()
         };
         let tight = {
-            let mut i = base_input(&models, &specs, "complex_reasoning", "hard", &policy, 100, &ctx);
+            let mut i = base_input(
+                &models,
+                &specs,
+                "complex_reasoning",
+                "hard",
+                &policy,
+                100,
+                &ctx,
+            );
             i.budget_tier = "tight";
             plan(&i).unwrap()
         };
@@ -1131,7 +1283,10 @@ mod tests {
         let mut specs = prices();
         specs.insert(
             ("dashscope".into(), "qwen-plus".into()),
-            PriceSpec { cache_read_cost: Some(2.22e-8), ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7) },
+            PriceSpec {
+                cache_read_cost: Some(2.22e-8),
+                ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7)
+            },
         );
         let policy = RoutingPolicy::default();
         let ctx = Ctx::new();
@@ -1160,7 +1315,10 @@ mod tests {
         let mut specs = prices();
         specs.insert(
             ("dashscope".into(), "qwen-plus".into()),
-            PriceSpec { cache_read_cost: Some(2.22e-8), ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7) },
+            PriceSpec {
+                cache_read_cost: Some(2.22e-8),
+                ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7)
+            },
         );
         let policy = RoutingPolicy {
             task_type: "general".into(),
@@ -1174,27 +1332,49 @@ mod tests {
         ctx.quality.insert("qwen-plus".into(), 0.56);
         ctx.quality.insert("gpt-4o".into(), 0.60);
         // 无粘性 → 质量稍高的 gpt-4o
-        let no_sticky = plan(&base_input(&models, &specs, "general", "medium", &policy, 100, &ctx)).unwrap();
+        let no_sticky = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 100, &ctx,
+        ))
+        .unwrap();
         assert_eq!(no_sticky.primary, "gpt-4o");
         // 粘上一轮所用 qwen-plus → +0.05 翻转为它（缓存敏感才粘）
         ctx.sticky = Some("qwen-plus".into());
-        let sticky = plan(&base_input(&models, &specs, "general", "medium", &policy, 100, &ctx)).unwrap();
+        let sticky = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 100, &ctx,
+        ))
+        .unwrap();
         assert_eq!(sticky.primary, "qwen-plus");
     }
 
     #[test]
     fn hit_rate_lowers_estimated_cost_in_candidates() {
-        let models: Vec<Model> = registry().into_iter().filter(|m| m.name == "qwen-plus").collect();
+        let models: Vec<Model> = registry()
+            .into_iter()
+            .filter(|m| m.name == "qwen-plus")
+            .collect();
         let mut specs = prices();
         specs.insert(
             ("dashscope".into(), "qwen-plus".into()),
-            PriceSpec { cache_read_cost: Some(2.22e-8), ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7) },
+            PriceSpec {
+                cache_read_cost: Some(2.22e-8),
+                ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7)
+            },
         );
-        let policy = RoutingPolicy { task_type: "general".into(), min_capability_tier: 2, ..Default::default() };
+        let policy = RoutingPolicy {
+            task_type: "general".into(),
+            min_capability_tier: 2,
+            ..Default::default()
+        };
         let mut ctx = Ctx::new();
-        let no_hit = plan(&base_input(&models, &specs, "general", "medium", &policy, 1000, &ctx)).unwrap();
+        let no_hit = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 1000, &ctx,
+        ))
+        .unwrap();
         ctx.hit.insert("qwen-plus".into(), 0.9);
-        let hit = plan(&base_input(&models, &specs, "general", "medium", &policy, 1000, &ctx)).unwrap();
+        let hit = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 1000, &ctx,
+        ))
+        .unwrap();
         assert!(hit.candidates[0].est_cost < no_hit.candidates[0].est_cost);
     }
 
@@ -1225,10 +1405,16 @@ mod tests {
             model("deepseek-v4-pro", "deepseek-official", 3, 131072),
         ];
         let mut specs = HashMap::new();
-        specs.insert(("dashscope".into(), "qwen3-max".into()), spec("dashscope", "qwen3-max", 1.5e-6, 4.0e-6));
+        specs.insert(
+            ("dashscope".into(), "qwen3-max".into()),
+            spec("dashscope", "qwen3-max", 1.5e-6, 4.0e-6),
+        );
         let mut ds = spec("deepseek-official", "deepseek-v4-pro", 2.0e-6, 5.0e-6);
         ds.zone_ref = Some("deepseek".into());
-        specs.insert(("deepseek-official".into(), "deepseek-v4-pro".into()), ds.clone());
+        specs.insert(
+            ("deepseek-official".into(), "deepseek-v4-pro".into()),
+            ds.clone(),
+        );
 
         let policy = RoutingPolicy {
             task_type: "general".into(),
@@ -1264,10 +1450,16 @@ mod tests {
             model("deepseek-v4-pro", "deepseek-official", 3, 131072),
         ];
         let mut specs = HashMap::new();
-        specs.insert(("dashscope".into(), "qwen3-max".into()), spec("dashscope", "qwen3-max", 2.5e-6, 6.0e-6));
+        specs.insert(
+            ("dashscope".into(), "qwen3-max".into()),
+            spec("dashscope", "qwen3-max", 2.5e-6, 6.0e-6),
+        );
         let mut ds = spec("deepseek-official", "deepseek-v4-pro", 1.0e-6, 2.0e-6);
         ds.zone_ref = Some("deepseek".into());
-        specs.insert(("deepseek-official".into(), "deepseek-v4-pro".into()), ds.clone());
+        specs.insert(
+            ("deepseek-official".into(), "deepseek-v4-pro".into()),
+            ds.clone(),
+        );
         let policy = RoutingPolicy {
             task_type: "general".into(),
             min_capability_tier: 2,

@@ -8,11 +8,14 @@
 
 use clap::Parser;
 use lloom_core::config;
-use lloom_core::db;
-use lloom_core::server::{self, AppState, build_router};
+use lloom_core::server::{self, build_router, AppState};
 
 #[derive(Parser, Debug)]
-#[command(name = "lloom-server", version, about = "LLooM 智能路由网关（REST + WebUI）")]
+#[command(
+    name = "lloom-server",
+    version,
+    about = "LLooM 智能路由网关（REST + WebUI）"
+)]
 struct Args {
     /// WebUI/REST 监听端口（默认 7861；同 LLOOM_WEB_PORT）
     #[arg(long)]
@@ -29,7 +32,10 @@ struct Args {
 
 fn main() {
     let install_dir = config::resolve_install_dir();
-    std::env::set_var("LLOOM_INSTALL_DIR", install_dir.to_string_lossy().to_string());
+    std::env::set_var(
+        "LLOOM_INSTALL_DIR",
+        install_dir.to_string_lossy().to_string(),
+    );
 
     // Load `.env` into the process environment so models can resolve API keys/bases
     // and subprocesses inherit them.
@@ -43,18 +49,21 @@ fn main() {
         bind: args.bind,
     });
 
-    if let Err(e) = db::init_db() {
-        eprintln!("[core] db init failed: {e}");
-        std::process::exit(1);
-    }
+    // 连接池 + schema 初始化（原 init_db 的职责已并入 Db::new）。
+    let state = match AppState::new() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[core] db init failed: {e}");
+            std::process::exit(1);
+        }
+    };
 
     // One-time (idempotent) import of legacy JSON conversations into SQLite.
     // Files stay in place as a rollback backup; already-imported ids are skipped.
-    if let Err(e) = lloom_core::conversations::migrate_json_dir() {
+    if let Err(e) = lloom_core::conversations::migrate_json_dir(&state.db) {
         eprintln!("[core] conversation migration failed (non-fatal): {e}");
     }
 
-    let state = AppState::new();
     let state_for_spawn = state.clone();
     let web_port = config::web_port();
     let router = build_router(state.clone());
@@ -92,7 +101,7 @@ fn main() {
             // Background jobs: daily price calibration + always-on probes
             // (PRICING-PLAN §6.2 / §7). Handles are intentionally not held;
             // they die with the process.
-            let _jobs = server::spawn_background_jobs();
+            let _jobs = server::spawn_background_jobs(state_for_spawn.db.clone());
 
             // Graceful shutdown: on SIGINT (Ctrl+C) or SIGTERM (kill/stop-lloom.command),
             // clean up all child processes so no stale AI service / Ollama holds the ports.
@@ -132,7 +141,9 @@ fn main() {
 async fn sigterm() {
     use tokio::signal::unix::{signal, SignalKind};
     match signal(SignalKind::terminate()) {
-        Ok(mut s) => { s.recv().await; }
+        Ok(mut s) => {
+            s.recv().await;
+        }
         Err(_) => {
             // Fallback: never resolve.
             std::future::pending::<()>().await;

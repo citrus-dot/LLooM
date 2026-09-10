@@ -33,15 +33,16 @@ use std::sync::{Arc, Mutex};
 pub struct AppState {
     pub children: Arc<Mutex<Children>>,
     pub started_at: std::time::Instant,
+    pub db: db::Db,
 }
 
 /// 全局时段规则解析器（PRICING-PLAN §3.4）。首次调用时从 provider_zones 表加载，
 /// 规则由迁移脚本/overlay 维护，运行期不需要热刷新（校准 job 属 PR-6）。
 static ZONES: std::sync::OnceLock<pricing::ZoneResolver> = std::sync::OnceLock::new();
-pub fn zone_resolver() -> &'static pricing::ZoneResolver {
+pub fn zone_resolver(db: &db::Db) -> &'static pricing::ZoneResolver {
     ZONES.get_or_init(|| {
         let zr = pricing::ZoneResolver::new();
-        if let Ok(zones) = db::list_provider_zones() {
+        if let Ok(zones) = db.list_provider_zones() {
             zr.load(zones);
         }
         zr
@@ -58,10 +59,15 @@ pub fn now_epoch_secs() -> i64 {
 
 /// 按模型名查 PriceSpec 并计算实际成本（无 PriceSpec → 0，本地/未登记模型）。
 /// 返回 (act_cost, zone_multiplier)。
-pub(crate) fn priced_usage(provider: &str, model: &str, usage: &pricing::UsageDetail) -> (f64, f64) {
-    match db::get_price_spec(provider, model) {
+pub(crate) fn priced_usage(
+    db: &db::Db,
+    provider: &str,
+    model: &str,
+    usage: &pricing::UsageDetail,
+) -> (f64, f64) {
+    match db.get_price_spec(provider, model) {
         Ok(Some(ps)) => {
-            let zr = zone_resolver();
+            let zr = zone_resolver(db);
             let t = now_epoch_secs();
             (ps.actual_cost(usage, t, zr), ps.zone_multiplier(t, zr))
         }
@@ -77,11 +83,12 @@ pub struct Children {
 }
 
 impl AppState {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
             children: Arc::new(Mutex::new(Children::default())),
             started_at: std::time::Instant::now(),
-        }
+            db: db::Db::new(config::db_path())?,
+        })
     }
 }
 
@@ -89,7 +96,8 @@ impl AppState {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(self.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         (status, Json(json!({ "error": self.to_string() }))).into_response()
     }
 }
@@ -178,99 +186,133 @@ async fn health() -> Json<Value> {
 
 // ── Models ──
 
-async fn list_models(Query(q): Query<Value>) -> Result<Json<Value>> {
+async fn list_models(State(state): State<AppState>, Query(q): Query<Value>) -> Result<Json<Value>> {
     let active_only = q
         .get("active_only")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    let dtos: Vec<model_dto::ModelDto> =
-        db::list_models(active_only)?.iter().map(model_dto::ModelDto::from).collect();
+    let dtos: Vec<model_dto::ModelDto> = state
+        .db
+        .list_models(active_only)?
+        .iter()
+        .map(model_dto::ModelDto::from)
+        .collect();
     Ok(Json(json!({ "models": dtos })))
 }
 
-async fn register_model(Json(c): Json<model_dto::ModelCreate>) -> Result<Json<Value>> {
+async fn register_model(
+    State(state): State<AppState>,
+    Json(c): Json<model_dto::ModelCreate>,
+) -> Result<Json<Value>> {
     let m = Model::try_from(c)?;
-    let id = db::insert_model(&m)?;
-    Ok(Json(json!({ "id": id, "name": m.name })))
+    state.db.insert_model(&m)?;
+    let saved = state.db.find_model(&m.name, true)?;
+    Ok(Json(json!({ "id": saved.id, "name": m.name })))
 }
 
-async fn get_model(Path(name): Path<String>) -> Result<Json<model_dto::ModelDto>> {
-    Ok(Json(model_dto::ModelDto::from(&db::get_model(&name)?)))
+async fn get_model(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<model_dto::ModelDto>> {
+    Ok(Json(model_dto::ModelDto::from(
+        &state.db.find_model(&name, true)?,
+    )))
 }
 
 async fn update_model(
+    State(state): State<AppState>,
     Path(name): Path<String>,
     Json(patch): Json<model_dto::ModelPatch>,
 ) -> Result<Json<Value>> {
-    let existing = db::get_model_any(&name)?;
+    let existing = state.db.find_model(&name, false)?;
     let after = patch.resolve_against(&existing)?;
-    let updates = model_dto::ModelPatch::diff_updates(&existing, &after);
-    if !updates.is_empty() && !db::update_model(&name, &updates)? {
-        return Err(AppError::NotFound(format!("model '{name}'")));
-    }
+    state.db.upsert_model(&after)?;
     Ok(Json(json!({ "updated": true })))
 }
 
-async fn delete_model(Path(name): Path<String>) -> Result<Json<Value>> {
-    if !db::delete_model(&name)? {
-        return Err(AppError::NotFound(format!("model '{name}'")));
-    }
+async fn delete_model(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>> {
+    state.db.find_model(&name, false)?;
+    state.db.deactivate_model(&name)?;
     Ok(Json(json!({ "deleted": true })))
 }
 
 // ── Usage / Budgets ──
 
-async fn get_usage(Query(q): Query<Value>) -> Result<Json<Value>> {
+async fn get_usage(State(state): State<AppState>, Query(q): Query<Value>) -> Result<Json<Value>> {
     let model_name = q.get("model_name").and_then(|v| v.as_str());
     let user_id = q.get("user_id").and_then(|v| v.as_str());
     let since = q.get("since").and_then(|v| v.as_str());
-    let stats = db::get_usage_stats(model_name, user_id, since)?;
-    let total = db::get_total_spend(user_id, model_name, since)?;
+    let stats = state.db.get_usage_stats(model_name, user_id, since)?;
+    let total = state.db.get_total_spend(user_id, model_name, since)?;
     let total_cache_saved: f64 = stats.iter().map(|s| s.cache_saved).sum();
-    Ok(Json(json!({ "usage": stats, "total_spend": total, "total_cache_saved": total_cache_saved })))
+    Ok(Json(
+        json!({ "usage": stats, "total_spend": total, "total_cache_saved": total_cache_saved }),
+    ))
 }
 
-async fn list_budgets() -> Result<Json<Value>> {
-    Ok(Json(json!({ "budgets": db::list_budgets()? })))
+async fn list_budgets(State(state): State<AppState>) -> Result<Json<Value>> {
+    Ok(Json(json!({ "budgets": state.db.list_budgets()? })))
 }
 
-async fn set_budget(Json(req): Json<Budget>) -> Result<Json<Value>> {
-    db::upsert_budget(
-        &req.scope,
-        &req.scope_id,
-        req.max_budget,
-        &req.duration,
-        req.scope_task_type.as_deref(),
-        req.soft_limit_ratio,
-        req.action_on_exceed.as_deref(),
-    )?;
+async fn set_budget(State(state): State<AppState>, Json(req): Json<Budget>) -> Result<Json<Value>> {
+    state.db.upsert_budget(&db::BudgetInput {
+        scope: &req.scope,
+        scope_id: &req.scope_id,
+        max_budget: req.max_budget,
+        duration: &req.duration,
+        scope_task_type: req.scope_task_type.as_deref(),
+        soft_limit_ratio: req.soft_limit_ratio,
+        action_on_exceed: req.action_on_exceed.as_deref(),
+    })?;
     Ok(Json(json!({ "set": true })))
 }
 
-async fn delete_budget(Query(q): Query<Value>) -> Result<Json<Value>> {
+async fn delete_budget(
+    State(state): State<AppState>,
+    Query(q): Query<Value>,
+) -> Result<Json<Value>> {
     let scope = q.get("scope").and_then(|v| v.as_str()).unwrap_or("");
     let scope_id = q.get("scope_id").and_then(|v| v.as_str()).unwrap_or("");
-    let deleted = db::delete_budget(scope, scope_id)?;
+    let deleted = state.db.delete_budget(scope, scope_id)?;
     Ok(Json(json!({ "deleted": deleted })))
 }
 
-async fn check_budget(Query(q): Query<Value>) -> Result<Json<Value>> {
+async fn check_budget(
+    State(state): State<AppState>,
+    Query(q): Query<Value>,
+) -> Result<Json<Value>> {
     let scope = q.get("scope").and_then(|v| v.as_str()).unwrap_or("");
     let scope_id = q.get("scope_id").and_then(|v| v.as_str()).unwrap_or("");
-    let prospective = q.get("prospective_cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let budget = db::get_budget(scope, scope_id)?;
+    let prospective = q
+        .get("prospective_cost")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let budget = state.db.get_budget(scope, scope_id)?;
     let (within, spent) = match &budget {
         Some(b) => {
-            let spent = db::get_total_spend(
-                if scope == "user" { Some(scope_id) } else { None },
-                if scope == "model" { Some(scope_id) } else { None },
+            let spent = state.db.get_total_spend(
+                if scope == "user" {
+                    Some(scope_id)
+                } else {
+                    None
+                },
+                if scope == "model" {
+                    Some(scope_id)
+                } else {
+                    None
+                },
                 None,
             )?;
             ((spent + prospective) <= b.max_budget, spent)
         }
         None => (true, 0.0),
     };
-    Ok(Json(json!({ "within_budget": within, "budget": budget, "spent": spent })))
+    Ok(Json(
+        json!({ "within_budget": within, "budget": budget, "spent": spent }),
+    ))
 }
 
 // ── Config / Stats ──
@@ -303,14 +345,16 @@ async fn get_config() -> Json<Value> {
 
 async fn update_config(Json(req): Json<ConfigUpdate>) -> Result<Json<Value>> {
     write_env(&req.updates)?;
-    Ok(Json(json!({ "updated": req.updates.keys().collect::<Vec<_>>() })))
+    Ok(Json(
+        json!({ "updated": req.updates.keys().collect::<Vec<_>>() }),
+    ))
 }
 
-async fn get_stats() -> Result<Json<Value>> {
+async fn get_stats(State(state): State<AppState>) -> Result<Json<Value>> {
     Ok(Json(json!({
-        "model_count": db::list_models(true)?.len(),
-        "total_spend": db::get_total_spend(None, None, None)?,
-        "model_spend": db::get_usage_stats(None, None, None)?,
+        "model_count": state.db.list_models(true)?.len(),
+        "total_spend": state.db.get_total_spend(None, None, None)?,
+        "model_spend": state.db.get_usage_stats(None, None, None)?,
         "routing_stats": {},
         "cache_enabled": true,
     })))
@@ -318,35 +362,48 @@ async fn get_stats() -> Result<Json<Value>> {
 
 // ── Conversations ──
 
-async fn list_conversations() -> Result<Json<Value>> {
-    Ok(Json(json!({ "conversations": conversations::list()? })))
+async fn list_conversations(State(state): State<AppState>) -> Result<Json<Value>> {
+    Ok(Json(
+        json!({ "conversations": conversations::list(&state.db)? }),
+    ))
 }
 
-async fn get_conversation(Path(id): Path<String>) -> Result<Json<Value>> {
-    Ok(Json(conversations::load(&id)?))
+async fn get_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>> {
+    Ok(Json(conversations::load(&state.db, &id)?))
 }
 
-async fn save_conversation(Json(req): Json<ConversationSave>) -> Result<Json<Value>> {
-    let id = conversations::save_or_create(&req.id, &req.title, &req.messages)?;
+async fn save_conversation(
+    State(state): State<AppState>,
+    Json(req): Json<ConversationSave>,
+) -> Result<Json<Value>> {
+    let id = conversations::save_or_create(&state.db, &req.id, &req.title, &req.messages)?;
     Ok(Json(json!({ "id": id, "saved": true })))
 }
 
-async fn delete_conversation(Path(id): Path<String>) -> Result<Json<Value>> {
-    conversations::delete(&id)?;
+async fn delete_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>> {
+    conversations::delete(&state.db, &id)?;
     Ok(Json(json!({ "deleted": true })))
 }
 
 async fn rename_conversation(
+    State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<ConversationRename>,
 ) -> Result<Json<Value>> {
-    conversations::rename(&id, &req.title)?;
+    conversations::rename(&state.db, &id, &req.title)?;
     Ok(Json(json!({ "id": id, "renamed": true })))
 }
 
 /// Append a single message (phase 1 of two-phase persistence — the user
 /// message and the assistant placeholder land on disk BEFORE the LLM call).
 async fn append_conversation_message(
+    State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<MessageAppend>,
 ) -> Result<Json<Value>> {
@@ -369,33 +426,55 @@ async fn append_conversation_message(
         }
     }
     let (conv_id, seq) =
-        conversations::append_message(&id, &role, &req.content, req.meta.as_ref())?;
+        conversations::append_message(&state.db, &id, &role, &req.content, req.meta.as_ref())?;
     Ok(Json(json!({ "id": conv_id, "seq": seq, "appended": true })))
 }
 
 /// Fill in / update an existing message (phase 2 — assistant reply + metadata
 /// after the stream completes, error text on failure).
 async fn update_conversation_message(
+    State(state): State<AppState>,
     Path((id, seq)): Path<(String, i64)>,
     Json(req): Json<MessageUpdate>,
 ) -> Result<Json<Value>> {
-    conversations::update_message(&id, seq, req.content.as_deref(), req.meta.as_ref())?;
+    conversations::update_message(
+        &state.db,
+        &id,
+        seq,
+        req.content.as_deref(),
+        req.meta.as_ref(),
+    )?;
     Ok(Json(json!({ "id": id, "seq": seq, "updated": true })))
 }
 
 // ── Chat / Orchestrate (SSE) ──
 
+/// P3：按 `primary` + `fallback_chain` 顺序故障转移的入参。
+pub(crate) struct FailoverRequest<'a> {
+    pub models: &'a [Model],
+    pub task_type: &'a str,
+    pub primary: &'a str,
+    pub fallback_chain: &'a [String],
+    pub messages: &'a [Value],
+    pub max_tokens: i64,
+    pub temperature: f64,
+}
+
 /// P3：按 `primary` + `fallback_chain` 顺序故障转移。成功即返回，对失败模型打健康哨点；
 /// 只有实际「跳升」到下一个候选时才给失败模型记 Escalation 成效信号（降级已有代价）。
 pub(crate) async fn chat_with_failover(
-    models: &[Model],
-    task_type: &str,
-    primary: &str,
-    fallback_chain: &[String],
-    messages: &[Value],
-    max_tokens: i64,
-    temperature: f64,
+    db: &db::Db,
+    req: FailoverRequest<'_>,
 ) -> Result<(ai_client::ChatResult, String)> {
+    let FailoverRequest {
+        models,
+        task_type,
+        primary,
+        fallback_chain,
+        messages,
+        max_tokens,
+        temperature,
+    } = req;
     let mut try_names: Vec<String> = Vec::with_capacity(1 + fallback_chain.len());
     try_names.push(primary.to_string());
     try_names.extend(fallback_chain.iter().cloned());
@@ -412,17 +491,21 @@ pub(crate) async fn chat_with_failover(
         let spec = ModelSpec::from(m);
         match ai_client::chat(&spec, messages, max_tokens, temperature).await {
             Ok(res) => {
-                crate::health::record_outcome(name, true);
+                crate::health::record_outcome(db, name, true);
                 // 跳升到非主选：给所有先前失败模型记一次 escalation（副作用小，但真实代价信号）
                 for failed in try_names.iter().take(idx) {
                     if failed != name {
-                        let _ = db::upsert_model_task_score_signal(failed, task_type, QualitySignalKind::Escalation);
+                        let _ = db.upsert_model_task_score_signal(
+                            failed,
+                            task_type,
+                            QualitySignalKind::Escalation,
+                        );
                     }
                 }
                 return Ok((res, name.clone()));
             }
             Err(e) => {
-                crate::health::record_outcome(name, false);
+                crate::health::record_outcome(db, name, false);
                 if first_err.is_none() {
                     first_err = Some(e.to_string());
                 }
@@ -430,10 +513,12 @@ pub(crate) async fn chat_with_failover(
             }
         }
     }
-    Err(AppError::AiService(first_err.unwrap_or_else(|| "所有候选模型均调用失败".into())))
+    Err(AppError::AiService(
+        first_err.unwrap_or_else(|| "所有候选模型均调用失败".into()),
+    ))
 }
 
-async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
+async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -> Response {
     let user_text = security::extract_user_text(&req.messages);
     let sec = security::check(&user_text, true, true);
     if sec.blocked {
@@ -455,7 +540,7 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
     };
 
     // Routing: regex tier + domain enhancement + plan() scoring (P0.d)
-    let models = match db::list_models(true) {
+    let models = match state.db.list_models(true) {
         Ok(m) => m,
         Err(e) => return err_response(e),
     };
@@ -466,8 +551,9 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
     let last_model = req
         .conversation_id
         .as_deref()
-        .and_then(|cid| db::recent_conversation_model(cid).ok().flatten());
+        .and_then(|cid| state.db.recent_conversation_model(cid).ok().flatten());
     let mut routing = router::route(
+        &state.db,
         req.model.as_deref().unwrap_or("auto"),
         &user_text,
         classifier.as_ref(),
@@ -505,22 +591,26 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
             .unwrap_or(0)
     );
     let decision_id = if routing.method != "direct" {
-        db::insert_routing_decision(
-            &request_id,
-            &routing.task_type,
-            &routing.band,
-            &serde_json::to_string(&json!({
-                "method": routing.method,
-                "sr_domain": sr_domain,
-                "budget_tier": routing.budget_tier,
-            }))
-            .unwrap_or_default(),
-            &serde_json::to_string(&routing.fallback_chain).unwrap_or_default(),
-            &routing.model,
-            &routing.fallback_chain.join(","),
-            routing_ms,
-        )
-        .unwrap_or(0)
+        let signals_json = serde_json::to_string(&json!({
+            "method": routing.method,
+            "sr_domain": sr_domain,
+            "budget_tier": routing.budget_tier,
+        }))
+        .unwrap_or_default();
+        let candidates_json = serde_json::to_string(&routing.fallback_chain).unwrap_or_default();
+        state
+            .db
+            .insert_routing_decision(&db::RoutingDecisionRecord {
+                request_id: &request_id,
+                task_type: &routing.task_type,
+                band: &routing.band,
+                signals_json: &signals_json,
+                candidates_json: &candidates_json,
+                selected: &routing.model,
+                fallback_chain: &routing.fallback_chain.join(","),
+                routing_ms,
+            })
+            .unwrap_or(0)
     } else {
         0
     };
@@ -539,19 +629,24 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
     // P3：按 primary + fallback_chain 故障转移（失败自动打健康哨点并跳升重试）
     let chat_start = std::time::Instant::now();
     let tail = match chat_with_failover(
-        &models,
-        &routing_task_type,
-        &routing.model,
-        &routing.fallback_chain,
-        &processed_messages,
-        500,
-        0.3,
+        &state.db,
+        FailoverRequest {
+            models: &models,
+            task_type: &routing_task_type,
+            primary: &routing.model,
+            fallback_chain: &routing.fallback_chain,
+            messages: &processed_messages,
+            max_tokens: 500,
+            temperature: 0.3,
+        },
     )
     .await
     {
         Ok((res, used_model)) => {
             if decision_id > 0 {
-                let _ = db::update_routing_decision_outcome(decision_id, "success");
+                let _ = state
+                    .db
+                    .update_routing_decision_outcome(decision_id, "success");
             }
             // 实际响应模型的 provider 可能因 fallback 与主选不同（逐模型定位真源）
             let provider = models
@@ -563,18 +658,18 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
             // （PR-5 落地前 est_cost 传 0；task_type 用路由分类结果）
             // P1.a：只记成功路径；失败/重试走 routing_decisions.outcome。
             let latency_ms = chat_start.elapsed().as_secs_f64() * 1000.0;
-            let (act_cost, zm) = priced_usage(provider, &used_model, &res.usage);
-            let _ = db::insert_usage(
-                &used_model,
-                "default",
-                res.usage.prompt_tokens,
-                res.usage.completion_tokens,
-                act_cost,
-                Some(&routing_task_type),
-                false,
-                Some(latency_ms),
-                Some(&request_id),
-                Some(&db::UsageExtra {
+            let (act_cost, zm) = priced_usage(&state.db, provider, &used_model, &res.usage);
+            let _ = state.db.insert_usage(&db::UsageRecord {
+                model_name: &used_model,
+                user_id: "default",
+                input_tokens: res.usage.prompt_tokens,
+                output_tokens: res.usage.completion_tokens,
+                cost: act_cost,
+                task_type: Some(&routing_task_type),
+                cache_hit: false,
+                latency_ms: Some(latency_ms),
+                request_id: Some(&request_id),
+                extra: Some(db::UsageExtra {
                     cached_tokens: res.usage.cached_tokens,
                     reasoning_tokens: res.usage.reasoning_tokens,
                     est_cost: 0.0,
@@ -585,12 +680,23 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
                     cache_saved_cost: 0.0,
                     api_source: None,
                 }),
-            );
+            });
             // P1.c：正常完成信号 → 该 模型×任务 的 ewma_quality 上修（+0.7）
-            db::upsert_model_task_score_signal(&used_model, &routing_task_type, QualitySignalKind::Success)
+            state
+                .db
+                .upsert_model_task_score_signal(
+                    &used_model,
+                    &routing_task_type,
+                    QualitySignalKind::Success,
+                )
                 .ok();
             // P1.d：按 shadow_ratio 概率后台采样双跑，积累 AIQ 成本—质量样本（不改返回）。
-            maybe_shadow_sample(models.clone(), routing_task_type.clone(), user_text.clone());
+            maybe_shadow_sample(
+                state.db.clone(),
+                models.clone(),
+                routing_task_type.clone(),
+                user_text.clone(),
+            );
             format!(
                 "data: {}\n\n",
                 json!({
@@ -606,25 +712,36 @@ async fn chat_stream(Json(req): Json<ChatBody>) -> Response {
         }
         Err(e) => {
             if decision_id > 0 {
-                let _ = db::update_routing_decision_outcome(decision_id, "failed");
+                let _ = state
+                    .db
+                    .update_routing_decision_outcome(decision_id, "failed");
             }
-            format!("data: {}\n\n", json!({ "error": true, "detail": e.to_string() }))
+            format!(
+                "data: {}\n\n",
+                json!({ "error": true, "detail": e.to_string() })
+            )
         }
     };
 
     Response::builder()
-        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        )
         .body(Body::from(format!("{head}{tail}")))
         .unwrap()
 }
 
-async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
+async fn orchestrate_stream(
+    State(state): State<AppState>,
+    Json(req): Json<OrchestrateBody>,
+) -> Response {
     let sec = security::check(&req.query, true, true);
     if sec.blocked {
         return blocked_response(&sec);
     }
 
-    let models = match db::list_models(true) {
+    let models = match state.db.list_models(true) {
         Ok(m) => m,
         Err(e) => return err_response(e),
     };
@@ -633,17 +750,20 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
     // _cache_ready flag (set only after /v1/cache/init succeeds), so passing a
     // non-empty path here is safe — it will NOT trigger a download unless the
     // user has explicitly pre-initialized the embedding model.
-    let cache_dir = config::data_dir().join("chroma").to_string_lossy().to_string();
+    let cache_dir = config::data_dir()
+        .join("chroma")
+        .to_string_lossy()
+        .to_string();
 
     // Server-side context building: load history + rolling summary from the
     // conversation store. Client-sent `history` is the legacy fallback (CLI/TUI).
     let (history, conversation_id, summary, summary_upto) = match &req.conversation_id {
         Some(cid) => {
-            let h = match conversations::load_history_for_orchestrate(cid, &req.query) {
+            let h = match conversations::load_history_for_orchestrate(&state.db, cid, &req.query) {
                 Ok(h) => h,
                 Err(e) => return err_response(e),
             };
-            let (s, upto) = conversations::get_summary(cid).unwrap_or((None, 0));
+            let (s, upto) = conversations::get_summary(&state.db, cid).unwrap_or((None, 0));
             (h, Some(cid.clone()), s, upto)
         }
         None => (req.history.clone(), None, None, 0),
@@ -664,7 +784,7 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                 return p.to_string();
             }
         }
-        router::plan_decision(role, &models)
+        router::plan_decision(&state.db, role, &models)
             .ok()
             .map(|o| o.primary)
             .or_else(|| specs.first().map(|s| s.name.clone()))
@@ -677,6 +797,7 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
     });
 
     let events = match ai_client::orchestrate_stream(
+        &state.db,
         &req.query,
         &history,
         req.sr_domain.as_deref().unwrap_or(""),
@@ -708,6 +829,8 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
     });
     // P1.d：编排主 query 副本，供闭包内按 shadow_ratio 后台采样双跑（不改返回）。
     let shadow_query = req.query.clone();
+    // 流式闭包内需要 DB 句柄（Db 是连接池的轻量 clone）。
+    let db = state.db.clone();
     let body = Body::from_stream(events.map(move |ev| {
         // Persist cache hit/miss for hit-rate stats + threshold calibration.
         // Pure side-effect; failures are non-fatal (cache is best-effort).
@@ -720,20 +843,23 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     obj.get("text").and_then(|v| v.as_str()),
                     obj.get("upto").and_then(|v| v.as_i64()),
                 ) {
-                    let _ = conversations::set_summary(cid, text, upto);
+                    let _ = conversations::set_summary(&db, cid, text, upto);
                 }
             }
             // Semantic-cache calibration: log whenever the Python side reports a
             // similarity (hit or miss). Pure side-effect; failures non-fatal.
             if let Some(sim) = obj.get("cache_sim").and_then(|v| v.as_f64()) {
-                let is_hit = obj.get("cache_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+                let is_hit = obj
+                    .get("cache_hit")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let decision = if is_hit { "hit" } else { "miss" };
                 let model = obj
                     .get("model")
                     .and_then(|v| v.as_str())
                     .unwrap_or("default")
                     .to_string();
-                let _ = db::insert_cache_calibration(sim, decision, &model, None, "passive");
+                let _ = db.insert_cache_calibration(sim, decision, &model, None, "passive");
             }
             // Real usage accounting (PRICING-PLAN PR-1 + ROUTING P1.a): one row
             // per LLM 动作的真实用量，按事件携带的 role（task_type）细分——
@@ -757,10 +883,19 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown")
                     .to_string();
-                let in_tok = obj.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                let out_tok = obj.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                let in_tok = obj
+                    .get("input_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let out_tok = obj
+                    .get("output_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
                 // task_done 事件不带 cached/reasoning/field_missing，走 0 默认
-                let is_hit = obj.get("cache_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+                let is_hit = obj
+                    .get("cache_hit")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 // duration 为秒（Python 计时），换算毫秒落库
                 let latency_ms = obj
                     .get("duration")
@@ -779,24 +914,24 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                     cache_creation_tokens: 0,
                     field_missing: false,
                 };
-                let (mut act_cost, zm) = priced_usage(provider, &model, &usage_detail);
+                let (mut act_cost, zm) = priced_usage(&db, provider, &model, &usage_detail);
                 // P2.b 语义缓存命中省下的金额：未真正调用供应商费用为 0，但本应花费的 act_cost 保留，
                 // 用作「缓存为您节省 ¥X」的账实来源（cost 仍记 0）。
                 let cache_saved_cost = if is_hit { act_cost } else { 0.0 };
                 if is_hit {
                     act_cost = 0.0;
                 }
-                let _ = db::insert_usage(
-                    &model,
-                    "default",
-                    in_tok,
-                    out_tok,
-                    act_cost,
-                    Some(&role),
-                    is_hit,
+                let _ = db.insert_usage(&db::UsageRecord {
+                    model_name: &model,
+                    user_id: "default",
+                    input_tokens: in_tok,
+                    output_tokens: out_tok,
+                    cost: act_cost,
+                    task_type: Some(&role),
+                    cache_hit: is_hit,
                     latency_ms,
-                    Some(&orchestrate_rid),
-                    Some(&db::UsageExtra {
+                    request_id: Some(&orchestrate_rid),
+                    extra: Some(db::UsageExtra {
                         cached_tokens: 0,
                         reasoning_tokens: 0,
                         est_cost: 0.0,
@@ -807,32 +942,39 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
                         cache_saved_cost,
                         api_source: None,
                     }),
-                );
+                });
                 // P3：按 task_done 成功/失败喂健康哨点（模型可达性，无 role 归属冲突）
                 if model != "unknown" {
-                    let ok = obj.get("error").and_then(|v| v.as_str()).is_none_or(|s| s.is_empty());
-                    crate::health::record_outcome(&model, ok);
+                    let ok = obj
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .is_none_or(|s| s.is_empty());
+                    crate::health::record_outcome(&db, &model, ok);
                 }
                 // P1.c：按 task_done 是否带 error 下发成功/失败成效信号（skill/model-任务 打点）。
                 // 模型解不出时（unknown）无真实归属，跳过打点避免误伤。
                 if model != "unknown" && role != "unknown" {
-                    let kind = if obj.get("error").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty())
+                    let kind = if obj
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|s| !s.is_empty())
                     {
                         QualitySignalKind::SubtaskFail
                     } else {
                         QualitySignalKind::Success
                     };
-                    db::upsert_model_task_score_signal(&model, &role, kind).ok();
+                    db.upsert_model_task_score_signal(&model, &role, kind).ok();
                 }
                 // P4：子任务升档（P4.c）把被跳过的轻量模型按 P3 相同语义记 Escalation 信号——
                 // 其质量信号不达标（零成本判别），让路由学习少用该模型。final model 仍记 Success。
                 if let Some(ef) = obj.get("escalated_from").and_then(|v| v.as_str()) {
                     if !ef.is_empty() && ef != model && role != "unknown" {
-                        db::upsert_model_task_score_signal(ef, &role, QualitySignalKind::Escalation).ok();
+                        db.upsert_model_task_score_signal(ef, &role, QualitySignalKind::Escalation)
+                            .ok();
                     }
                 }
                 // P1.d：按 shadow_ratio 概率后台采样双跑（以主 query 作路由样本），不改返回。
-                maybe_shadow_sample(models.clone(), role, shadow_query.clone());
+                maybe_shadow_sample(db.clone(), models.clone(), role, shadow_query.clone());
             }
         }
         let data = serde_json::to_string(&ev.data).unwrap_or_default();
@@ -842,7 +984,10 @@ async fn orchestrate_stream(Json(req): Json<OrchestrateBody>) -> Response {
         )))
     }));
     Response::builder()
-        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        )
         .body(body)
         .unwrap()
 }
@@ -859,7 +1004,9 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
     // API keys configured per-model live in the DB (Models page) and are
     // invisible to the Python service's env-based readiness probe — OR them
     // in so a model with a key counts as a usable backend.
-    let model_key_ready = db::list_models(true)
+    let model_key_ready = state
+        .db
+        .list_models(true)
         .map(|models| {
             models
                 .iter()
@@ -920,13 +1067,28 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
         ai_status,
     ]);
     // Add an install hint to the Ollama entry when it's not installed at all.
-    if let Some(ollama) = services.as_array_mut().unwrap().iter_mut().find(|s| s["name"].as_str() == Some("Ollama")) {
+    if let Some(ollama) = services
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|s| s["name"].as_str() == Some("Ollama"))
+    {
         if !crate::processes::ollama_installed() {
             ollama["detail"] = json!("未安装 Ollama。本地模型不可用（云 API 不受影响）。安装: curl -fsSL https://ollama.com/install.sh | sh");
         }
     }
-    let healthy = services.as_array().unwrap().iter().filter(|s| s["healthy"].as_bool().unwrap_or(false)).count();
-    let running = services.as_array().unwrap().iter().filter(|s| s["status"].as_str().unwrap_or("").starts_with("Up")).count();
+    let healthy = services
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["healthy"].as_bool().unwrap_or(false))
+        .count();
+    let running = services
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["status"].as_str().unwrap_or("").starts_with("Up"))
+        .count();
     Json(json!({
         "services": services,
         "total": services.as_array().unwrap().len(),
@@ -989,15 +1151,24 @@ async fn service_logs(Path(name): Path<String>) -> Json<Value> {
         _ => "ai.log",
     };
     let path = config::log_dir().join(file);
-    let content = tokio::task::spawn_blocking(move || std::fs::read_to_string(path).unwrap_or_default())
-        .await
-        .unwrap_or_default();
+    let content =
+        tokio::task::spawn_blocking(move || std::fs::read_to_string(path).unwrap_or_default())
+            .await
+            .unwrap_or_default();
     let tail: Vec<&str> = content.lines().rev().take(200).collect();
-    let logs: String = tail.iter().rev().map(|s| s.to_string()).collect::<Vec<_>>().join("\n");
+    let logs: String = tail
+        .iter()
+        .rev()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
     Json(json!({ "logs": logs }))
 }
 
-async fn smart_restart(State(state): State<AppState>, Json(action): Json<ServiceAction>) -> Json<Value> {
+async fn smart_restart(
+    State(state): State<AppState>,
+    Json(action): Json<ServiceAction>,
+) -> Json<Value> {
     let mut restarted = Vec::new();
     let mut errors = Vec::new();
     let _ = action.changed_keys; // any config change triggers an AI service restart
@@ -1081,7 +1252,11 @@ async fn cache_cleanup() -> Result<Json<Value>> {
 
 async fn open_folder(Json(body): Json<Value>) -> Json<Value> {
     let path = body.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
     let ok = std::process::Command::new(opener)
         .arg(path)
         .spawn()
@@ -1092,7 +1267,11 @@ async fn open_folder(Json(body): Json<Value>) -> Json<Value> {
 
 async fn open_web(Json(body): Json<Value>) -> Json<Value> {
     let url = body.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
     let _ = std::process::Command::new(opener).arg(url).spawn();
     Json(json!({ "ok": true }))
 }
@@ -1101,24 +1280,24 @@ async fn open_web(Json(body): Json<Value>) -> Json<Value> {
 
 /// 挂载后台任务：日级校准 job + 探针循环 + 24h 定价刷新循环。
 /// 在 main 启动 axum::serve 前调用。
-pub fn spawn_background_jobs() -> Vec<tokio::task::JoinHandle<()>> {
+pub fn spawn_background_jobs(db: db::Db) -> Vec<tokio::task::JoinHandle<()>> {
     vec![
-        tokio::spawn(calibration_job()),
-        tokio::spawn(crate::probe::probe_loop()),
-        tokio::spawn(pricing_refresh_loop()),
-        tokio::spawn(health_probe_loop()), // P3 主动探测
-        tokio::spawn(crate::review::aiq_report_loop()), // N2.a 路由体检（6h，首跑立即）
+        tokio::spawn(calibration_job(db.clone())),
+        tokio::spawn(crate::probe::probe_loop(db.clone())),
+        tokio::spawn(pricing_refresh_loop(db.clone())),
+        tokio::spawn(health_probe_loop(db.clone())), // P3 主动探测
+        tokio::spawn(crate::review::aiq_report_loop(db)), // N2.a 路由体检（6h，首跑立即）
     ]
 }
 
 /// 日级校准 job：每天聚合昨天用量 → 写 price_calibration → 更新命中率 EWMA →
 /// 对账偏差连续越界 3 天则标 price_stale（PRICING-PLAN §6.2）。
-async fn calibration_job() {
+async fn calibration_job(db: db::Db) {
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(86_400));
     ticker.tick().await; // 跳过立即触发
     loop {
         ticker.tick().await;
-        if let Err(e) = run_daily_calibration().await {
+        if let Err(e) = run_daily_calibration(&db).await {
             eprintln!("[core] calibration job failed: {e}");
         }
     }
@@ -1133,17 +1312,21 @@ const STALE_STREAK_DAYS: i64 = 3;
 /// 校准样本下限（低于此样本数不计算，避免单次调用污染）。
 const MIN_CALIBRATION_CALLS: i64 = 50;
 
-async fn run_daily_calibration() -> Result<()> {
+async fn run_daily_calibration(db: &db::Db) -> Result<()> {
     let now = now_epoch_secs();
     let (y, m, d, _, _) = pricing::beijing_parts(now - 86_400, 8); // 北京昨天
     let day = format!("{y:04}-{m:02}-{d:02}");
-    let rows = db::aggregate_usage_by_model_day(&day)?;
+    let rows = db.aggregate_usage_by_model_day(&day)?;
     for r in &rows {
         if r.calls < MIN_CALIBRATION_CALLS {
             continue;
         }
         // 对账比（总额口径：act/est；est_out 误差在 P50 估计下有限）
-        let ratio = if r.est_cost > 0.0 { r.act_cost / r.est_cost } else { 1.0 };
+        let ratio = if r.est_cost > 0.0 {
+            r.act_cost / r.est_cost
+        } else {
+            1.0
+        };
         let hit_rate = if r.input_tokens > 0 {
             r.cached_tokens as f64 / r.input_tokens as f64
         } else {
@@ -1154,17 +1337,25 @@ async fn run_daily_calibration() -> Result<()> {
         } else {
             0.0
         };
-        db::upsert_price_calibration(
-            &r.provider, &r.model, &day, r.calls,
-            r.est_cost, r.act_cost, ratio, hit_rate, out_in, r.field_missing,
-        )?;
+        db.upsert_price_calibration(&db::CalibrationRow {
+            provider: r.provider.clone(),
+            model: r.model.clone(),
+            as_of: day.clone(),
+            calls: r.calls,
+            est_cost: r.est_cost,
+            act_cost: r.act_cost,
+            input_side_ratio: ratio,
+            cache_hit_rate: hit_rate,
+            out_in_ratio: out_in,
+            field_missing_count: r.field_missing,
+        })?;
         // 命中率 EWMA（喂路由 hit_rates——PR-5 落地后读取；当前先行维护）
         let _ = HIT_RATE_EWMA_ALPHA;
         // stale 去抖：连续 3 天越界才标（单日计费异常不误报）
         if ratio > DRIFT_UPPER || ratio < DRIFT_LOWER {
-            let streak = db::stale_streak(&r.provider, &r.model, STALE_STREAK_DAYS)?;
+            let streak = db.stale_streak(&r.provider, &r.model, STALE_STREAK_DAYS)?;
             if streak >= STALE_STREAK_DAYS {
-                db::mark_price_stale(&r.provider, &r.model, true, "calibration_drift")?;
+                db.mark_price_stale(&r.provider, &r.model, true, "calibration_drift")?;
             }
         }
     }
@@ -1174,9 +1365,15 @@ async fn run_daily_calibration() -> Result<()> {
 // ── Pricing + probe API (PRICING-PLAN §10) ──
 
 /// GET /api/pricing/specs[?stale=true] —— 列出 PriceSpec。
-async fn pricing_specs(Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>> {
-    let mut specs = db::list_price_specs()?;
-    if q.get("stale").map(|v| v == "true" || v == "1").unwrap_or(false) {
+async fn pricing_specs(
+    State(state): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<Value>> {
+    let mut specs = state.db.list_price_specs()?;
+    if q.get("stale")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false)
+    {
         specs.retain(|s| s.price_stale);
     }
     Ok(Json(serde_json::to_value(specs).unwrap_or_default()))
@@ -1202,6 +1399,7 @@ struct PriceSpecUpdate {
 }
 
 async fn pricing_spec_update(
+    State(state): State<AppState>,
     Path((provider, model)): Path<(String, String)>,
     Json(body): Json<PriceSpecUpdate>,
 ) -> Result<Json<Value>> {
@@ -1213,25 +1411,34 @@ async fn pricing_spec_update(
             )));
         }
     }
-    db::upsert_price_spec(
-        &provider,
-        &model,
-        body.input_cost,
-        body.output_cost,
-        body.cache_read_cost,
-        body.cache_write_cost,
-        body.reasoning_cost,
-        body.tiered_json.as_deref(),
-        body.zone_ref.as_deref(),
-        body.cny_list_price_json.as_deref(),
-    )?;
-    Ok(Json(json!({ "ok": true, "provider": provider, "model": model })))
+    state.db.upsert_price_spec(&db::PriceSpecInput {
+        provider: &provider,
+        model: &model,
+        input_cost: body.input_cost,
+        output_cost: body.output_cost,
+        cache_read_cost: body.cache_read_cost,
+        cache_write_cost: body.cache_write_cost,
+        reasoning_cost: body.reasoning_cost,
+        tiered_json: body.tiered_json.as_deref(),
+        zone_ref: body.zone_ref.as_deref(),
+        cny_list_price_json: body.cny_list_price_json.as_deref(),
+    })?;
+    Ok(Json(
+        json!({ "ok": true, "provider": provider, "model": model }),
+    ))
 }
 
 /// GET /api/pricing/calibration?days=30 —— 校准曲线。
-async fn pricing_calibration(Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>> {
-    let days: i64 = q.get("days").and_then(|v| v.parse().ok()).unwrap_or(30).clamp(1, 365);
-    let rows = db::list_price_calibration(days)?;
+async fn pricing_calibration(
+    State(state): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<Value>> {
+    let days: i64 = q
+        .get("days")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30)
+        .clamp(1, 365);
+    let rows = state.db.list_price_calibration(days)?;
     Ok(Json(serde_json::to_value(rows).unwrap_or_default()))
 }
 
@@ -1240,7 +1447,7 @@ async fn pricing_calibration(Query(q): Query<HashMap<String, String>>) -> Result
 /// P2.a 刷新编排：拉 litellm 远端价格 → 解析 → 应用到本地「非 manual」行。
 /// 主源 jsdelivr，回退 ghproxy 镜像（本机网络受限）；全部不可达返回 Err（调用方静默，保留本地值）。
 /// 返回 (更新行数, 远端条数, 被保留的 manual 行数)。
-async fn run_pricing_refresh() -> std::result::Result<(usize, usize, usize), String> {
+async fn run_pricing_refresh(db: &db::Db) -> std::result::Result<(usize, usize, usize), String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
@@ -1266,7 +1473,7 @@ async fn run_pricing_refresh() -> std::result::Result<(usize, usize, usize), Str
     };
     let remote = pricing::parse_remote_prices(&raw);
     let remote_total = remote.len();
-    let specs = db::list_price_specs().map_err(|e| e.to_string())?;
+    let specs = db.list_price_specs().map_err(|e| e.to_string())?;
     let mut updated = 0usize;
     let mut manual = 0usize;
     for s in &specs {
@@ -1275,14 +1482,15 @@ async fn run_pricing_refresh() -> std::result::Result<(usize, usize, usize), Str
             continue;
         }
         if let Some(rp) = remote.get(&(s.provider.clone(), s.model.clone())) {
-            let hit = db::refresh_price_spec(
-                &s.provider,
-                &s.model,
-                rp.input_cost,
-                rp.output_cost,
-                rp.cache_read_cost,
-            )
-            .unwrap_or(false);
+            let hit = db
+                .refresh_price_spec(
+                    &s.provider,
+                    &s.model,
+                    rp.input_cost,
+                    rp.output_cost,
+                    rp.cache_read_cost,
+                )
+                .unwrap_or(false);
             if hit {
                 updated += 1;
             }
@@ -1292,11 +1500,11 @@ async fn run_pricing_refresh() -> std::result::Result<(usize, usize, usize), Str
 }
 
 /// POST /api/pricing/refresh —— 手动触发刷新（不覆盖 manual；断网/镜像不可达返回错误但不动本地值）。
-async fn pricing_refresh() -> Result<Json<Value>> {
-    match run_pricing_refresh().await {
+async fn pricing_refresh(State(state): State<AppState>) -> Result<Json<Value>> {
+    match run_pricing_refresh(&state.db).await {
         Ok((updated, remote_total, manual)) => {
             // 顺带刷新第三方参考价（best-effort，失败不影响主刷新结果）
-            let reference = match run_reference_refresh().await {
+            let reference = match run_reference_refresh(&state.db).await {
                 Ok(n) => json!({ "ok": true, "matched": n }),
                 Err(e) => json!({ "ok": false, "error": e }),
             };
@@ -1314,7 +1522,7 @@ async fn pricing_refresh() -> Result<Json<Value>> {
 /// 参考价刷新：拉 OpenRouter /api/v1/models → 匹配全部本地 spec（含 manual——
 /// 参考层正是为了发现 manual 锚定价与市场脱节）→ upsert price_reference。
 /// 返回匹配条数；网络失败返回 Err（调用方静默）。
-async fn run_reference_refresh() -> std::result::Result<usize, String> {
+async fn run_reference_refresh(db: &db::Db) -> std::result::Result<usize, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()
@@ -1332,11 +1540,19 @@ async fn run_reference_refresh() -> std::result::Result<usize, String> {
     if catalog.is_empty() {
         return Err("openrouter: parsed 0 entries".into());
     }
-    let specs = db::list_price_specs().map_err(|e| e.to_string())?;
+    let specs = db.list_price_specs().map_err(|e| e.to_string())?;
     let mut matched = 0usize;
     for s in &specs {
         if let Some(p) = pricing::match_openrouter(&s.model, &catalog) {
-            if db::upsert_price_reference(&s.provider, &s.model, "openrouter", &p.id, p.input_cost, p.output_cost)
+            if db
+                .upsert_price_reference(
+                    &s.provider,
+                    &s.model,
+                    "openrouter",
+                    &p.id,
+                    p.input_cost,
+                    p.output_cost,
+                )
                 .is_ok()
             {
                 matched += 1;
@@ -1347,41 +1563,48 @@ async fn run_reference_refresh() -> std::result::Result<usize, String> {
 }
 
 /// GET /api/pricing/reference —— 参考价 × 本地图价联表（含偏差 %），定价页消费。
-async fn pricing_reference() -> Result<Json<Value>> {
-    let rows = db::list_price_references()?;
+async fn pricing_reference(State(state): State<AppState>) -> Result<Json<Value>> {
+    let rows = state.db.list_price_references()?;
     Ok(Json(serde_json::to_value(rows).unwrap_or_default()))
 }
 
 /// POST /api/pricing/reference/refresh —— 手动刷新参考价。
-async fn pricing_reference_refresh() -> Result<Json<Value>> {
-    match run_reference_refresh().await {
+async fn pricing_reference_refresh(State(state): State<AppState>) -> Result<Json<Value>> {
+    match run_reference_refresh(&state.db).await {
         Ok(matched) => Ok(Json(json!({ "ok": true, "matched": matched }))),
         Err(e) => Err(AppError::Internal(e)),
     }
 }
 
 /// POST /api/pricing/specs/{provider}/{model}/accept —— 采纳刷新价为 manual（此后不被刷新覆盖）。
-async fn pricing_accept(Path((provider, model)): Path<(String, String)>) -> Result<Json<Value>> {
-    if !db::accept_price_spec(&provider, &model)? {
-        return Err(AppError::NotFound(format!("price spec {provider}/{model} not found")));
+async fn pricing_accept(
+    State(state): State<AppState>,
+    Path((provider, model)): Path<(String, String)>,
+) -> Result<Json<Value>> {
+    if !state.db.accept_price_spec(&provider, &model)? {
+        return Err(AppError::NotFound(format!(
+            "price spec {provider}/{model} not found"
+        )));
     }
-    Ok(Json(json!({ "ok": true, "provider": provider, "model": model })))
+    Ok(Json(
+        json!({ "ok": true, "provider": provider, "model": model }),
+    ))
 }
 
 /// P2.a 后台 24h 刷新 job：周期拉远端价；断网失败静默（保留本地值，不影响主流程）。
-async fn pricing_refresh_loop() {
+async fn pricing_refresh_loop(db: db::Db) {
     let mut int = tokio::time::interval(std::time::Duration::from_secs(86400));
     int.tick().await; // 首个周期：启动后 24h 才首次触发
     loop {
         int.tick().await;
-        let _ = run_pricing_refresh().await;
-        let _ = run_reference_refresh().await; // 参考层同步刷新，失败静默
+        let _ = run_pricing_refresh(&db).await;
+        let _ = run_reference_refresh(&db).await; // 参考层同步刷新，失败静默
     }
 }
 
 /// GET /api/probe/stats —— 探针月消耗/预算/命中验证。
-async fn probe_stats() -> Result<Json<Value>> {
-    let s = db::probe_stats()?;
+async fn probe_stats(State(state): State<AppState>) -> Result<Json<Value>> {
+    let s = state.db.probe_stats()?;
     Ok(Json(json!({
         "monthly_limit_usd": crate::probe::budget().monthly_limit_usd(),
         "monthly_limit_cny": crate::probe::budget().monthly_limit_usd() * 7.2,
@@ -1431,23 +1654,36 @@ struct PlanSubtaskRequest {
     #[serde(default)]
     deferrable: bool,
 }
-async fn rust_plan_subtask(Json(req): Json<PlanSubtaskRequest>) -> Result<Json<Value>> {
+async fn rust_plan_subtask(
+    State(state): State<AppState>,
+    Json(req): Json<PlanSubtaskRequest>,
+) -> Result<Json<Value>> {
     let est_in = req.est_in_tokens.unwrap_or(500).max(0);
     // P5.c：est_out 未显式传时用该角色真实均值（avg_out_tokens）；预算档未传时从全局水位注出。
     let est_out = match req.est_out_tokens {
         Some(v) => v.max(0),
-        None => db::task_avg_out_tokens(&req.task_type).round() as i64,
+        None => state.db.task_avg_out_tokens(&req.task_type).round() as i64,
     };
     let tier = match req.budget_tier {
         Some(t) => t,
-        None => db::global_budget_ratio()
+        None => state
+            .db
+            .global_budget_ratio()
             .map(router::budget_tier_from_ratio)
             .unwrap_or("normal")
             .to_string(),
     };
-    let models = db::list_models(true)?;
+    let models = state.db.list_models(true)?;
 
-    let outcome = match router::plan_for_task(&req.task_type, &models, est_in, est_out, &tier, req.deferrable) {
+    let outcome = match router::plan_for_task(
+        &state.db,
+        &req.task_type,
+        &models,
+        est_in,
+        est_out,
+        &tier,
+        req.deferrable,
+    ) {
         Ok(o) => o,
         Err(e) => {
             return Ok(Json(json!({
@@ -1459,14 +1695,16 @@ async fn rust_plan_subtask(Json(req): Json<PlanSubtaskRequest>) -> Result<Json<V
             })));
         }
     };
-    let escalation_enabled = db::get_routing_policy(&req.task_type)
+    let escalation_enabled = state
+        .db
+        .get_routing_policy(&req.task_type)
         .ok()
         .flatten()
         .map(|p| p.escalation_enabled == 1)
         .unwrap_or(false);
     // PR-8：deferrable 时回传「预计谷时执行时刻」（epoch 秒；0 = 无需延迟/实时）。
     let defer_until = if req.deferrable {
-        router::next_valley_epoch(zone_resolver(), now_epoch_secs()).unwrap_or(0)
+        router::next_valley_epoch(zone_resolver(&state.db), now_epoch_secs()).unwrap_or(0)
     } else {
         0
     };
@@ -1479,12 +1717,15 @@ async fn rust_plan_subtask(Json(req): Json<PlanSubtaskRequest>) -> Result<Json<V
     })))
 }
 
-async fn routing_overhead(Query(q): Query<OverheadQuery>) -> Result<Json<Value>> {
+async fn routing_overhead(
+    State(state): State<AppState>,
+    Query(q): Query<OverheadQuery>,
+) -> Result<Json<Value>> {
     let days = q.days.unwrap_or(0);
     if days < 0 || days > 90 {
         return Err(AppError::InvalidRequest("days 需在 [0,90]".into()));
     }
-    let (count, avg, p95, max, slow) = db::routing_overhead_report(days)?;
+    let (count, avg, p95, max, slow) = state.db.routing_overhead_report(days)?;
     // 纯规则型快路径（method != LLM search）应 < 10ms；含 LLM 分类的全路径 < 100ms。
     let fast_path_healthy = avg < 10.0; // 全量均值近似快路径，详细按 method 留后续拆
     Ok(Json(json!({
@@ -1501,30 +1742,35 @@ async fn routing_overhead(Query(q): Query<OverheadQuery>) -> Result<Json<Value>>
 
 /// P3：主动探测——对 `down`/`degraded` 模型每 `health.probe_sec` 发最小请求试探恢复。
 /// 探针成功 → `down`→`up`（状态机驱动），失败保持，不阻塞主流程。
-async fn health_probe_loop() {
-    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(config::health_probe_sec()));
+async fn health_probe_loop(db: db::Db) {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(
+        config::health_probe_sec(&db),
+    ));
     ticker.tick().await; // 启动后首个周期才执行
     loop {
         ticker.tick().await;
         // 重新读间隔（运行时调整生效）
-        let secs = config::health_probe_sec();
+        let secs = config::health_probe_sec(&db);
         if secs != ticker.period().as_secs() {
             ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
             ticker.tick().await;
         }
-        probe_down_models().await;
+        probe_down_models(&db).await;
     }
 }
 
-async fn probe_down_models() {
-    let models = match db::list_models(true) {
+async fn probe_down_models(db: &db::Db) {
+    let models = match db.list_models(true) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("[health] list_models failed: {e}");
             return;
         }
     };
-    for m in models.iter().filter(|m| m.health_state == "down" || m.health_state == "degraded") {
+    for m in models
+        .iter()
+        .filter(|m| m.health_state == "down" || m.health_state == "degraded")
+    {
         // 最小试探：1 token、低温度、仅确认可达（不产生有意义的答复）。
         let spec = ai_client::ModelSpec::from(m);
         let probe_msg = serde_json::json!([{
@@ -1535,7 +1781,7 @@ async fn probe_down_models() {
             Ok(_) => true,
             Err(_) => false,
         };
-        let state = crate::health::record_outcome(&m.name, ok);
+        let state = crate::health::record_outcome(db, &m.name, ok);
         if ok {
             eprintln!("[health] probe recovered {} → {state}", m.name);
         }
@@ -1547,9 +1793,8 @@ async fn probe_down_models() {
 pub fn build_router(state: AppState) -> Router {
     // Serve the frontend: static assets from the ui dir, SPA fallback to index.html.
     let ui = config::ui_dir().unwrap_or_default();
-    let serve_ui = tower_http::services::ServeDir::new(&ui).not_found_service(
-        tower_http::services::ServeFile::new(ui.join("index.html")),
-    );
+    let serve_ui = tower_http::services::ServeDir::new(&ui)
+        .not_found_service(tower_http::services::ServeFile::new(ui.join("index.html")));
 
     Router::new()
         // UI (SPA: static files + fallback to index.html) + health
@@ -1557,18 +1802,33 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/health", get(health))
         // Models
         .route("/api/models", get(list_models).post(register_model))
-        .route("/api/models/{name}", get(get_model).put(update_model).delete(delete_model))
+        .route(
+            "/api/models/{name}",
+            get(get_model).put(update_model).delete(delete_model),
+        )
         // Usage + budgets
         .route("/api/usage", get(get_usage))
-        .route("/api/budgets", get(list_budgets).post(set_budget).delete(delete_budget))
+        .route(
+            "/api/budgets",
+            get(list_budgets).post(set_budget).delete(delete_budget),
+        )
         .route("/api/budgets/check", get(check_budget))
         // Pricing + probes (PRICING-PLAN §10)
         .route("/api/pricing/specs", get(pricing_specs))
-        .route("/api/pricing/specs/{provider}/{model}", put(pricing_spec_update))
-        .route("/api/pricing/specs/{provider}/{model}/accept", post(pricing_accept))
+        .route(
+            "/api/pricing/specs/{provider}/{model}",
+            put(pricing_spec_update),
+        )
+        .route(
+            "/api/pricing/specs/{provider}/{model}/accept",
+            post(pricing_accept),
+        )
         .route("/api/pricing/refresh", post(pricing_refresh))
         .route("/api/pricing/reference", get(pricing_reference))
-        .route("/api/pricing/reference/refresh", post(pricing_reference_refresh))
+        .route(
+            "/api/pricing/reference/refresh",
+            post(pricing_reference_refresh),
+        )
         .route("/api/pricing/calibration", get(pricing_calibration))
         .route("/api/probe/stats", get(probe_stats))
         .route("/api/probe/budget", put(probe_budget_update))
@@ -1576,19 +1836,39 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/config", get(get_config).post(update_config))
         .route("/api/stats", get(get_stats))
         // Conversations
-        .route("/api/conversations", get(list_conversations).post(save_conversation))
-        .route("/api/conversations/{id}", get(get_conversation).put(rename_conversation).delete(delete_conversation))
+        .route(
+            "/api/conversations",
+            get(list_conversations).post(save_conversation),
+        )
+        .route(
+            "/api/conversations/{id}",
+            get(get_conversation)
+                .put(rename_conversation)
+                .delete(delete_conversation),
+        )
         // Two-phase persistence: append (phase 1) / fill-in (phase 2)
-        .route("/api/conversations/{id}/messages", post(append_conversation_message))
-        .route("/api/conversations/{id}/messages/{seq}", patch(update_conversation_message))
+        .route(
+            "/api/conversations/{id}/messages",
+            post(append_conversation_message),
+        )
+        .route(
+            "/api/conversations/{id}/messages/{seq}",
+            patch(update_conversation_message),
+        )
         // Chat + orchestrate (SSE)
         .route("/api/chat/stream", post(chat_stream))
         .route("/api/orchestrate/stream", post(orchestrate_stream))
         // N1：OpenAI 兼容代理（NEXT-PLAN §二）
-        .route("/v1/chat/completions", post(crate::openai_compat::chat_completions))
+        .route(
+            "/v1/chat/completions",
+            post(crate::openai_compat::chat_completions),
+        )
         .route("/v1/models", get(crate::openai_compat::models_list))
         // P1.d 影子评测 + AIQ 重放数据源
-        .route("/api/routing/shadow", post(routing_shadow).get(routing_shadow_status))
+        .route(
+            "/api/routing/shadow",
+            post(routing_shadow).get(routing_shadow_status),
+        )
         .route("/api/routing/plan-subtask", post(rust_plan_subtask)) // P4.a Python 每子任务回调
         .route("/api/routing/overhead", get(routing_overhead))
         // N2 闭环评估：报告读取 / 手动刷新 / 建议采纳（不自动生效）
@@ -1611,7 +1891,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/cache/status", get(cache_status))
         .route("/api/cache/cleanup", post(cache_cleanup))
         .route("/api/cache/feedback", post(cache_feedback))
-        .route("/api/cache/threshold", get(cache_threshold_get).post(cache_autotune_set))
+        .route(
+            "/api/cache/threshold",
+            get(cache_threshold_get).post(cache_autotune_set),
+        )
         .with_state(state)
 }
 
@@ -1624,12 +1907,23 @@ struct CacheFeedbackBody {
     correct: bool,
 }
 
-async fn cache_feedback(Json(req): Json<CacheFeedbackBody>) -> Json<Value> {
+async fn cache_feedback(
+    State(state): State<AppState>,
+    Json(req): Json<CacheFeedbackBody>,
+) -> Json<Value> {
     let decision = if req.decision == "hit" { "hit" } else { "miss" };
     // Record the inline-question answer as a labeled calibration sample.
-    let _ = db::insert_cache_calibration(req.sim, decision, "default", Some(req.correct), "inline_question");
+    let _ = state.db.insert_cache_calibration(
+        req.sim,
+        decision,
+        "default",
+        Some(req.correct),
+        "inline_question",
+    );
 
-    let auto = db::get_setting("cache_auto_tune")
+    let auto = state
+        .db
+        .get_setting("cache_auto_tune")
         .ok()
         .flatten()
         .map(|v| v != "0" && v != "false")
@@ -1637,20 +1931,22 @@ async fn cache_feedback(Json(req): Json<CacheFeedbackBody>) -> Json<Value> {
 
     let mut suggested: Option<f64> = None;
     if auto {
-        if let Ok(samples) = db::calibration_labeled_samples() {
+        if let Ok(samples) = state.db.calibration_labeled_samples() {
             if let Some(t) = db::optimal_threshold(&samples, 0.01) {
-                let cur = config::cache_threshold();
+                let cur = config::cache_threshold(&state.db);
                 let next = cur + 0.5 * (t - cur); // gradual move, avoids abrupt shifts
-                if config::set_cache_threshold(next).is_ok() {
+                if config::set_cache_threshold(&state.db, next).is_ok() {
                     suggested = Some(next);
-                    let _ = db::set_setting("cache_threshold_suggested", &format!("{t:.4}"));
+                    let _ = state
+                        .db
+                        .set_setting("cache_threshold_suggested", &format!("{t:.4}"));
                 }
             }
         }
     }
     Json(json!({
         "ok": true,
-        "threshold": config::cache_threshold(),
+        "threshold": config::cache_threshold(&state.db),
         "suggested": suggested,
         "auto_tune": auto,
     }))
@@ -1687,6 +1983,7 @@ struct ShadowSample {
 /// 现网 `plan()` 路由选择 × 旗舰基线各跑一次，成本走 `priced_usage` 定价真源，
 /// 落 `routing_calibration`（source 区分 shadow 采样/手动端点）。
 async fn run_shadow_pair(
+    db: &db::Db,
     models: Vec<Model>,
     task_type: &str,
     query: &str,
@@ -1699,7 +1996,7 @@ async fn run_shadow_pair(
 
     // 1) 现网路由：走真实 plan() 看「系统会选谁」；direct/未注册退回注册表首选。
     let classifier = pick_classifier(&models);
-    let routing = router::route("auto", query, classifier.as_ref(), None).await;
+    let routing = router::route(db, "auto", query, classifier.as_ref(), None).await;
     let routed_model = if models.iter().any(|m| m.name == routing.model) {
         routing.model.clone()
     } else {
@@ -1707,7 +2004,8 @@ async fn run_shadow_pair(
     };
 
     // 2) 基线：settings 钦定（须已注册），否则取能力档最高者（旗舰）。
-    let explicit = db::get_setting("routing.shadow_baseline")
+    let explicit = db
+        .get_setting("routing.shadow_baseline")
         .ok()
         .flatten()
         .filter(|n| models.iter().any(|m| m.name == *n));
@@ -1721,8 +2019,14 @@ async fn run_shadow_pair(
     });
 
     // 3) 双跑（并行），成本统一走定价真源。
-    let routed_spec: Option<ModelSpec> = models.iter().find(|m| m.name == routed_model).map(ModelSpec::from);
-    let baseline_spec: Option<ModelSpec> = models.iter().find(|m| m.name == baseline_model).map(ModelSpec::from);
+    let routed_spec: Option<ModelSpec> = models
+        .iter()
+        .find(|m| m.name == routed_model)
+        .map(ModelSpec::from);
+    let baseline_spec: Option<ModelSpec> = models
+        .iter()
+        .find(|m| m.name == baseline_model)
+        .map(ModelSpec::from);
     let (routed_cost, baseline_cost) = match (routed_spec, baseline_spec) {
         (Some(r), Some(b)) => {
             let msgs = vec![serde_json::json!({ "role": "user", "content": query })];
@@ -1730,15 +2034,16 @@ async fn run_shadow_pair(
                 ai_client::chat(&r, &msgs, 500, 0.3),
                 ai_client::chat(&b, &msgs, 500, 0.3),
             );
-            let cost_of = |res: &std::result::Result<ai_client::ChatResult, AppError>, model: &str| -> f64 {
-                match res {
-                    Ok(x) => {
-                        let (c, _) = priced_usage(model, &x.model, &x.usage);
-                        c
+            let cost_of =
+                |res: &std::result::Result<ai_client::ChatResult, AppError>, model: &str| -> f64 {
+                    match res {
+                        Ok(x) => {
+                            let (c, _) = priced_usage(db, model, &x.model, &x.usage);
+                            c
+                        }
+                        Err(_) => 0.0,
                     }
-                    Err(_) => 0.0,
-                }
-            };
+                };
             (cost_of(&rr, &routed_model), cost_of(&br, &baseline_model))
         }
         _ => return Err("路由/基线模型解析失败".to_string()),
@@ -1752,10 +2057,18 @@ async fn run_shadow_pair(
     // 查询指纹值对真实 query，而非 task_type——否则同任务所有样本同哈希，"防重"失效。
     // 自动采样 dedup=true（避免相同 query 重复膨胀样本数）；手动端点 dedup=false（白名单式审计可重测）。
     let qhash = shadow_hash(query);
-    if dedup && db::routing_calibration_exists(&t, &qhash).unwrap_or(false) {
+    if dedup && db.routing_calibration_exists(&t, &qhash).unwrap_or(false) {
         return Err("该 query 已有影子样本（去重，避免重复膨胀样本数）".to_string());
     }
-    let _ = db::insert_routing_calibration(&t, &qhash, &routed_model, &baseline_model, routed_cost, baseline_cost, source);
+    let _ = db.insert_routing_calibration(&db::RoutingCalibrationInput {
+        task_type: &t,
+        query_hash: &qhash,
+        routed_model: &routed_model,
+        baseline_model: &baseline_model,
+        routed_cost,
+        baseline_cost,
+        source,
+    });
 
     Ok(ShadowSample {
         task_type: t,
@@ -1769,8 +2082,8 @@ async fn run_shadow_pair(
 /// P1.d 请求热路径自动采样：按 `routing.shadow_ratio`（默认 0.10，0 即零成本关）
 /// 以概率后台 spawn 双跑落库，供 AIQ 离线重放积累样本。
 /// 不阻塞主响应、不改返回；后台偶发失败静默（AIQ 只需成功样本）。
-fn maybe_shadow_sample(models: Vec<Model>, task_type: String, query: String) {
-    let ratio = config::shadow_ratio();
+fn maybe_shadow_sample(db: db::Db, models: Vec<Model>, task_type: String, query: String) {
+    let ratio = config::shadow_ratio(&db);
     if ratio <= 0.0 {
         return;
     }
@@ -1783,21 +2096,21 @@ fn maybe_shadow_sample(models: Vec<Model>, task_type: String, query: String) {
         return;
     }
     tokio::spawn(async move {
-        let _ = run_shadow_pair(models, &task_type, &query, "shadow", true).await;
+        let _ = run_shadow_pair(&db, models, &task_type, &query, "shadow", true).await;
     });
 }
 
 /// 手动影子评测端点：强制双跑一条请求，返回路由结果与成本对比（不按采样率）。
 /// 采样入口见 [`maybe_shadow_sample`]（请求热路径自动采集）。
-async fn routing_shadow(Json(req): Json<ShadowBody>) -> Json<Value> {
+async fn routing_shadow(State(state): State<AppState>, Json(req): Json<ShadowBody>) -> Json<Value> {
     let fail = |msg: &str| Json(json!({ "ok": false, "error": msg }));
-    let models = match db::list_models(true) {
+    let models = match state.db.list_models(true) {
         Ok(m) if !m.is_empty() => m,
         Ok(_) => return fail("无可用模型，请先添加"),
         Err(e) => return fail(&e.to_string()),
     };
     let task_type = req.task_type.unwrap_or_default();
-    match run_shadow_pair(models, &task_type, &req.query, "shadow", false).await {
+    match run_shadow_pair(&state.db, models, &task_type, &req.query, "shadow", false).await {
         Ok(r) => Json(json!({
             "ok": true,
             "task_type": r.task_type,
@@ -1812,17 +2125,21 @@ async fn routing_shadow(Json(req): Json<ShadowBody>) -> Json<Value> {
 }
 
 /// 影子评测配置与已采集样本数（AIQ 重放入口）。
-async fn routing_shadow_status() -> Json<Value> {
-    let ratio = config::shadow_ratio();
-    let baseline = db::get_setting("routing.shadow_baseline").ok().flatten();
-    let samples = db::count_routing_calibration().unwrap_or(0);
+async fn routing_shadow_status(State(state): State<AppState>) -> Json<Value> {
+    let ratio = config::shadow_ratio(&state.db);
+    let baseline = state
+        .db
+        .get_setting("routing.shadow_baseline")
+        .ok()
+        .flatten();
+    let samples = state.db.count_routing_calibration().unwrap_or(0);
     Json(json!({ "ratio": ratio, "baseline": baseline, "samples": samples }))
 }
 
 /// GET /api/routing/review —— 最近一份路由体检报告（N2.a：三线成本/质量、AIQ、
 /// 节省额、样本数、预算档触发分布、权重建议）。
-async fn routing_review() -> Result<Json<Value>> {
-    match db::latest_policy_review()? {
+async fn routing_review(State(state): State<AppState>) -> Result<Json<Value>> {
+    match state.db.latest_policy_review()? {
         Some(r) => Ok(Json(json!({
             "ok": true,
             "id": r.id,
@@ -1845,42 +2162,60 @@ async fn routing_review() -> Result<Json<Value>> {
 }
 
 /// POST /api/routing/review/refresh —— 手动跑一轮体检（幂等追加一份报告）。
-async fn routing_review_refresh() -> Result<Json<Value>> {
-    Ok(Json(crate::review::run_review().await?))
+async fn routing_review_refresh(State(state): State<AppState>) -> Result<Json<Value>> {
+    Ok(Json(crate::review::run_review(&state.db).await?))
 }
 
 /// POST /api/routing/review/adopt —— 采纳建议权重 → upsert routing_policy。
 /// body: {"task_type": "coding"} 采纳单个；{} 采纳全部。人工审查点，不自动生效。
-async fn routing_review_adopt(Json(body): Json<Value>) -> Result<Json<Value>> {
+async fn routing_review_adopt(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>> {
     let tt = body.get("task_type").and_then(|v| v.as_str());
-    Ok(Json(crate::review::adopt_suggestions(tt)?))
+    Ok(Json(crate::review::adopt_suggestions(&state.db, tt)?))
 }
 
-async fn cache_threshold_get() -> Json<Value> {
-    let samples = db::calibration_labeled_samples().map(|s| s.len()).unwrap_or(0);
-    let suggested = db::get_setting("cache_threshold_suggested").ok().flatten();
-    let auto = db::get_setting("cache_auto_tune")
+async fn cache_threshold_get(State(state): State<AppState>) -> Json<Value> {
+    let samples = state
+        .db
+        .calibration_labeled_samples()
+        .map(|s| s.len())
+        .unwrap_or(0);
+    let suggested = state
+        .db
+        .get_setting("cache_threshold_suggested")
+        .ok()
+        .flatten();
+    let auto = state
+        .db
+        .get_setting("cache_auto_tune")
         .ok()
         .flatten()
         .map(|v| v != "0" && v != "false")
         .unwrap_or(true);
     Json(json!({
-        "threshold": config::cache_threshold(),
+        "threshold": config::cache_threshold(&state.db),
         "auto_tune": auto,
         "labeled_samples": samples,
         "suggested": suggested,
     }))
 }
 
-async fn cache_autotune_set(Json(req): Json<Value>) -> Json<Value> {
-    let on = req.get("auto_tune").and_then(|v| v.as_bool()).unwrap_or(true);
-    let _ = db::set_setting("cache_auto_tune", if on { "1" } else { "0" });
+async fn cache_autotune_set(State(state): State<AppState>, Json(req): Json<Value>) -> Json<Value> {
+    let on = req
+        .get("auto_tune")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let _ = state
+        .db
+        .set_setting("cache_auto_tune", if on { "1" } else { "0" });
     // Manual override: an explicit threshold pins it (and implies auto-tune off).
     if let Some(t) = req.get("threshold").and_then(|v| v.as_f64()) {
-        let _ = config::set_cache_threshold(t);
-        let _ = db::set_setting("cache_auto_tune", "0");
+        let _ = config::set_cache_threshold(&state.db, t);
+        let _ = state.db.set_setting("cache_auto_tune", "0");
     }
-    Json(json!({ "ok": true, "auto_tune": on, "threshold": config::cache_threshold() }))
+    Json(json!({ "ok": true, "auto_tune": on, "threshold": config::cache_threshold(&state.db) }))
 }
 
 // ── Private helpers ──
@@ -1892,7 +2227,11 @@ pub(crate) fn pick_classifier(models: &[Model]) -> Option<ModelSpec> {
     pool.sort_by(|a, b| {
         a.capability_tier
             .cmp(&b.capability_tier)
-            .then(a.input_cost_per_token.partial_cmp(&b.input_cost_per_token).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                a.input_cost_per_token
+                    .partial_cmp(&b.input_cost_per_token)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
             .then(a.name.cmp(&b.name))
     });
     pool.first().map(|m| ModelSpec::from(*m))
@@ -1905,7 +2244,10 @@ fn blocked_response(sec: &SecurityReport) -> Response {
         "detail": sec.pii,
     });
     Response::builder()
-        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        )
         .body(Body::from(format!("data: {}\n\n", body.to_string())))
         .unwrap()
 }
@@ -1914,7 +2256,10 @@ fn blocked_response(sec: &SecurityReport) -> Response {
 fn sse_error(detail: &str) -> Response {
     let body = json!({ "error": true, "detail": detail });
     Response::builder()
-        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        )
         .body(Body::from(format!("data: {}\n\n", body.to_string())))
         .unwrap()
 }

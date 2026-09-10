@@ -5,7 +5,6 @@
 //! a pure function over request context, so it can be unit-tested in isolation
 //! and toggled by config later.
 
-use crate::db;
 use regex::Regex;
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -19,10 +18,7 @@ use std::sync::OnceLock;
 /// - `drift`：0.0 = 与前一轮前缀完全一致（稳定）；1.0 = 发生漂移。
 ///   首轮（无参照）返回 0.0 且带出当前哈希供下一轮比对。
 /// - `Some(prefix_hash)`：当前前缀的 fnv1a 哈希，供下一轮传入。
-pub fn prefix_stability(
-    messages: &[Value],
-    prev_prefix_hash: Option<u64>,
-) -> (f64, Option<u64>) {
+pub fn prefix_stability(messages: &[Value], prev_prefix_hash: Option<u64>) -> (f64, Option<u64>) {
     let prefix = normalize_prefix(messages, 512);
     let curr_hash = fnv1a(prefix.as_bytes());
     let drift = match prev_prefix_hash {
@@ -108,7 +104,12 @@ pub struct DifficultyWeights {
 
 impl Default for DifficultyWeights {
     fn default() -> Self {
-        Self { structure: 0.3, complexity: 0.3, context: 0.2, embedding: 0.2 }
+        Self {
+            structure: 0.3,
+            complexity: 0.3,
+            context: 0.2,
+            embedding: 0.2,
+        }
     }
 }
 
@@ -185,7 +186,10 @@ fn tools_rx() -> &'static [Regex] {
 
 fn vision_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
-    RX.get_or_init(|| Regex::new(r"(图片|图像|看图|截图|照片|视觉|画面|image|picture|screenshot|photo|ocr)").unwrap())
+    RX.get_or_init(|| {
+        Regex::new(r"(图片|图像|看图|截图|照片|视觉|画面|image|picture|screenshot|photo|ocr)")
+            .unwrap()
+    })
 }
 
 fn compare_rx() -> &'static Regex {
@@ -296,7 +300,11 @@ fn heuristic_task_type(text: &str) -> Option<String> {
         ),
         (
             "simple_qa",
-            &[r"(你好|hi|hello|在吗)", r"(天气|时间|日期)", r"(翻译|translate)"][..],
+            &[
+                r"(你好|hi|hello|在吗)",
+                r"(天气|时间|日期)",
+                r"(翻译|translate)",
+            ][..],
         ),
     ] {
         for p in pats {
@@ -344,8 +352,8 @@ pub fn compute(
     }
 }
 
-fn cfg_f64(key: &str, default: f64) -> f64 {
-    db::get_setting(key)
+fn cfg_f64(db: &crate::db::Db, key: &str, default: f64) -> f64 {
+    db.get_setting(key)
         .ok()
         .flatten()
         .and_then(|v| v.parse().ok())
@@ -353,15 +361,20 @@ fn cfg_f64(key: &str, default: f64) -> f64 {
 }
 
 /// 生产入口：读 settings 阈值后走纯计算。history/conv_id 预留（P5 信号用）。
-pub fn extract(user_text: &str, _history: &[Value], _conv_id: Option<&str>) -> SignalSet {
+pub fn extract(
+    db: &crate::db::Db,
+    user_text: &str,
+    _history: &[Value],
+    _conv_id: Option<&str>,
+) -> SignalSet {
     let w = DifficultyWeights {
-        structure: cfg_f64("signal.difficulty.weights.structure", 0.3),
-        complexity: cfg_f64("signal.difficulty.weights.complexity", 0.3),
-        context: cfg_f64("signal.difficulty.weights.context", 0.2),
-        embedding: cfg_f64("signal.difficulty.weights.embedding", 0.2),
+        structure: cfg_f64(db, "signal.difficulty.weights.structure", 0.3),
+        complexity: cfg_f64(db, "signal.difficulty.weights.complexity", 0.3),
+        context: cfg_f64(db, "signal.difficulty.weights.context", 0.2),
+        embedding: cfg_f64(db, "signal.difficulty.weights.embedding", 0.2),
     };
-    let easy = cfg_f64("signal.band.easy", 0.33);
-    let medium = cfg_f64("signal.band.medium", 0.66);
+    let easy = cfg_f64(db, "signal.band.easy", 0.33);
+    let medium = cfg_f64(db, "signal.band.medium", 0.66);
     compute(user_text, &w, easy, medium)
 }
 
@@ -424,9 +437,17 @@ mod tests {
         let (e, m) = (0.33, 0.66);
         assert_eq!(band_from(0.00, e, m), "easy");
         assert_eq!(band_from(0.32, e, m), "easy");
-        assert_eq!(band_from(0.33, e, m), "medium", "下边界归 medium（easy 是 < 阈值）");
+        assert_eq!(
+            band_from(0.33, e, m),
+            "medium",
+            "下边界归 medium（easy 是 < 阈值）"
+        );
         assert_eq!(band_from(0.65, e, m), "medium");
-        assert_eq!(band_from(0.66, e, m), "hard", "下边界归 hard（medium 是 < 阈值）");
+        assert_eq!(
+            band_from(0.66, e, m),
+            "hard",
+            "下边界归 hard（medium 是 < 阈值）"
+        );
         assert_eq!(band_from(1.00, e, m), "hard");
     }
 
@@ -453,18 +474,29 @@ mod tests {
 
         let mut certain = gray.clone();
         certain.difficulty = 0.95;
-        assert!(!llm_classify_needed(&certain, 0.2), "显然困难 → 不需 LLM 分类");
+        assert!(
+            !llm_classify_needed(&certain, 0.2),
+            "显然困难 → 不需 LLM 分类"
+        );
 
         let mut h = gray.clone();
         h.task_type = Some("coding".into());
-        assert!(!llm_classify_needed(&h, 0.2), "启发式已识别 → 不需 LLM 分类");
+        assert!(
+            !llm_classify_needed(&h, 0.2),
+            "启发式已识别 → 不需 LLM 分类"
+        );
     }
 
     #[test]
     fn compute_complex_medium_band() {
         let w = DifficultyWeights::default();
         // 含「分析+比较优缺点」→ 命中 complex_reasoning 优先；难度落在 medium，而非 easy
-        let s = compute("帮我写一个 Rust 函数，实现 SQL 查询分析，并比较两种做法的优缺点，然后给出推荐。", &w, 0.33, 0.66);
+        let s = compute(
+            "帮我写一个 Rust 函数，实现 SQL 查询分析，并比较两种做法的优缺点，然后给出推荐。",
+            &w,
+            0.33,
+            0.66,
+        );
         assert_eq!(s.task_type.as_deref(), Some("complex_reasoning"));
         assert_eq!(s.band, "medium", "比较类任务应为 medium 而非 easy");
         assert!(s.difficulty >= 0.30);
