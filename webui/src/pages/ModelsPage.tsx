@@ -50,6 +50,7 @@ export default function ModelsPage() {
         await updateModel(editing.name, {
           litellm_model: v.litellm_model || editing.litellm_model,
           api_base: v.api_base ?? '',
+          api_key_env: v.api_key ?? '',
           task_type: v.task_type ?? '',
           input_cost_per_token: v.input_cost ?? 0,
           output_cost_per_token: v.output_cost ?? 0,
@@ -61,7 +62,7 @@ export default function ModelsPage() {
           provider: v.provider,
           litellm_model: v.litellm_model || `${PROVIDERS.find((p) => p.value === v.provider)?.prefix ?? ''}${v.name}`,
           api_base: v.api_base ?? '',
-          api_key_env: v.api_key_env ?? '',
+          api_key_env: v.api_key ?? '',
           task_type: v.task_type ?? '',
           input_cost_per_token: v.input_cost ?? 0,
           output_cost_per_token: v.output_cost ?? 0,
@@ -91,6 +92,7 @@ export default function ModelsPage() {
       provider: m.provider,
       litellm_model: m.litellm_model,
       api_base: m.api_base ?? '',
+      api_key: m.api_key_env ?? '',
       input_cost: m.input_cost_per_token,
       output_cost: m.output_cost_per_token,
       task_type: m.task_type,
@@ -184,6 +186,13 @@ export default function ModelsPage() {
           </Form.Item>
           <Form.Item name="api_base" label="API Base">
             <Input placeholder="可选" />
+          </Form.Item>
+          <Form.Item
+            name="api_key"
+            label="API Key"
+            extra="sk-... 字面密钥或环境变量名（如 DASHSCOPE_API_KEY）；Ollama 本地模型留空"
+          >
+            <Input.Password placeholder="可选" autoComplete="new-password" />
           </Form.Item>
           <Space size={12} style={{ display: 'flex' }}>
             <Form.Item name="input_cost" label="输入价格 ($/token)" initialValue={0}>

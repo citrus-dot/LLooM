@@ -31,29 +31,21 @@ interface EnvItem {
   desc: string;
 }
 
+// API keys are NOT configured here anymore — they are per-model settings
+// edited on the Models page (stored in the models table). This page keeps
+// only service addresses / ports / paths.
 const ENV_SECTIONS: { title: string; items: EnvItem[] }[] = [
   {
-    title: '阿里云百炼（DashScope）',
+    title: '服务地址',
     items: [
-      { key: 'DASHSCOPE_API_KEY', label: 'API Key', type: 'password', desc: '主要 LLM 供应商' },
-      { key: 'DASHSCOPE_API_BASE', label: 'API Base', type: 'text', desc: '默认 dashscope.aliyuncs.com' },
+      { key: 'DASHSCOPE_API_BASE', label: 'DashScope Base', type: 'text', desc: '默认 dashscope.aliyuncs.com' },
+      { key: 'OPENAI_BASE_URL', label: 'OpenAI Base URL', type: 'text', desc: '可选代理地址' },
+      { key: 'OLLAMA_API_BASE', label: 'Ollama Base', type: 'text', desc: '本地 Ollama 地址' },
     ],
-  },
-  {
-    title: 'OpenAI',
-    items: [
-      { key: 'OPENAI_API_KEY', label: 'API Key', type: 'password', desc: 'sk-...' },
-      { key: 'OPENAI_BASE_URL', label: 'Base URL', type: 'text', desc: '可选代理地址' },
-    ],
-  },
-  {
-    title: 'Anthropic',
-    items: [{ key: 'ANTHROPIC_API_KEY', label: 'API Key', type: 'password', desc: 'sk-ant-...' }],
   },
   {
     title: '核心配置',
     items: [
-      { key: 'OLLAMA_API_BASE', label: 'Ollama Base', type: 'text', desc: '本地 Ollama 地址' },
       { key: 'LLOOM_WEB_PORT', label: 'Web 端口', type: 'text', desc: '默认 7861' },
       { key: 'LLOOM_DATA_DIR', label: '数据目录', type: 'text', desc: 'SQLite/对话' },
     ],
@@ -323,20 +315,16 @@ export default function SettingsPage() {
       // echoing a real key into a form field is a leak risk. Instead the field
       // is left blank with a placeholder hinting it's already configured.
       const schemaKeys = new Set(ENV_SECTIONS.flatMap((sec) => sec.items.map((i) => i.key)));
-      const isSecret = (k: string) => {
-        const up = k.toUpperCase();
-        return up.endsWith('_API_KEY') || up.endsWith('_KEY') || up.endsWith('_TOKEN') || up.endsWith('_SECRET');
-      };
       const values: Record<string, string> = {};
       ENV_SECTIONS.forEach((sec) =>
         sec.items.forEach((item) => {
-          if (!isSecret(item.key)) {
+          if (!isSecretKey(item.key)) {
             values[item.key] = e[item.key] ?? '';
           }
         }),
       );
       Object.keys(e)
-        .filter((k) => !schemaKeys.has(k) && !isSecret(k) && !isInternalKey(k))
+        .filter((k) => !schemaKeys.has(k) && !isSecretKey(k) && !isInternalKey(k))
         .sort()
         .forEach((k) => {
           values[k] = e[k] ?? '';
@@ -348,10 +336,12 @@ export default function SettingsPage() {
   };
 
   // Sections for rendering: schema groups + an "其他配置" group with extra keys.
+  // Secret-like keys are excluded entirely — secrets are per-model now, and the
+  // settings page no longer offers any key editing.
   const allSections = () => {
     const schemaKeys = new Set(ENV_SECTIONS.flatMap((sec) => sec.items.map((i) => i.key)));
     const extra = Object.keys(env)
-      .filter((k) => !schemaKeys.has(k) && !isInternalKey(k))
+      .filter((k) => !schemaKeys.has(k) && !isInternalKey(k) && !isSecretKey(k))
       .sort()
       .map((k) => ({ key: k, label: k, type: 'text' as const, desc: '' }));
     return extra.length ? [...ENV_SECTIONS, { title: '其他配置', items: extra }] : ENV_SECTIONS;
@@ -467,7 +457,7 @@ export default function SettingsPage() {
       </Col>
       <Col span={14}>
           <Card
-            title="API 密钥配置"
+            title="环境配置"
             extra={
               <Space>
                 <Button icon={<SaveOutlined />} onClick={saveAll} loading={saving}>
@@ -479,6 +469,12 @@ export default function SettingsPage() {
               </Space>
             }
           >
+            <Alert
+              type="info"
+              showIcon
+              message="API Key 请在「模型管理」中按模型配置"
+              style={{ marginBottom: 12 }}
+            />
             <Form form={form} layout="vertical">
               {allSections().map((sec) => (
                 <div key={sec.title}>
