@@ -8,6 +8,35 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::HashMap;
 
+// ── ModelRow（DB 行层）──
+
+/// `models` 表一行的扁平投影：字段与 SQLite 列一一对应，不做任何解释。
+/// 行层 ↔ 领域层的转换只经 `From<ModelRow> for Model` / `From<&Model> for ModelRow`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelRow {
+    pub id: i64,
+    pub name: String,
+    pub provider: String,
+    pub litellm_model: String,
+    pub api_base: String,
+    pub api_key_env: String,
+    pub task_type: String,
+    pub input_cost_per_token: f64,
+    pub output_cost_per_token: f64,
+    pub rpm: i64,
+    pub is_active: i64,
+    pub capability_tier: i64,
+    pub quality_score: f64,
+    pub context_window: i64,
+    pub supports_tools: i64,
+    pub supports_vision: i64,
+    pub supports_stream: i64,
+    pub is_local: i64,
+    pub priority: i64,
+    pub health_state: String,
+    pub needs_calibration: i64,
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS models (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -535,6 +564,7 @@ pub fn insert_model(m: &Model) -> Result<i64> {
     let mut filled = m.clone();
     let _report = crate::metadata::resolve_and_fill(&mut filled);
     validate_cost(filled.input_cost_per_token, filled.output_cost_per_token)?;
+    let row = ModelRow::from(&filled);
     let conn = open()?;
     let res = conn.execute(
         "INSERT INTO models (name, provider, litellm_model, api_base, api_key_env, task_type,
@@ -545,25 +575,25 @@ pub fn insert_model(m: &Model) -> Result<i64> {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                  ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
-            filled.name,
-            filled.provider,
-            filled.litellm_model,
-            filled.api_base,
-            filled.api_key_env,
-            filled.task_type,
-            filled.input_cost_per_token,
-            filled.output_cost_per_token,
-            filled.rpm,
-            filled.is_active,
-            filled.capability_tier,
-            filled.quality_score,
-            filled.context_window,
-            filled.supports_tools,
-            filled.supports_vision,
-            filled.supports_stream,
-            filled.is_local,
-            filled.priority,
-            filled.needs_calibration,
+            row.name,
+            row.provider,
+            row.litellm_model,
+            row.api_base,
+            row.api_key_env,
+            row.task_type,
+            row.input_cost_per_token,
+            row.output_cost_per_token,
+            row.rpm,
+            row.is_active,
+            row.capability_tier,
+            row.quality_score,
+            row.context_window,
+            row.supports_tools,
+            row.supports_vision,
+            row.supports_stream,
+            row.is_local,
+            row.priority,
+            row.needs_calibration,
         ],
     );
     match res {
@@ -585,7 +615,7 @@ pub fn get_model(name: &str) -> Result<Model> {
     let conn = open()?;
     let mut stmt = conn.prepare("SELECT * FROM models WHERE name = ?1 AND is_active = 1")?;
     let row = stmt
-        .query_row(params![name], model_from_row)
+        .query_row(params![name], |r| Ok(Model::from(model_from_row(r)?)))
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(name.to_string()),
             other => other.into(),
@@ -601,7 +631,7 @@ pub fn list_models(active_only: bool) -> Result<Vec<Model>> {
         "SELECT * FROM models ORDER BY name"
     };
     let mut stmt = conn.prepare(q)?;
-    let rows = stmt.query_map([], model_from_row)?;
+    let rows = stmt.query_map([], |r| Ok(Model::from(model_from_row(r)?)))?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r?);
@@ -682,8 +712,8 @@ pub fn delete_model(name: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-fn model_from_row(row: &rusqlite::Row) -> rusqlite::Result<Model> {
-    Ok(Model {
+fn model_from_row(row: &rusqlite::Row) -> rusqlite::Result<ModelRow> {
+    Ok(ModelRow {
         id: row.get("id")?,
         name: row.get("name")?,
         provider: row.get("provider")?,
@@ -708,6 +738,62 @@ fn model_from_row(row: &rusqlite::Row) -> rusqlite::Result<Model> {
             .unwrap_or_else(|| "unknown".to_string()),
         needs_calibration: row.get("needs_calibration")?,
     })
+}
+
+impl From<ModelRow> for Model {
+    fn from(r: ModelRow) -> Self {
+        Model {
+            id: r.id,
+            name: r.name,
+            provider: r.provider,
+            litellm_model: r.litellm_model,
+            api_base: r.api_base,
+            api_key_env: r.api_key_env,
+            task_type: r.task_type,
+            input_cost_per_token: r.input_cost_per_token,
+            output_cost_per_token: r.output_cost_per_token,
+            rpm: r.rpm,
+            is_active: r.is_active,
+            capability_tier: r.capability_tier,
+            quality_score: r.quality_score,
+            context_window: r.context_window,
+            supports_tools: r.supports_tools,
+            supports_vision: r.supports_vision,
+            supports_stream: r.supports_stream,
+            is_local: r.is_local,
+            priority: r.priority,
+            health_state: r.health_state,
+            needs_calibration: r.needs_calibration,
+        }
+    }
+}
+
+impl From<&Model> for ModelRow {
+    fn from(m: &Model) -> Self {
+        ModelRow {
+            id: m.id,
+            name: m.name.clone(),
+            provider: m.provider.clone(),
+            litellm_model: m.litellm_model.clone(),
+            api_base: m.api_base.clone(),
+            api_key_env: m.api_key_env.clone(),
+            task_type: m.task_type.clone(),
+            input_cost_per_token: m.input_cost_per_token,
+            output_cost_per_token: m.output_cost_per_token,
+            rpm: m.rpm,
+            is_active: m.is_active,
+            capability_tier: m.capability_tier,
+            quality_score: m.quality_score,
+            context_window: m.context_window,
+            supports_tools: m.supports_tools,
+            supports_vision: m.supports_vision,
+            supports_stream: m.supports_stream,
+            is_local: m.is_local,
+            priority: m.priority,
+            health_state: m.health_state.clone(),
+            needs_calibration: m.needs_calibration,
+        }
+    }
 }
 
 // ── Usage ──
@@ -2602,5 +2688,40 @@ mod cost_assert_tests {
         assert!(validate_cost(0.8, 2.0).is_err()); // 元/M 原值（忘除量纲）被拒
         assert!(validate_cost(-1e-6, 0.0).is_err()); // 负数被拒
         assert!(validate_cost(0.0, 1e-2).is_err()); // 超上限
+    }
+}
+
+#[cfg(test)]
+mod model_row_tests {
+    use super::*;
+
+    /// 行层 ↔ 领域层往返恒等：ModelRow → Model → ModelRow 不得丢字段。
+    #[test]
+    fn row_model_roundtrip_is_identity() {
+        let row = ModelRow {
+            id: 7,
+            name: "m1".into(),
+            provider: "dashscope".into(),
+            litellm_model: "dashscope/m1".into(),
+            api_base: "https://api.example.com".into(),
+            api_key_env: "DASHSCOPE_API_KEY".into(),
+            task_type: "general".into(),
+            input_cost_per_token: 1.11e-7,
+            output_cost_per_token: 2.78e-7,
+            rpm: 60,
+            is_active: 1,
+            capability_tier: 2,
+            quality_score: 0.6,
+            context_window: 32768,
+            supports_tools: 1,
+            supports_vision: 0,
+            supports_stream: 1,
+            is_local: 0,
+            priority: 1,
+            health_state: "up".into(),
+            needs_calibration: 0,
+        };
+        let model = Model::from(row.clone());
+        assert_eq!(ModelRow::from(&model), row);
     }
 }

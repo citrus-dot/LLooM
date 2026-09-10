@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 // ── Model ──
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Model {
     #[serde(default)]
     pub id: i64,
