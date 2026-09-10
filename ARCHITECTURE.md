@@ -232,6 +232,55 @@ bash scripts/smoke_test.sh
 | fancy-regex | 0.19 | lookaround 支持的正则 |
 | thiserror | 2.x | 错误类型 |
 
+## REST API 参考
+
+完整端点列表（与 `crates/lloom-core/src/server.rs` 路由注册一致）：
+
+| 方法 | 路径 | 说明 |
+|--------|------|------|
+| GET | `/api/health` | 健康检查 |
+| GET | `/api/models` | 列出所有模型 |
+| POST | `/api/models` | 注册新模型 |
+| GET/PUT/DELETE | `/api/models/{name}` | 查询/更新/删除模型 |
+| GET | `/api/usage` | 用量统计 |
+| GET | `/api/budgets` | 列出预算 |
+| POST | `/api/budgets` | 创建/更新预算 |
+| GET | `/api/budgets/check` | 检查预算状态 |
+| GET/POST | `/api/config` | 读写 .env 配置 |
+| GET | `/api/stats` | 仪表盘统计 |
+| POST | `/api/chat/stream` | 聊天（SSE 流式） |
+| POST | `/api/orchestrate/stream` | 任务编排（SSE 流式） |
+| GET/POST/DELETE | `/api/conversations` | 对话 CRUD |
+| POST | `/api/conversations/{id}/messages` | 追加单条消息（原子写）|
+| PATCH | `/api/conversations/{id}/messages/{seq}` | 回填消息内容/元数据 |
+| GET | `/api/services/status` | 诚实的服务状态 |
+| POST | `/api/services/{name}/start` | 启动服务（ollama/ai） |
+| POST | `/api/services/{name}/stop` | 停止服务 |
+| POST | `/api/services/{name}/restart` | 重启服务 |
+| GET | `/api/services/{name}/logs` | 服务日志 |
+| POST | `/api/services/smart-restart` | 配置变更后重启 AI 服务 |
+| POST | `/api/system/open-folder` | 打开目录 |
+| POST | `/api/system/open-web` | 打开网页 |
+| POST | `/api/system/cli` | 运行 CLI |
+| GET | `/api/pricing/specs` | 列出所有 PriceSpec |
+| PUT | `/api/pricing/specs/{provider}/{model}` | 手工改价 |
+| POST | `/api/pricing/specs/{provider}/{model}/accept` | 采纳刷新价（转正 manual） |
+| POST | `/api/pricing/refresh` | 触发远端定价刷新 job |
+| GET | `/api/pricing/reference` | OpenRouter 参考价 × 本地图价联表（含偏差 %） |
+| POST | `/api/pricing/reference/refresh` | 手动刷新参考价 |
+| GET | `/api/pricing/calibration` | 校准曲线 |
+| GET | `/api/probe/stats` | 探针消耗/预算 |
+| PUT | `/api/probe/budget` | 调整探针月预算 |
+| POST | `/api/routing/plan-subtask` | 子任务级路由规划（primary + fallback + escalation） |
+| POST,GET | `/api/routing/shadow` | 影子评测采样（AIQ 重放） |
+| GET | `/api/routing/overhead` | 路由开销报告（count/avg/P95/max/slow） |
+| POST | `/api/shutdown` | 优雅关停（等价 SIGINT） |
+| POST | `/api/cache/init` | 语义缓存预初始化（触发 chroma 模型下载） |
+| GET | `/api/cache/status` | 缓存状态（就绪 / 下载进度） |
+| POST | `/api/cache/cleanup` | 清理缓存 |
+| POST | `/api/cache/feedback` | 命中反馈（灰区采样） |
+| GET,POST | `/api/cache/threshold` | 缓存阈值查询 / 自调 |
+
 ## 目录结构
 
 ```

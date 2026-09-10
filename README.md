@@ -1,11 +1,12 @@
 <p align="center">
-  <img src="assets/logo.png" width="120" height="120" alt="LLooM Logo" />
+  <img src="assets/logo.png" width="110" height="110" alt="LLooM Logo" />
 </p>
 
 <h1 align="center">LLooM</h1>
 
 <p align="center">
-  <strong>A self-contained intelligent LLM routing platform</strong> — one Rust server that routes, prices, caches and secures your LLM traffic. Zero Docker required.
+  A self-hosted LLM routing gateway — one Rust binary that routes, prices, caches and secures your LLM traffic.<br/>
+  <strong>Zero Docker. Zero external database. Clone and run.</strong>
 </p>
 
 <p align="center">
@@ -21,370 +22,163 @@
   <strong>English</strong> | <a href="README-ZH.md">中文</a>
 </p>
 
+<p align="center">
+  <img src="assets/webui-overview.png" width="820" alt="LLooM WebUI overview" />
+</p>
+
 ---
 
 ## Why LLooM?
 
 | Pain point | LLooM's answer |
 |------------|----------------|
-| Juggling multiple models by gut feeling | **Smart routing** — two-layer classification (regex → LLM fallback) plus score-based selection picks the best value model per task type |
-| Uncontrollable API bills | **Budget-tier-aware routing** — normal/throttle/tight/protect tiers degrade automatically; protect forces zero-cost local fallback |
-| Opaque pricing | **Multi-source pricing chain** — manual > overlay > litellm_remote > litellm_packaged > heuristic, cross-checked against OpenRouter reference prices (≥20% deviation flagged) |
-| Paying repeatedly for the same questions | **Semantic cache** — vector similarity matching returns cached replies at zero cost, hit rate is observable |
-| Complex tasks overwhelming a single model | **Task orchestration** — auto-decomposition, per-subtask model assignment, sequential execution, result aggregation |
-| No security guardrails on LLM calls | **Security layer** — PII masking (7 types), jailbreak interception (5 types), MMLU 14-domain classification |
-| "Healthy" status that isn't really healthy | **Honest status reporting** — child process alive + port responding + AI readiness, distinguishing Down / port conflict / missing configuration |
-| Legacy stacks piling up 10 Docker containers | **Single binary + SQLite** — no Docker, no external database, clone and run |
-
-## Architecture
-
-LLooM is layered with the **REST API as the single contract** between the UI and the business core. Four frontends — WebUI, CLI, TUI, and the headless REST API itself — all plug into the same core.
-
-```
-UI layer (WebUI / CLI / TUI)            ← any frontend, UI-agnostic
-        │  HTTP REST  or  direct function calls
-Rust core + axum REST server (:7861)    ← primary server, all business logic
-        │  function calls
-Rust core modules (db / router / security / processes / conversations)
-        │  async HTTP to the AI service
-Python AI micro-service (:7862)         ← stateless litellm wrapper
-        │
-LLM providers (DashScope / Ollama / OpenAI / Anthropic)
-```
-
-Key points:
-- **Rust axum server** (`:7861`) is the primary server. It owns SQLite, task routing, security filtering, process management, and the WebUI.
-- **Python is reduced to a thin stateless AI micro-service** (`:7862`) that only wraps litellm — the one thing Rust cannot replace (100+ provider coverage).
-- **All UIs receive typed JSON objects, never JSON strings** — no manual parsing anywhere.
-- **Honest service status**: `GET /api/services/status` reports real state (child process alive + port responding + AI readiness), distinguishing Down / port conflict / misconfigured — never a fake "healthy".
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer breakdown, REST API reference, ports, and data flows.
-
-## Features
-
-### Model Management
-- Register cloud models (DashScope, OpenAI, Anthropic) and local models (Ollama)
-- Track token usage and cost per model in real-time
-- Set budgets with configurable duration (daily/weekly/monthly)
-- Automatic cost calculation based on registered pricing, with manual overrides and remote refresh acceptance
-
-### Smart Routing
-- **Two-layer classification**: Regex rules (zero cost) first, LLM fallback second
-- **Scoring router (`plan()`)**: Registry-gated (tier/context/health/cost-cap/pinned) + weighted cost/quality score; cost via `pricing.rs est_cost`, quality via EWMA cold-start score. Replaces all hardcoded model maps.
-- **Pinned soft-prior**: A pinned model acts as a soft preference (+0.3 score bonus) by default, still gated by health/budget checks; set `LLOOM_PINNED_MODE=hard` to restore the old hard appointment behavior.
-- **Fallback chains**: 5-level failover (qwen3-max → plus → qwen-plus → flash → local) with health-aware escalation
-- **Shadow evaluation + AIQ**: Auto-samples traffic to calibrate cost-vs-quality, replayable offline (`scripts/aiq_replay.py`)
-- **Health-aware failover**: Sliding-window health state machine, hourly active probes (capped by an adjustable monthly budget), per-request fallback
-- **Budget-driven**: Budget tier (normal/throttle/tight/protect) injected into routing; tight downgrades complex tasks, protect forces local/zero-cost
-- **Inference model support**: Auto-enables streaming for inference models
-- **Domain enhancement**: STEM → math_logic, CS/engineering → coding
-
-### Pricing & Cost Accounting
-- **Multi-source priority chain**: manual > overlay > litellm_remote > litellm_packaged > heuristic, each source verifiable in the pricing page
-- **OpenRouter third-party reference**: joined with local prices showing input/output deviation percentages; ≥20% flagged in orange — cross-check only, never overwrites local prices
-- **Probe calibration**: hourly warm-up + cache-verify probes, failure sentinels excluded from usage stats, monthly budget adjustable (`/api/probe/budget`)
-
-### Task Orchestration
-- **Complexity detection**: 6 regex rules + length/sentence count heuristics
-- **Task decomposition**: LLM-based subtask splitting with dependency tracking
-- **Sequential execution**: Subtasks run in order with context injection
-- **Result aggregation**: LLM synthesizes subtask outputs into a cohesive answer
-- **SSE streaming**: Real-time event stream (decompose → task_start → task_done → result)
-
-### Security Layer
-- **PII Detection** (7 types): Email, phone, SSN, credit card, IP, ID card, bank account
-- **Jailbreak Interception** (5 types): DAN, instruction override, role manipulation, safety bypass, prompt injection
-- **Domain Classification**: 14 MMLU categories with keyword pre-filter + LLM fallback
-
-### Semantic Cache
-- ChromaDB vector similarity search (cosine, 0.95 threshold, 24h TTL)
-- Returns cached responses for repeated simple Q&A (zero cost)
-- Cache hits are flagged (`cache_hit`) and shown as "来自缓存" in the UIs, so a reply while services are down is clearly identified as cached
-- Graceful degradation when embedding model unavailable
-- Cache lifecycle is manageable via `/api/cache/*` (pre-init / status / cleanup / feedback / threshold autotune)
-
-### UIs
-- **WebUI** — browser UI at `http://localhost:7861/` (service status, chat, models, usage, pricing, settings)
-- **CLI** — `lloom-cli` for scripts and quick ops
-- **TUI** — OpenTUI + SolidJS terminal dashboard (`tui/`)
-- **Honest service management** — start/stop/restart Ollama and the AI service with real status reporting (WebUI buttons, TUI right-click menus, CLI commands), plus per-service log viewing
+| Juggling models by gut feeling | **Score-based routing** — regex + LLM two-layer classification, cost/quality weighted `plan()` picks the best value model per task |
+| Uncontrollable API bills | **Budget-tier routing** — normal/throttle/tight/protect degrade automatically; protect forces zero-cost local fallback |
+| Opaque pricing | **Multi-source pricing** — manual > remote > packaged > heuristic chain, cross-checked by live probes and OpenRouter reference prices |
+| Paying repeatedly for repeat questions | **Semantic cache** — vector similarity hits return cached replies at zero cost |
+| Complex tasks overwhelming one model | **Task orchestration** — auto-decompose, assign a model per subtask, execute, aggregate |
+| "Healthy" status that isn't healthy | **Honest status** — real probes distinguish Down / port conflict / missing config; never a fake green light |
 
 ## Quick Start
 
-### Option A: Download the App
+**Option A — download a release**
 
-1. Download the latest release from [GitHub Releases](https://github.com/citrus-dot/LLooM/releases)
-2. Launch it (or the bundled `.deb`/`.rpm`)
-3. Configure API keys in Settings → API Keys
-4. Start chatting
+1. Grab the latest build from [Releases](https://github.com/citrus-dot/LLooM/releases) (or install the `.deb`/`.rpm`)
+2. Set your API key in Settings → API Keys
+3. Chat at `http://localhost:7861`
 
-### Option B: Development Mode
+**Option B — from source**
 
 ```bash
 git clone -b v2 https://github.com/citrus-dot/LLooM.git
 cd LLooM
 
-# Install Python dependencies (Python AI micro-service)
-# Preferred: uv (frozen install from the committed uv.lock, reproducible builds):
-uv sync --extra dev --extra build
-# Restricted network? uv does not read pip.conf; set a mirror explicitly:
-#   export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
-# Fallback without uv (repo ships pip.conf with a Tsinghua mirror):
-#   export PIP_CONFIG_FILE="$PWD/pip.conf" && pip install -e ".[dev]"
-
-# Copy and edit environment
-cp .env.example .env
-# Edit .env with your API keys
-
-# Build the WebUI (lloom-server serves webui/dist)
+uv sync --extra dev --extra build          # or: pip install -e ".[dev]"
+cp .env.example .env                       # fill in at least one API key
 cd webui && npm install && npm run build && cd ..
 
-# Run the Rust server (Web UI on :7861)
-cargo run -p lloom-server
+cargo run -p lloom-server                  # Web UI on :7861
 ```
 
-The server (`:7861`) is the single entry point. It spawns the Python AI micro-service (`:7862`) and Ollama (`:11434`) automatically.
+The server (`:7861`) is the single entry point — it spawns the Python AI micro-service (`:7862`) and Ollama (`:11434`) automatically. Ollama itself is not bundled; install it with `curl -fsSL https://ollama.com/install.sh | sh`.
 
-### Option C: Build the Release Bundle
+## Try It
+
+**WebUI** — open [http://localhost:7861](http://localhost:7861): service status, chat, models, usage, pricing, settings.
+
+**CLI**
 
 ```bash
-# Full build (Rust release + AI service PyInstaller)
-bash scripts/build.sh
-
-# Or step by step:
-bash scripts/build.sh --skip-ai       # skip AI micro-service packaging
+lloom-cli chat "Explain quicksort"          # one-shot, auto-routed
+lloom-cli usage                             # spend per model
+lloom-cli status                            # services + routing stats
 ```
 
-Ollama is **not** bundled. The server uses a system Ollama on PATH or at
-`localhost:11434`; if it's missing, the CLI / WebUI / TUI show an install hint.
-Install it with `curl -fsSL https://ollama.com/install.sh | sh`.
-
-Build outputs:
-- `target/release/lloom-server` — main server (REST + WebUI)
-- `target/release/lloom-cli` — command-line interface
-- `dist/ai-service/ai-service` — standalone AI micro-service (~26MB, wraps litellm)
-- `dist/ollama/ollama` — bundled Ollama binary
-
-The TUI is a separate Node/SolidJS app in `tui/` (see below), not part of the
-Rust build.
-
-### Smoke Test
+**REST API** — OpenAI-style streaming:
 
 ```bash
-bash scripts/smoke_test.sh
+curl -N -X POST http://localhost:7861/api/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"q": "Explain quicksort"}'
 ```
 
-Covers 19 checks: health, service status, AI self-check, model registration, chat, orchestration, usage, conversation CRUD, budgets, and service restart.
+## Features
+
+- **Smart routing** — two-layer classification (regex → LLM fallback); registry-gated scoring with health/budget/cost-cap checks; pinned models as soft prior (`LLOOM_PINNED_MODE=hard` reverts); 5-level fallback chain; shadow evaluation + AIQ offline replay
+- **Cost accounting** — per-model token/cost tracking in SQLite; budget tiers injected into routing; monthly probe budget with calibration sentinels
+- **Multi-source pricing** — priority chain `manual > overlay > litellm_remote > litellm_packaged > heuristic`; OpenRouter reference prices with ≥20% deviation flags
+- **Task orchestration** — complexity detection → LLM decomposition → sequential execution → aggregation, all over SSE
+- **Security** — PII masking (7 types), jailbreak interception (5 types), 14-domain MMLU classification
+- **Semantic cache** — ChromaDB cosine similarity (0.95 threshold, 24h TTL), hit feedback loop, threshold autotune, graceful degradation
+- **Three frontends** — WebUI, CLI (`lloom-cli`), TUI (OpenTUI + SolidJS), all on one REST contract
+
+## Architecture
+
+```
+UI layer (WebUI / CLI / TUI)            ← any frontend, UI-agnostic
+        │  HTTP REST — typed JSON, the single contract
+Rust core + axum REST server (:7861)    ← all business logic + WebUI
+        │
+Rust core modules (db / router / security / pricing / probe / …)
+        │  async HTTP
+Python AI micro-service (:7862)         ← stateless litellm wrapper
+        │
+LLM providers (DashScope / OpenAI / Anthropic / Ollama)
+```
+
+- **Rust owns everything**: SQLite (WAL), routing, security, process management — Python is reduced to the one thing Rust can't replace (litellm's 100+ provider coverage)
+- **Honest service status**: child process alive + port responding + AI readiness — never a fake "healthy"
+
+Full layer breakdown, ports, and the [REST API reference](ARCHITECTURE.md#rest-api-参考) live in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Configuration
 
-All configuration is via environment variables in `.env`:
+All via `.env` (see [.env.example](.env.example)):
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `DASHSCOPE_API_KEY` | (empty) | Alibaba DashScope API key |
-| `DASHSCOPE_API_BASE` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | DashScope endpoint |
 | `OPENAI_API_KEY` | (empty) | OpenAI API key |
-| `OPENAI_BASE_URL` | (empty) | OpenAI base URL override |
 | `ANTHROPIC_API_KEY` | (empty) | Anthropic API key |
-| `LLOOM_WEB_PORT` | `7861` | Rust server + Web UI port |
-| `LLOOM_AI_SERVICE_URL` | `http://localhost:7862` | Python AI micro-service URL |
+| `LLOOM_WEB_PORT` | `7861` | Server + Web UI port |
 | `LLOOM_DATA_DIR` | `./data` | Data directory (SQLite, conversations) |
-| `OLLAMA_API_BASE` | `http://localhost:11434` | Ollama endpoint |
-| `LLOOM_PINNED_MODE` | `soft` | Pinned mode: `soft` = soft prior (+0.3 bonus), `hard` = forced appointment |
-
-## REST API
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/health` | Health check |
-| GET | `/api/models` | List all models |
-| POST | `/api/models` | Register a new model |
-| GET/PUT/DELETE | `/api/models/{name}` | Get/update/delete a model |
-| GET | `/api/usage` | Usage statistics |
-| GET | `/api/budgets` | List budgets |
-| POST | `/api/budgets` | Create/update a budget |
-| GET | `/api/budgets/check` | Check budget status |
-| GET/POST | `/api/config` | Read/write .env config |
-| GET | `/api/stats` | Dashboard statistics |
-| POST | `/api/chat/stream` | Chat with SSE streaming |
-| POST | `/api/orchestrate/stream` | Task orchestration with SSE |
-| GET/POST/DELETE | `/api/conversations` | Conversation CRUD |
-| POST | `/api/conversations/{id}/messages` | Append one message (atomic) |
-| PATCH | `/api/conversations/{id}/messages/{seq}` | Backfill message content/meta |
-| GET | `/api/services/status` | Honest service status |
-| POST | `/api/services/{name}/start` | Start a service (ollama/ai) |
-| POST | `/api/services/{name}/stop` | Stop a service |
-| POST | `/api/services/{name}/restart` | Restart a service |
-| GET | `/api/services/{name}/logs` | Service logs |
-| POST | `/api/services/smart-restart` | Restart AI service after config change |
-| POST | `/api/system/open-folder` | Open a folder |
-| POST | `/api/system/open-web` | Open a URL |
-| POST | `/api/system/cli` | Run a CLI command |
-| GET | `/api/pricing/specs` | List all PriceSpecs |
-| PUT | `/api/pricing/specs/{provider}/{model}` | Manual price override |
-| POST | `/api/pricing/specs/{provider}/{model}/accept` | Accept refreshed price (force manual) |
-| POST | `/api/pricing/refresh` | Trigger remote price refresh job |
-| GET | `/api/pricing/reference` | OpenRouter reference prices joined with local prices (deviation %) |
-| POST | `/api/pricing/reference/refresh` | Manually refresh reference prices |
-| GET | `/api/pricing/calibration` | Calibration curve |
-| GET | `/api/probe/stats` | Probe spend/budget stats |
-| PUT | `/api/probe/budget` | Adjust probe monthly budget |
-| POST | `/api/routing/plan-subtask` | Per-subtask route plan (primary + fallback + escalation) |
-| POST,GET | `/api/routing/shadow` | Shadow evaluation sampling (AIQ replay) |
-| GET | `/api/routing/overhead` | Routing overhead report (count/avg/P95/max/slow) |
-| POST | `/api/shutdown` | Graceful shutdown (equivalent to SIGINT) |
-| POST | `/api/cache/init` | Semantic cache pre-init (fetch chroma model) |
-| GET | `/api/cache/status` | Cache status (ready / download progress) |
-| POST | `/api/cache/cleanup` | Clean up cache |
-| POST | `/api/cache/feedback` | Hit feedback (gray-zone sampling) |
-| GET,POST | `/api/cache/threshold` | Cache threshold query / autotune |
-
-## Tech Stack
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| API Server | **Rust + axum 0.8** | Primary REST + SSE server, all business logic |
-| Async runtime | tokio | Event loop, async HTTP |
-| Database | SQLite (WAL mode, rusqlite) | Model registry, usage tracking, budgets |
-| LLM API | litellm SDK (Python) | Unified interface for all LLM providers |
-| AI micro-service | FastAPI + Uvicorn | Stateless wrapper around litellm |
-| Vector Cache | ChromaDB (PersistentClient) | Semantic cache for Q&A |
-| HTTP client | reqwest 0.13 | Async calls to AI service / probes |
-| Regex | fancy-regex 0.19 | PII/jailbreak/domain patterns (lookaround support) |
-| CLI | clap | Command-line interface (lloom-cli) |
-| TUI | OpenTUI + SolidJS (bun) | Terminal dashboard (tui/) |
-| Local LLM | Ollama | Zero-cost fallback model runtime |
-
-## CLI & TUI
-
-LLooM ships a command-line interface and a terminal UI, both linking `lloom-core` directly (offline-capable, no running server needed for local ops).
-
-### CLI (`lloom-cli`)
-
-```bash
-# Build
-cargo build -p lloom-cli
-# or use the binary at target/debug/lloom-cli
-
-# Models
-lloom-cli models list
-lloom-cli models add qwen2.5-local --provider ollama --model ollama/qwen2.5:latest \
-  --api-base http://localhost:11434 --input-cost 0.000001 --output-cost 0.000002
-lloom-cli models update <name> --input-cost 0.000001 --output-cost 0.000002
-lloom-cli models remove <name>
-
-# Budgets
-lloom-cli budgets set user default 10 --duration 30d
-lloom-cli budgets list
-lloom-cli budgets check user default
-
-# Usage & status
-lloom-cli usage
-lloom-cli status
-
-# Service management
-lloom-cli service status
-lloom-cli service start ollama
-lloom-cli service stop ollama
-lloom-cli service restart ai
-lloom-cli service logs ollama
-lloom-cli service apply DASHSCOPE_API_KEY     # smart-restart affected services
-
-# Conversations
-lloom-cli conversation list
-lloom-cli conversation show <id>
-lloom-cli conversation delete <id>
-lloom-cli conversation new
-
-# Chat — single-shot, resume a session, or interactive multi-turn
-lloom-cli chat "What is 2+2?"
-lloom-cli chat "continue" --session <id>
-lloom-cli chat "hi" --interactive
-
-# --session and conversation show/delete accept an ID OR a title (prefix)
-# match; run `lloom-cli conversation list` to see what's available.
-```
-
-### TUI (`tui/`)
-
-A terminal dashboard built with OpenTUI + SolidJS (run with bun; connects to
-the running server over REST).
-
-```bash
-cd tui
-bun install
-bun run src/index.tsx
-```
-
-Five tabs: **Home** (logo + prompt + spend stats), **Chat** (conversation list
-+ streaming chat), **Models** (registered models + add form), **Usage** (costs,
-model pricing), **Settings** (API keys + service management). Switch with `Tab`,
-quit with `Ctrl+C`.
-
-- `Enter` submits, `Shift+Enter` inserts a newline
-- Chat sidebar starts with a `[+] 新建对话` item (selected by default)
-- Conversations carry full multi-turn history into orchestration; cached
-  replies are flagged "来自缓存"
-- `Models` lets you add a model via an in-TUI form (name / provider / LiteLLM
-  model / API base / task type)
-- Right-click a conversation to open a menu (open / delete), a service in
-  Settings for logs / restart / stop / start, and an API key row to edit it
-- Deleting models/conversations asks for confirmation
-- Home/Usage auto-refresh every 30s
-
-## Project Structure
-
-```
-LLooM/
-├── Cargo.toml                    # Rust workspace root
-├── crates/lloom-core/            # Business core lib (UI-agnostic)
-│   └── src/                      # server.rs, db.rs, router.rs, security.rs,
-│                                 # ai_client.rs, processes.rs, conversations.rs,
-│                                 # pricing.rs, probe.rs, signals.rs,
-│                                 # metadata.rs, health.rs,
-│                                 # models.rs, config.rs, error.rs
-├── crates/lloom-server/          # Main server (REST + WebUI)
-├── crates/lloom-cli/             # CLI (clap, links lloom-core)
-├── webui/                        # WebUI frontend (React + Vite + Ant Design)
-│   ├── src/                      # pages: Overview/Usage/Chat/Models/Pricing/Settings
-│   └── dist/                     # build output (served by lloom-server)
-├── tui/                          # TUI (OpenTUI + SolidJS, bun)
-│   ├── src/                      # app.tsx, index.tsx, routes/, ui/
-│   └── package.json
-├── api/ai_service.py             # Python AI micro-service (litellm wrapper)
-├── assets/                       # Image assets for README/docs
-├── scripts/
-│   ├── build.sh                  # Cross-platform build (with dep checks)
-│   ├── download_ollama.sh        # Cross-platform Ollama download
-│   ├── aiq_replay.py             # AIQ offline replay
-│   └── smoke_test.sh             # 19-check smoke test
-├── ai_service.spec               # PyInstaller spec (AI micro-service)
-├── ARCHITECTURE.md               # Layer breakdown + REST reference
-├── pyproject.toml                # Python project config (AI service)
-└── .env.example                  # Environment template
-```
-
-## Roadmap
-
-### Near-term
-
-- [ ] **OpenAI-compatible proxy** — `POST /v1/chat/completions` + `GET /v1/models`, so any OpenAI client (ChatBox / Open WebUI / immersive translate / agent frameworks) gets score-based routing, caching and budget tiers with zero changes
-- [ ] **Parallel subtask execution** — run independent subtasks concurrently to cut orchestration latency
-- [ ] **Prometheus metrics export** — `GET /metrics`: per-model/task-type/budget-tier counters, cache hits, fallback events, routing overhead
-
-### Mid-term
-
-- [ ] **Closed-loop weight suggestions** — offline grid search over (cost, quality, latency) weights via replay, adopted after human review
-- [ ] **Bill reconciliation** — reconcile cloud-provider invoices against recorded actual costs, report deviations
-- [ ] **Multi-tenant / MCP gateway** — pending decision gates (G1/G2)
+| `LLOOM_PINNED_MODE` | `soft` | Pinned model: `soft` prior or `hard` appointment |
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — layer breakdown + REST API reference
-- [TEST-GUIDE.md](TEST-GUIDE.md) — feature test guide
-- [ROUTING-PLAN.md](ROUTING-PLAN.md) / [PRICING-PLAN.md](PRICING-PLAN.md) / [CONTEXT-PLAN.md](CONTEXT-PLAN.md) — routing / pricing / context design docs
-- [LLooMprogress.md](LLooMprogress.md) — progress ledger
+| Doc | Contents |
+|-----|----------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Layer breakdown, full REST API reference, ports, data flows |
+| [TEST-GUIDE.md](TEST-GUIDE.md) | Feature test guide (`bash scripts/smoke_test.sh` covers 19 checks) |
+| [ROUTING-PLAN.md](ROUTING-PLAN.md) / [PRICING-PLAN.md](PRICING-PLAN.md) / [CONTEXT-PLAN.md](CONTEXT-PLAN.md) | Design docs for routing / pricing / context |
+| [LLooMprogress.md](LLooMprogress.md) | Progress ledger |
+
+## Roadmap
+
+- [ ] **OpenAI-compatible proxy** — `POST /v1/chat/completions`, so ChatBox / Open WebUI / agent frameworks plug in with zero changes
+- [ ] **Parallel subtask execution** — run independent subtasks concurrently
+- [ ] **Prometheus metrics** — `GET /metrics` with per-model/task-type/budget-tier counters
+- [ ] **Closed-loop weight suggestions** — offline replay grid search, adopted after human review
+
+<details>
+<summary><strong>CLI reference</strong></summary>
+
+```bash
+cargo build -p lloom-cli                    # or use target/debug/lloom-cli
+
+lloom-cli models list | add | update | remove
+lloom-cli budgets set user default 10 --duration 30d
+lloom-cli budgets list | check user default
+lloom-cli usage | status
+lloom-cli service status | start ollama | stop ai | restart ai | logs ollama
+lloom-cli service apply DASHSCOPE_API_KEY   # smart-restart affected services
+lloom-cli conversation list | show <id> | delete <id> | new
+lloom-cli chat "hi"                         # one-shot
+lloom-cli chat "continue" --session <id>    # resume
+lloom-cli chat "hi" --interactive           # multi-turn
+```
+
+</details>
+
+<details>
+<summary><strong>Project structure</strong></summary>
+
+```
+LLooM/
+├── crates/lloom-core/            # Business core lib (UI-agnostic):
+│   │                             #   server.rs, db.rs, router.rs, security.rs,
+│   │                             #   pricing.rs, probe.rs, conversations.rs,
+│   │                             #   ai_client.rs, processes.rs, health.rs, …
+├── crates/lloom-server/          # Main server (REST + WebUI)
+├── crates/lloom-cli/             # CLI (clap, links lloom-core)
+├── webui/                        # WebUI (React + Vite + Ant Design) → dist/
+├── tui/                          # TUI (OpenTUI + SolidJS, bun)
+├── api/ai_service.py             # Python AI micro-service (litellm wrapper)
+├── scripts/                      # build.sh / smoke_test.sh / aiq_replay.py
+└── ARCHITECTURE.md               # Layer breakdown + REST reference
+```
+
+</details>
 
 ## License
 
