@@ -25,7 +25,7 @@ import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import field
-from typing import Any
+from typing import Any, cast
 from collections.abc import Iterator
 
 import litellm
@@ -318,13 +318,21 @@ class SemanticCache:
                     n_results=1,
                     where=self._where(model, conv_id),
                 )
-            if not results or not results["ids"] or not results["ids"][0]:
+            rows = (results or {}).get("ids") or []
+            if not rows or not rows[0]:
                 return None
-            similarity = 1 - results["distances"][0][0]
+            dist_rows = (results or {}).get("distances") or []
+            meta_rows = (results or {}).get("metadatas") or []
+            if not dist_rows or not dist_rows[0] or not meta_rows or not meta_rows[0]:
+                return None
+            similarity = 1 - float(dist_rows[0][0])
             if similarity < self.threshold:
                 return None
-            meta = results["metadatas"][0][0]
-            if self.ttl > 0 and (time.time() - meta.get("cached_at", 0)) > self.ttl:
+            meta = meta_rows[0][0] or {}
+            # chromadb Metadata 值是松散联合类型；本类只写 float epoch，防御性收窄
+            raw_at = meta.get("cached_at", 0)
+            cached_at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
+            if self.ttl > 0 and (time.time() - cached_at) > self.ttl:
                 return None
             return {
                 "response": meta.get("response", ""),
@@ -345,9 +353,13 @@ class SemanticCache:
                     n_results=1,
                     where=self._where(model, conv_id),
                 )
-            if not results or not results["ids"] or not results["ids"][0]:
+            rows = (results or {}).get("ids") or []
+            if not rows or not rows[0]:
                 return None
-            return 1 - results["distances"][0][0]
+            dist_rows = (results or {}).get("distances") or []
+            if not dist_rows or not dist_rows[0]:
+                return None
+            return 1 - float(dist_rows[0][0] or 0)
         except Exception:
             return None
 
@@ -376,6 +388,15 @@ class SemanticCache:
         except Exception:
             pass
 
+    @staticmethod
+    def _cached_at(meta: Any) -> float:
+        """Coerce chromadb's loose Metadata value to a float epoch (junk → 0)."""
+        try:
+            v = (meta or {}).get("cached_at", 0)
+            return float(v) if isinstance(v, (int, float)) else 0.0
+        except Exception:
+            return 0.0
+
     def sweep(self) -> int:
         """Drop TTL-expired entries and evict the oldest beyond the size cap.
         Best-effort; failures are non-fatal (cache is best-effort)."""
@@ -385,25 +406,26 @@ class SemanticCache:
         removed = 0
         try:
             with self._lock:
-                all_rows = self._collection.get(include=["metadatas"])
-                ids = all_rows.get("ids", [])
-                metas = all_rows.get("metadatas", [])
+                all_rows = self._collection.get(include=["metadatas"]) or {}
+                ids = all_rows.get("ids") or []
+                metas = all_rows.get("metadatas") or []
                 now = time.time()
                 expired = [
-                    ids[i]
-                    for i, m in enumerate(metas)
-                    if self.ttl > 0 and (now - m.get("cached_at", 0)) > self.ttl
+                    doc_id
+                    for doc_id, m in zip(ids, metas)
+                    if self.ttl > 0 and (now - self._cached_at(m)) > self.ttl
                 ]
                 if expired:
                     self._collection.delete(ids=expired)
                     removed += len(expired)
                 # LRU cap: keep newest max_entries by cached_at.
-                remaining = self._collection.get(include=["metadatas"])
-                r_ids = remaining.get("ids", [])
-                r_metas = remaining.get("metadatas", [])
+                remaining = self._collection.get(include=["metadatas"]) or {}
+                r_ids = remaining.get("ids") or []
+                r_metas = remaining.get("metadatas") or []
                 if len(r_ids) > max_entries:
                     order = sorted(
-                        range(len(r_ids)), key=lambda i: r_metas[i].get("cached_at", 0)
+                        range(len(r_ids)),
+                        key=lambda i: self._cached_at(r_metas[i] if i < len(r_metas) else None),
                     )
                     drop = [r_ids[i] for i in order[: len(r_ids) - max_entries]]
                     if drop:
@@ -608,7 +630,7 @@ def cache_init() -> dict:
     """
     import threading
 
-    global _cache_ready, _cache_init
+    global _cache_init
 
     if _cache_init["status"] == "running":
         return {"status": "running", "detail": "initialization already in progress"}
@@ -681,7 +703,6 @@ def cache_init() -> dict:
 @app.get("/v1/cache/status")
 def cache_status() -> dict:
     """Report cache-init progress. Flags a timeout if running too long."""
-    global _cache_init
     elapsed = 0.0
     if _cache_init["started_at"]:
         end = _cache_init["finished_at"] or time.time()
@@ -775,19 +796,22 @@ def classify(req: ClassifyRequest) -> dict:
     prompt = req.system_prompt or DEFAULT_CLASSIFY_PROMPT
     valid = req.valid_types or ["simple_qa", "general", "coding", "math_logic", "complex_reasoning"]
     try:
-        response = litellm.completion(
-            **_litellm_kwargs(
-                req.classifier,
-                messages=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": req.text[:500]},
-                ],
-                max_tokens=req.max_tokens,
-                timeout=req.timeout,
-                temperature=0,
-            )
+        response = cast(
+            litellm.ModelResponse,
+            litellm.completion(
+                **_litellm_kwargs(
+                    req.classifier,
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": req.text[:500]},
+                    ],
+                    max_tokens=req.max_tokens,
+                    timeout=req.timeout,
+                    temperature=0,
+                )
+            ),
         )
-        content = response.choices[0].message.content.strip().lower()
+        content = (response.choices[0].message.content or "").strip().lower()
         for t in valid:
             if t in content:
                 return {"task_type": t}
@@ -807,19 +831,22 @@ law, history, philosophy, economics, psychology, sociology, other"""
 def classify_domain(req: DomainRequest) -> dict:
     prompt = req.system_prompt or DEFAULT_DOMAIN_PROMPT
     try:
-        response = litellm.completion(
-            **_litellm_kwargs(
-                req.classifier,
-                messages=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": req.text[:500]},
-                ],
-                max_tokens=20,
-                timeout=req.timeout,
-                temperature=0,
-            )
+        response = cast(
+            litellm.ModelResponse,
+            litellm.completion(
+                **_litellm_kwargs(
+                    req.classifier,
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": req.text[:500]},
+                    ],
+                    max_tokens=20,
+                    timeout=req.timeout,
+                    temperature=0,
+                )
+            ),
         )
-        content = response.choices[0].message.content.strip().lower()
+        content = (response.choices[0].message.content or "").strip().lower()
         valid = ["physics", "chemistry", "biology", "math", "computer_science",
                  "engineering", "medicine", "law", "history", "philosophy",
                  "economics", "psychology", "sociology", "other"]
@@ -843,7 +870,7 @@ def chat(req: ChatRequest) -> dict:
         temperature=req.temperature,
         timeout=req.timeout,
     )
-    response = litellm.completion(**kwargs)
+    response = cast(litellm.ModelResponse, litellm.completion(**kwargs))
     content = response.choices[0].message.content or ""
     u = _usage_detail(getattr(response, "usage", None))
     return {
@@ -870,7 +897,8 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
     def gen():
         usage = None
         try:
-            for chunk in litellm.completion(**kwargs):
+            chunks = cast(Iterator[Any], litellm.completion(**kwargs))
+            for chunk in chunks:
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
                     yield _plain_sse({"chunk": delta.content})
@@ -1195,7 +1223,7 @@ def _call_llm(
         timeout=timeout,
     )
     try:
-        response = litellm.completion(**kwargs)
+        response = cast(litellm.ModelResponse, litellm.completion(**kwargs))
         content = response.choices[0].message.content or ""
         # C1：思考过程透传 —— 推理系模型（qwen3 thinking / deepseek-r1 等）经
         # litellm 把链式思考放在 message.reasoning_content；非推理模型缺省为 None。
@@ -1306,7 +1334,8 @@ def _call_llm_stream(
     in_tok = 0
     out_tok = 0
     try:
-        for chunk in litellm.completion(**kwargs):
+        chunks = cast(Iterator[Any], litellm.completion(**kwargs))
+        for chunk in chunks:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
                 full.append(delta.content)

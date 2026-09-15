@@ -98,14 +98,14 @@ def parse_bill(path: str, period: str | None) -> tuple[dict, dict, list[str]]:
     month_col = _col(headers, "账单月份") or _col(headers, "账期")
     # 输入/输出方向在实例ID第4段（input_token/output_token），不是独立列
 
-    def to_f(v: str) -> float:
+    def to_f(v: str | None) -> float:
         v = (v or "").replace(",", "").replace("¥", "").strip()
         try:
             return float(v)
         except ValueError:
             return 0.0
 
-    def to_n(v: str) -> float:
+    def to_n(v: str | None) -> float:
         v = (v or "").replace(",", "").strip()
         try:
             return float(v)
