@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Row, Col, Card, Statistic, Table, Progress, Tag, Space, message, Button, Modal, Form, Input, InputNumber } from 'antd';
+import { Row, Col, Card, Statistic, Table, Progress, Tag, Space, message, Button, Modal, Form, Input, InputNumber, Tooltip } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
-import { getStats, getUsage, getBudgets, setBudget, checkBudget, getModels, UsageRow, Budget, Model } from '../api';
+import { getStats, getUsage, getBudgets, setBudget, checkBudget, getModels, getReconcileSummary, ReconcileSummary, UsageRow, Budget, Model } from '../api';
 
 const CNY_PER_USD = 7.2;
 
@@ -12,6 +12,7 @@ export default function UsagePage() {
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [budgetSpent, setBudgetSpent] = useState<Record<string, number>>({});
   const [models, setModels] = useState<Model[]>([]);
+  const [reconcile, setReconcile] = useState<ReconcileSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [budgetModal, setBudgetModal] = useState(false);
   const [form] = Form.useForm();
@@ -19,12 +20,17 @@ export default function UsagePage() {
   const refresh = async () => {
     setLoading(true);
     try {
-      const [st, u, b, m] = await Promise.all([getStats(), getUsage(), getBudgets(), getModels()]);
+      const [st, u, b, m, rc] = await Promise.all([
+        getStats(), getUsage(), getBudgets(), getModels(),
+        // 对账报告是脚本离线产物，端点永不应 5xx；兜底 null 防御旧后端
+        getReconcileSummary().catch(() => null),
+      ]);
       setStats(st);
       setUsage(u.usage);
       setTotalCacheSaved(u.total_cache_saved ?? 0);
       setBudgets(b.budgets);
       setModels(m.models);
+      setReconcile(rc);
       // Real spend per budget via check API.
       const spent: Record<string, number> = {};
       for (const budget of b.budgets) {
@@ -65,6 +71,17 @@ export default function UsagePage() {
   const maxSpend = Math.max(...spendData.map((d) => d.value), 0.000001);
   const maxReq = Math.max(...reqData.map((d) => d.value), 1);
 
+  // B2 账单对账徽标：报告来自 scripts/bill_reconcile.py --save（离线产物）
+  const reconcileBadge = reconcile?.reconciled ? (
+    <Tooltip title={`百炼账单对账一致（${reconcile.models_ok}/${reconcile.models_matched} 模型） · ${reconcile.generated_at}`}>
+      <Tag color="green" style={{ marginLeft: 8, verticalAlign: 'middle' }}>已对账</Tag>
+    </Tooltip>
+  ) : reconcile?.verdict ? (
+    <Tooltip title={`对账偏差 ${reconcile.dev_pct ?? 'n/a'}%（${reconcile.models_ok}/${reconcile.models_matched} 模型对平） · ${reconcile.generated_at}`}>
+      <Tag color="orange" style={{ marginLeft: 8, verticalAlign: 'middle' }}>对账偏差</Tag>
+    </Tooltip>
+  ) : null;
+
   const columns = [
     { title: '模型', dataIndex: 'model_name', key: 'model_name' },
     { title: '输入 tokens', dataIndex: 'total_input_tokens', key: 'in' },
@@ -100,7 +117,7 @@ export default function UsagePage() {
         style={{ borderColor: '#a0d911', background: '#fcffe6' }}
       >
         <Statistic
-          title="缓存为您节省"
+          title={<span>缓存为您节省{reconcileBadge}</span>}
           value={totalCacheSaved * CNY_PER_USD}
           precision={2}
           prefix="¥"

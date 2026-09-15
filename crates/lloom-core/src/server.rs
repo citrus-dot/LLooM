@@ -246,6 +246,43 @@ async fn get_usage(State(state): State<AppState>, Query(q): Query<Value>) -> Res
     ))
 }
 
+// ── B2（N3.c 收尾）：账单对账徽标 ──
+
+/// 读取 `bill_reconcile.py --save` 落盘的对账报告（`<data_dir>/reconcile_last.json`），
+/// 投影成 UsagePage「已对账」徽标需要的最小字段。
+/// 报告是脚本离线产物：文件缺失/损坏/字段缺失一律 `reconciled=false`，不报错。
+pub(crate) fn read_reconcile_report(path: &std::path::Path) -> Value {
+    let not_reconciled = json!({
+        "reconciled": false, "verdict": "", "generated_at": "",
+        "dev_pct": null, "models_matched": 0, "models_ok": 0
+    });
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return not_reconciled;
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else {
+        return not_reconciled;
+    };
+    let total = v.get("total").cloned().unwrap_or_default();
+    let verdict = total
+        .get("verdict")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    json!({
+        "reconciled": verdict == "已对账",
+        "verdict": verdict,
+        "generated_at": v.get("generated_at").and_then(|x| x.as_str()).unwrap_or(""),
+        "dev_pct": total.get("dev_pct").and_then(|x| x.as_f64()),
+        "models_matched": total.get("models_matched").and_then(|x| x.as_i64()).unwrap_or(0),
+        "models_ok": total.get("models_ok").and_then(|x| x.as_i64()).unwrap_or(0),
+    })
+}
+
+async fn reconcile_report() -> Result<Json<Value>> {
+    let path = crate::config::data_dir().join("reconcile_last.json");
+    Ok(Json(read_reconcile_report(&path)))
+}
+
 async fn list_budgets(State(state): State<AppState>) -> Result<Json<Value>> {
     Ok(Json(json!({ "budgets": state.db.list_budgets()? })))
 }
@@ -1781,6 +1818,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         // Usage + budgets
         .route("/api/usage", get(get_usage))
+        .route("/api/usage/reconcile", get(reconcile_report))
         .route(
             "/api/budgets",
             get(list_budgets).post(set_budget).delete(delete_budget),
@@ -2300,4 +2338,85 @@ fn stop_ai_proc(state: &AppState) -> String {
     }
     // Not spawned by us (external/dev instance): terminate it by name.
     crate::processes::stop_ai()
+}
+
+#[cfg(test)]
+mod reconcile_report_tests {
+    use super::read_reconcile_report;
+    use serde_json::json;
+
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lloom_b2_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join(format!("{tag}.json"))
+    }
+
+    #[test]
+    fn reconciled_report_projects_badge_fields() {
+        let path = tmp_path("reconciled");
+        std::fs::write(
+            &path,
+            json!({
+                "generated_at": "2026-09-15T08:57:12Z",
+                "total": {
+                    "bill_cny": 2.47, "local_cny": 2.47, "dev_cny": 0.0,
+                    "dev_pct": -0.0, "models_matched": 2, "models_ok": 2,
+                    "verdict": "已对账"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let out = read_reconcile_report(&path);
+        assert_eq!(out["reconciled"], json!(true));
+        assert_eq!(out["verdict"], json!("已对账"));
+        assert_eq!(out["models_matched"], json!(2));
+        assert_eq!(out["models_ok"], json!(2));
+        assert_eq!(out["dev_pct"], json!(-0.0));
+        assert_eq!(out["generated_at"], json!("2026-09-15T08:57:12Z"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn deviating_report_is_not_reconciled() {
+        let path = tmp_path("deviate");
+        std::fs::write(
+            &path,
+            json!({
+                "generated_at": "2026-09-15T08:57:12Z",
+                "total": {"dev_pct": -4.2, "models_matched": 2, "models_ok": 1,
+                          "verdict": "有偏差"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let out = read_reconcile_report(&path);
+        assert_eq!(out["reconciled"], json!(false));
+        assert_eq!(out["verdict"], json!("有偏差"));
+        assert_eq!(out["dev_pct"], json!(-4.2));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn missing_or_corrupt_file_falls_back_to_not_reconciled() {
+        let missing = read_reconcile_report(&tmp_path("no_such_file_here"));
+        assert_eq!(missing["reconciled"], json!(false));
+        assert_eq!(missing["verdict"], json!(""));
+
+        let path = tmp_path("corrupt");
+        std::fs::write(&path, "{ not json").unwrap();
+        let corrupt = read_reconcile_report(&path);
+        assert_eq!(corrupt["reconciled"], json!(false));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn report_without_total_is_not_reconciled() {
+        let path = tmp_path("nototal");
+        std::fs::write(&path, json!({"generated_at": "x"}).to_string()).unwrap();
+        let out = read_reconcile_report(&path);
+        assert_eq!(out["reconciled"], json!(false));
+        assert_eq!(out["models_matched"], json!(0));
+        let _ = std::fs::remove_file(&path);
+    }
 }

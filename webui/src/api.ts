@@ -446,6 +446,20 @@ export function getUsage(): Promise<{ usage: UsageRow[]; total_spend: number; to
   return jget('/api/usage');
 }
 
+/** B2 账单对账摘要（bill_reconcile.py --save 落盘报告的投影；无报告时 reconciled=false）。 */
+export interface ReconcileSummary {
+  reconciled: boolean;
+  verdict: string;
+  generated_at: string;
+  dev_pct: number | null;
+  models_matched: number;
+  models_ok: number;
+}
+
+export function getReconcileSummary(): Promise<ReconcileSummary> {
+  return jget('/api/usage/reconcile');
+}
+
 // ── Budgets ──
 
 export function getBudgets(): Promise<{ budgets: Budget[] }> {
