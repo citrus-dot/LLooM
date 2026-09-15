@@ -676,7 +676,8 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
                     est_cost: 0.0,
                     act_cost,
                     zone_multiplier: zm,
-                    conversation_id: None,
+                    // B15/PR-5：chat 用量带会话 ID——会话亲和回查与缓存证据的数据源
+                    conversation_id: req.conversation_id.clone(),
                     field_missing: res.usage.field_missing,
                     cache_saved_cost: 0.0,
                     api_source: None,

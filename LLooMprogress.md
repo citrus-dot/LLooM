@@ -245,6 +245,7 @@
 
 - **B15 实现**（台账 B15 行为权威描述）：`StickyEvidence` 注入 `PlanInput`，`sticky_bonus` 升级为动态公式（随会话缓存累积增大、封顶 0.25、无证据回落旧值）；`route()` 增加 `conversation_id` 参数（server chat 路径传入，proxy/影子/编排传 None）；+2 单测（117 全绿）。**顺带修复 PR-5 潜伏 bug**：`recent_conversation_model` 查询列名错写（错误被 `.ok()` 吞掉 → 会话亲和从未生效），本轮修正后会话亲和首次真正激活
 - **Mimosa 提交门加固顺带**：测试密钥字面量运行时构造（json! + repeat）、对账报告写盘 containment、`_plan_subtask` 回调环回/内网校验 + httpx 化、embedding 下载仅限配置镜像主机（httpx 流式，保持 Range 续传）
+- **E2E 自测**（本机起服冒烟 + 自行造数）：chat 同会话双跑走 sticky 证据路径、代理 auto 路由真实出账、`/metrics`、路由体检、优雅关停全过；**补修第二处缺口**：chat 路径 `insert_usage` 未带 conversation_id（PR-5 起即缺）→ 用量行现带会话 ID，B15 证据环与 sticky 回查数据闭环；合成账单对账（副本库 6 模型精确匹配）exit 0 + 「已对账」徽标两态实测（真实账单数据验证仍待 B2）
 
 ***
 
