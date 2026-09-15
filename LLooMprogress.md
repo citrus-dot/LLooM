@@ -197,7 +197,7 @@
 
 - 冒烟：`cargo test` 57 全绿（新增 parse\_remote\_\*、cache\_saved\_cost 聚合）；`tsc --noEmit` + `vite build` 全过
 
-**2026-09-10 落地（M1 模型分层重构 + 本地/云端模型类型，见 `.trae/documents/model-layering-and-local-cloud.md`）**：
+**2026-09-10 落地（M1 模型分层重构 + 本地/云端模型类型；M1 设计笔记在本地 `.trae/` 下未入库）**：
 
 - C1/C2 领域层拆分：`db.rs` 引入 `ModelRow` 行层（`From<&Model>` 落库投影 + 读侧宽容还原，零迁移）；`models.rs` 新增 `Backend`（Cloud{provider,api_base,api_key:ApiKeyRef} / Local{compat,api_base}）、`Provider`、`LocalCompat`、`ApiKeyRef` 枚举，`Model` 持有 backend；router/metadata/probe/ai_client 全部改读 `m.is_local()`/`m.provider_name()`，**废除 `is_local_endpoint` 启发式**（localhost 反代的云端模型不再被误判清零成本）
 
@@ -228,6 +228,20 @@
 - **B1 评审结论**（台账更新）：batch 通道继续搁置——当前全实时流式语义，batch 是小时级异步产物，无真实离线批处理场景；触发条件与最小实现路径（`UsageDetail.is_batch` × `batch_multiplier`）已写入台账
 
 - 全量回归：`cargo test` **114 全绿**（+4 reconcile_report）；clippy 0 告警；pyflakes/pyright 0
+
+**2026-09-15 二轮（文档同步 + clippy 清零 + C4 入口统一 + 质量 CI；工作区待审查）**：
+
+- **文档同步**：README×2 Roadmap 全勾（Prometheus/对账/M1 补录）+ 删 `lloom-cli service apply` 死命令；ARCHITECTURE.md 两张端点表补 5 组新端点（/v1/chat/completions、/v1/models、/api/routing/review 三件套、/metrics、/api/usage/reconcile）+ 核心模块 14→20 个 + M1 分层描述 + 目录树修正（scripts/webui）；TEST-GUIDE 补 2.7 /metrics、2.8 对账徽标两节 + 头部过时「待提交」标注修正；LLooMprogress 死引用（.trae/documents）修正；NEXT-PLAN 加完结声明
+
+- **clippy -D warnings 清零**：CI 门用 `cargo clippy --workspace --all-targets -- -D warnings`（clippy 1.97 默认 lint 显形 30+ 处）——`--fix` 自动修 + 手工修 7 处（clamp、map_identity、ZoneResolver is_empty、时区分支合并、doc 缩进、sort_by_key×2、_tz 未用参数）
+
+- **C4 入口统一**（见第六节 C 类台账）：`signals::is_complex`（= complexity_score ≥ 0.5）单一真源，router 委托；+1 单测（合计 **115 全绿**）
+
+- **质量 CI**（`.github/workflows/ci.yml`）：push v2/PR 触发，三 job——Rust（clippy -D warnings + test）、WebUI（npm run build = tsc+vite）、Python（pyflakes + pyright error 级，`--pythonpath` 显式绑解释器）；纯 md 不触发。本地三 job 全部预验证通过
+
+- **仓库清理**：删根目录 default.profraw（2.2MB 覆盖率产物，已 gitignore）+ drop 09-02 遗留 doc-backup stash（已核实为文档回滚备份）
+
+***
 
 **过往已实现并验证**（见 memory / 历史 commit）：
 
@@ -365,7 +379,7 @@
 | C1 | **~~思考过程深度展示~~** ✅ **已完成**（2026-09-02）                                           | `_call_llm`/`_call_llm_stream` 新增 `reasoning_ref` 捕获 litellm `message.reasoning_content`（流式为 delta 累积）；简单/聚合两路径 `result` 事件携带 `reasoning`；Rust orchestrate SSE 原样透传；chatStore 捕获+meta 持久化+历史加载映射；ChatPage `Collapse` 折叠卡（字数标签+滚动容器）。**E2E 已验证**：deepseek-r1 全链路 644 字思考+真实 usage（41/827 tok）。**顺手修复既有生产 bug**：`_call_llm_stream` 引用未定义 `usage` 变量（流式带 usage\_ref 必抛 NameError，聚合阶段长期静默回退子任务原文拼接） | `ai_service.py:1303-1334`、`chatStore.ts`、`ChatPage.tsx` | 已落地           |
 | C2 | **~~est\_input\_cost 分列~~** ✅ **已完成**（2026-09-15，2721d1c）                                  | `db.rs` `ensure_columns` 幂等补列（est\_input\_cost/act\_input\_cost，旧库无损升级有单测）+ `pricing.rs::actual_input_cost`（与总额恒等有单测）+ 四路径落库 + 日校准优先输入侧比值；对账已从「总额口径」升级为「输入侧分项」                                                                                                                                                             | `PRICING-PLAN.md:36`                                    | 已落地          |
 | C3 | **~~`api_source`\~\~\~\~列~~** ~~（区分代理流量）~~ ✅ 已完成（2026-09-02，1a22825，随 N1 提前独立提交） | 幂等加列默认 `'webui'`，代理流量标 `'proxy'`                                                                                                                                                                                                                                                                                                                                                                 | `NEXT-PLAN.md:34`                                       | 已落地           |
-| C4 | **O5 复杂判定调优**                                                                    | ⚠️ **先统一入口**：现 `router.rs:86 is_complex`（正则）与 `signals.rs:234 complexity_score`（评分，`:322` 调用）**两处判定并存**，须合并后再调阈值；且需 50–100 条标注语料，否则是盲调                                                                                                                                                                                                                                                           | `router.rs:86`、`signals.rs:234`                         | 中（**阻塞在语料**）  |
+| C4 | **O5 复杂判定调优（仅余阈值部分）** | ✅ **入口统一已落地**（2026-09-15）：`signals::is_complex`（= `complexity_score ≥ 0.5`）为单一真源，`router::is_complex`/`band_for` 委托之，原 router 私有正则删除、模式并入 `complexity_rx` 并集（时序/步骤/复合模式保留）。**行为差异**（已记代码注释）：单独「>100 字」「>2 句」不再硬触发，改为评分项累计（0.3/0.2，与正则或彼此组合才过线）；signals 更宽的单关键词模式（分析/评估等）纳入判定。**剩余：阈值调优**——需 50–100 条标注语料，否则是盲调 | `signals.rs is_complex/complexity_rx`、`router.rs band_for` | 中（**阻塞在语料**） |
 | C5 | 多模型拆分真正生效                                                                        | **非开发项（无代码改动）**：需在设置页配置「可用模型 + 有效 Key」才生效，属配置引导                                                                                                                                                                                                                                                                                                                                                  | —                                                       | 配置            |
 | C6 | EWMA α 灵敏度调整                                                                     | 仅当出现**日级调价**时（当前 α=0.15 ≈ 10 天半衰，对周级调价够用）                                                                                                                                                                                                                                                                                                                                                        | `PRICING-PLAN.md:931`                                   | 条件触发，**建议不动** |
 | C7 | 多时区 chrono                                                                       | 仅当需多时区；当前纯标准库（+8 偏移 + Sakamoto + Hinnant）是**有意规避** crates.io 拉取风险                                                                                                                                                                                                                                                                                                                                | `PRICING-PLAN.md:34`                                    | 条件触发，**建议不动** |
@@ -450,9 +464,10 @@
 | 文件                           | 用途                                                   | 同步状态                       |
 | ---------------------------- | ---------------------------------------------------- | -------------------------- |
 | `LLooMprogress.md`（本文件）      | 项目总进度、决策、待办台账（主线 + B 类搁置 15 条 + C 类小项 7 条）、约束、文档索引   | 更新至 2026-09-15（N3 收尾 + C2） |
-| **`NEXT-PLAN.md`**           | **下一阶段权威计划**：N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2 | 2026-09-15 同步（N1–N3 全勾，余 B2 徽标） |
-| `ARCHITECTURE.md`            | 分层架构、端点、数据流、技术栈                                      | 已同步至 488d156               |
-| `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）                                     | 已同步至 488d156               |
+| **`NEXT-PLAN.md`**           | **下一阶段权威计划**：N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2 | 2026-09-15 同步（N1–N3 全勾 + B2 徽标落地，余真实账单数据验证） |
+| `ARCHITECTURE.md`            | 分层架构、端点、数据流、技术栈                                      | 2026-09-15 同步（补 N1/N2/N3.b/N3.c 端点 + M1 分层 + 新模块） |
+| `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）                                     | 2026-09-15 同步（Roadmap 全勾 + 删 `service apply` 死命令） |
+| `TEST-GUIDE.md`              | 功能测试指南（C1/N2/选择器/N3.b/N3.c）                          | 2026-09-15 同步（补 2.7 /metrics、2.8 对账徽标） |
 | `CONTEXT-PLAN.md`            | 上下文优化方案（Phase 1–5 已全部落地）                             | 已提交，与 488d156 一致           |
 | `PRICING-PLAN.md`            | 定价表系统详细设计与落地（PR-1\~8 全部落地）                           | 已提交；§5.5 batch 通道为远期搁置项    |
 | `ROUTING-PLAN.md`            | 路由重构方案（v3 + 注记至 P5，P0–P5 全部落地）                       | 已提交；遗留 3 个待真实样本复验的验收指标     |

@@ -70,6 +70,7 @@
 | `/api/models` | GET/POST | 模型列表/注册 |
 | `/api/models/:name` | GET/PUT/DELETE | 模型 CRUD（`:name` 为 axum 0.8 动态段） |
 | `/api/usage` | GET | 用量统计 |
+| `/api/usage/reconcile` | GET | 账单对账徽标（读 `reconcile_last.json`，N3.c/B2）|
 | `/api/budgets` | GET/POST | 预算列表/设置 |
 | `/api/budgets/check` | GET | 预算检查 |
 | `/api/stats` | GET | 仪表盘统计 |
@@ -97,6 +98,12 @@
 | `/api/routing/plan-subtask` | POST | 子任务级路由规划（primary + fallback 链 + escalation）|
 | `/api/routing/shadow` | POST/GET | 影子评测采样（AIQ 重放用；GET 查状态）|
 | `/api/routing/overhead` | GET | 路由开销报告（count/avg/P95/max/slow）|
+| `/api/routing/review` | GET | 路由体检报告（N2 闭环评估最新结果）|
+| `/api/routing/review/refresh` | POST | 手动立即体检（重放影子样本出报告）|
+| `/api/routing/review/adopt` | POST | 采纳建议权重（upsert routing_policy，不自动生效）|
+| `/v1/chat/completions` | POST | OpenAI 兼容代理（流/非流，`model:"auto"` 走评分路由，N1）|
+| `/v1/models` | GET | OpenAI 兼容模型列表（auto 恒在首位）|
+| `/metrics` | GET | Prometheus 文本格式指标导出（N3.b，绑环回默认不鉴权）|
 | `/api/shutdown` | POST | 优雅关停（等价 SIGINT，清理子进程）|
 | `/api/cache/init` | POST | 语义缓存预初始化（触发 chroma 模型下载）|
 | `/api/cache/status` | GET | 缓存状态（就绪 / 下载进度）|
@@ -117,7 +124,11 @@
 - **ai_client.rs** — Python AI 微服务的 async HTTP 客户端
 - **processes.rs** — 子进程管理（API 服务器 / Ollama / AI 服务）
 - **conversations.rs** — 对话文件 CRUD（`data/conversations/*.json`）
-- **models.rs** — 类型定义
+- **models.rs** — 类型定义；M1 分层：`Backend` 枚举（`Cloud{provider,api_base,api_key}` / `Local{compat,api_base}`），模型显式 `kind: local|cloud`，废除 `is_local_endpoint` 启发式
+- **model_dto.rs** — API DTO 三件套（`ModelCreate`/`ModelPatch`/`ModelDto`，TryFrom 显式转换 + api_key 掩码，M1）
+- **openai_compat.rs** — OpenAI 兼容代理（`/v1/chat/completions` 流/非流 + `/v1/models`，Bearer 鉴权，路由/容灾/计价全复用，N1）
+- **review.rs** — 路由体检（影子样本网格搜索出帕累托权重建议，写入 policy_review，N2）
+- **metrics.rs** — Prometheus 指标导出（纯函数 `render(db)` 输出 0.0.4 文本格式，N3.b）
 - **error.rs** — thiserror 统一错误 + HTTP 状态映射
 
 ### Python AI 微服务（唯一保留的 Python）
@@ -241,6 +252,7 @@ bash scripts/smoke_test.sh
 | POST | `/api/models` | 注册新模型 |
 | GET/PUT/DELETE | `/api/models/{name}` | 查询/更新/删除模型 |
 | GET | `/api/usage` | 用量统计 |
+| GET | `/api/usage/reconcile` | 账单对账徽标（N3.c）|
 | GET | `/api/budgets` | 列出预算 |
 | POST | `/api/budgets` | 创建/更新预算 |
 | GET | `/api/budgets/check` | 检查预算状态 |
@@ -270,6 +282,12 @@ bash scripts/smoke_test.sh
 | POST | `/api/routing/plan-subtask` | 子任务级路由规划（primary + fallback + escalation） |
 | POST,GET | `/api/routing/shadow` | 影子评测采样（AIQ 重放） |
 | GET | `/api/routing/overhead` | 路由开销报告（count/avg/P95/max/slow） |
+| GET | `/api/routing/review` | 路由体检报告（N2） |
+| POST | `/api/routing/review/refresh` | 手动立即体检 |
+| POST | `/api/routing/review/adopt` | 采纳建议权重（人工审查点） |
+| POST | `/v1/chat/completions` | OpenAI 兼容代理（流/非流，N1） |
+| GET | `/v1/models` | OpenAI 兼容模型列表 |
+| GET | `/metrics` | Prometheus 指标导出（N3.b） |
 | POST | `/api/shutdown` | 优雅关停（等价 SIGINT） |
 | POST | `/api/cache/init` | 语义缓存预初始化（触发 chroma 模型下载） |
 | GET | `/api/cache/status` | 缓存状态（就绪 / 下载进度） |
@@ -283,10 +301,10 @@ bash scripts/smoke_test.sh
 LLooM/
 ├── Cargo.toml                    # Rust workspace 根
 ├── crates/lloom-core/            # 业务核心 lib（UI 无关）
-│   └── src/                      # 14 个模块
+│   └── src/                      # 20 个模块
 │       ├── lib.rs                # 模块声明
 │       ├── server.rs             # axum REST 服务器
-│       ├── db.rs                 # SQLite 层（含价格/校准幂等迁移）
+│       ├── db.rs                 # SQLite 层（ModelRow 行层 + 幂等迁移）
 │       ├── router.rs             # 任务分类 + `plan()` 评分路由（见 ROUTING-PLAN.md）
 │       ├── security.rs           # 正则安全层
 │       ├── ai_client.rs          # AI 微服务客户端
@@ -297,7 +315,11 @@ LLooM/
 │       ├── signals.rs            # 信号层（prefix_stability 等）
 │       ├── metadata.rs           # 模型元数据自动打标（P0.e）
 │       ├── health.rs             # 健康状态机（P3）
-│       ├── models.rs             # 类型定义
+│       ├── models.rs             # 领域类型（M1：Backend local/cloud）
+│       ├── model_dto.rs          # 模型 API DTO（M1：Create/Patch/Dto + 掩码）
+│       ├── openai_compat.rs      # OpenAI 兼容代理（N1）
+│       ├── review.rs             # 路由体检权重建议（N2）
+│       ├── metrics.rs            # Prometheus 指标导出（N3.b）
 │       ├── config.rs             # 路径/端口配置
 │       └── error.rs              # 统一错误
 ├── crates/lloom-server/          # 主服务器（REST + WebUI）
@@ -309,14 +331,21 @@ LLooM/
 │   │   ├── routes/               # home/session/models/usage/settings
 │   │   └── ui/                   # dialog（prompt/logs/menu 弹框）
 │   └── package.json
-├── webui/
-│   └── index.html                # WebUI 前端（SPA，独立）
+├── webui/                        # WebUI（React + Vite + AntD，SPA）
+│   └── src/
+│       ├── pages/                # Overview/Chat/Models/Usage/Pricing/Settings
+│       ├── components/           # Markdown 等
+│       ├── store/                # chatStore（SSE 流状态）
+│       └── api.ts                # REST 客户端
 ├── api/
 │   └── ai_service.py             # Python AI 微服务（litellm 封装，唯一 Python）
 ├── scripts/
 │   ├── build.sh                  # 跨平台构建（含系统依赖检测）
+│   ├── package.sh / package.bat  # 三平台打包（CI release 用）
 │   ├── download_ollama.sh        # 跨平台 Ollama 下载
-│   └── smoke_test.sh             # 19 项冒烟测试
+│   ├── smoke_test.sh             # 19 项冒烟测试
+│   ├── aiq_replay.py             # 影子样本离线 AIQ 重放（--json 与报告同源）
+│   └── bill_reconcile.py         # 百炼账单 × usage_records 对账（N3.c）
 ├── ai_service.spec               # PyInstaller spec（AI 微服务）
 ├── pyproject.toml                # AI 服务 Python 依赖
 ├── ARCHITECTURE.md               # 本文件

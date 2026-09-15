@@ -141,8 +141,10 @@ All via `.env` (see [.env.example](.env.example)):
 
 - [x] **OpenAI-compatible proxy** — shipped (N1): `POST /v1/chat/completions` + `/v1/models`, ChatBox / Open WebUI / agent frameworks plug in with zero changes
 - [x] **Parallel subtask execution** — shipped (N3.a): independent subtasks run concurrently, results aggregate in order
-- [ ] **Prometheus metrics** — `GET /metrics` with per-model/task-type/budget-tier counters
+- [x] **Prometheus metrics** — shipped (N3.b): `GET /metrics` with per-model/task-type/budget-tier counters, cache hits, fallback events
 - [x] **Closed-loop weight suggestions** — shipped (N2): offline replay grid search, adopted after human review
+- [x] **Bill reconciliation** — shipped (N3.c): DashScope bill export × recorded costs, per-model deviation report + "reconciled" badge in Usage page
+- [x] **Local/cloud model kinds** — shipped (M1): explicit `kind: local|cloud` per model (Ollama / LM Studio / vLLM, or provider + API key), replacing endpoint heuristics
 
 <details>
 <summary><strong>CLI reference</strong></summary>

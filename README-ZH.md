@@ -137,8 +137,10 @@ LLM 提供商（DashScope / OpenAI / Anthropic / Ollama）
 
 - [x] **OpenAI 兼容代理** — 已上线（N1）：`POST /v1/chat/completions` + `/v1/models`，ChatBox / Open WebUI / Agent 框架零改造接入
 - [x] **子任务并行执行** — 已上线（N3.a）：无依赖子任务并发，结果按序聚合
-- [ ] **Prometheus 指标** — `GET /metrics`：按模型/任务类型/预算档计数
+- [x] **Prometheus 指标** — 已上线（N3.b）：`GET /metrics`，按模型/任务类型/预算档计数、缓存命中、fallback 事件
 - [x] **路由权重闭环建议** — 已上线（N2）：离线重放网格搜索，人工审查后采纳
+- [x] **账单对账** — 已上线（N3.c）：百炼账单导出 × 真实成本对账，分模型偏差报告 + 用量页「已对账」徽标
+- [x] **本地/云端模型分层** — 已上线（M1）：模型显式 `kind: local|cloud`（Ollama / LM Studio / vLLM，或 provider + key），废除端点启发式
 
 <details>
 <summary><strong>CLI 命令参考</strong></summary>
@@ -151,7 +153,6 @@ lloom-cli budgets set user default 10 --duration 30d
 lloom-cli budgets list | check user default
 lloom-cli usage | status
 lloom-cli service status | start ollama | stop ai | restart ai | logs ollama
-lloom-cli service apply DASHSCOPE_API_KEY   # 智能重启受影响服务
 lloom-cli conversation list | show <id> | delete <id> | new
 lloom-cli chat "你好"                        # 单次
 lloom-cli chat "继续" --session <id>         # 续接会话

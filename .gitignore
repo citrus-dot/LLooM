@@ -50,3 +50,6 @@ Thumbs.db
 *.log
 webui/tsconfig.tsbuildinfo
 README-preview*.html
+
+# Mimosa plugin runtime state
+.mimosa/

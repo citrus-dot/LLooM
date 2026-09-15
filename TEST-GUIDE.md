@@ -1,6 +1,6 @@
 # LLooM 用户测试指南
 
-> 随任务更新。当前覆盖：**C1 思考过程展示**（ee31323）、**N2 闭环评估**（08f5012）、**模板选择器 + 定价红点透明化**（待提交）。
+> 随任务更新。当前覆盖：**C1 思考过程展示**（ee31323）、**N2 闭环评估**（08f5012）、**模板选择器 + 定价红点透明化**（9c5bbcd）、**N3.b Prometheus 指标**（4ba43b5）、**N3.c 账单对账 + B2「已对账」徽标**（417ba29 + 5b39c0a）。
 > 服务地址：<http://localhost:7861/>（REST 同端口；启动方式：项目根目录 `./target/debug/lloom-server` 或惯用启动脚本）。
 
 ***
@@ -196,7 +196,53 @@ sqlite3 /Users/orange/LLooMv2/data/lloom.db \
 
 ***
 
-## 3. 回归冒烟（每次必做，约 2 分钟）
+## 2.7 Prometheus /metrics 指标导出（N3.b）
+
+**功能**：`GET /metrics` 输出 Prometheus 0.0.4 文本格式——up/build_info、用量计数与 token（按 model×task_type×api_source）、成本总额、缓存命中/节省、failover、路由 outcome 分布、预算、模型健康。
+
+```bash
+curl -s http://127.0.0.1:7861/metrics | head -30
+```
+
+**验收点**：
+
+- [ ] 返回 200，含 `# HELP` / `# TYPE` 注释行（合法 0.0.4 格式）
+
+- [ ] 包含 `lloom_up`、`lloom_build_info` 及用量/成本/缓存/健康各组指标
+
+- [ ] 发一条聊天后再次抓取，对应 token/计数指标增长
+
+- [ ] 旧库（未手动迁移）启动后 `/metrics` 仍可导出（幂等迁移自愈）
+
+## 2.8 账单对账 +「已对账」徽标（N3.c / B2）
+
+**功能**：`scripts/bill_reconcile.py` 解析百炼账单详情 CSV × `usage_records` 对账，`--save` 落 `<data_dir>/reconcile_last.json`；用量页「缓存为您节省」卡出现绿/橙「已对账」Tag（绿=偏差在容差内，橙=超容差/有模型映射落空），tooltip 展示对账时间 + 对平数/偏差率。
+
+**两态验证**（可先用合成账单，等真实账单导出后重跑 `--save` 做最终数据验证）：
+
+1. 跑一次对账并落盘：
+
+   ```bash
+   python3 scripts/bill_reconcile.py --bill <账单.csv> --db data/lloom.db --save
+   ```
+
+2. WebUI → Usage 页 → 缓存节省卡右上角应出现「已对账」Tag，悬停 tooltip 有对账时间与偏差率。
+3. 将 `data/reconcile_last.json` 临时改名（模拟从未对账）→ 刷新页面 → Tag 消失（`reconciled=false` 回退，不报错）→ 改回恢复。
+
+```bash
+# API 直测
+curl -s http://127.0.0.1:7861/api/usage/reconcile | python3 -m json.tool
+```
+
+**验收点**：
+
+- [ ] 有报告文件时 Tag 出现，绿/橙按偏差正确
+
+- [ ] 文件缺失/损坏时 Tag 消失、页面不崩
+
+- [ ] `--json` 输出与控制台报告数字一致；退出码 0 对平 / 1 偏差 / 2 缺数据
+
+***
 
 1. **普通聊天**：Chat 页选 auto 或任一模型发 1 条 → 正常流式回复、用量/成本记录更新（Usage 页）。
 2. **代理端点**（N1 回归）：
@@ -207,7 +253,8 @@ sqlite3 /Users/orange/LLooMv2/data/lloom.db \
      -H 'Content-Type: application/json' \
      -d '{"model":"auto","messages":[{"role":"user","content":"你好，一句话自我介绍"}]}' | head -c 400
    ```
-3. **服务日志**：全程无 `ERROR`/`panic` 级输出（`[review]` 开头的提示属业务信息）。
+3. **指标导出**（N3.b 回归）：`curl -s http://127.0.0.1:7861/metrics | head -5` → 200 且格式合法。
+4. **服务日志**：全程无 `ERROR`/`panic` 级输出（`[review]` 开头的提示属业务信息）。
 
 ***
 
@@ -215,7 +262,7 @@ sqlite3 /Users/orange/LLooMv2/data/lloom.db \
 
 - 体检建议需要**有成本差异的影子样本**才非空——纯本地模型阶段建议恒空，属预期。
 
-- 账单对账（N3.c）阻塞在 DashScope 真实账单导出，需用户提供 key/账期后进行。
+- 账单对账（N3.c）**代码链路已全部落地**（脚本 + 徽标端点 + UsagePage Tag）；真实 DashScope 账单导出到位后跑 `--save` 做最终数据验证即可。
 
 - deepseek-r1 思考链路已 E2E 验证（644 字思考 + 真实 usage 41/827 tok）；其他推理模型（如 qwen 系列 thinking 变体）未逐一验证，发现问题记录型号。
 
@@ -227,5 +274,6 @@ sqlite3 /Users/orange/LLooMv2/data/lloom.db \
 | ---------- | ------- | ------------------------------------------------------ |
 | 2026-09-02 | ee31323 | 初版：C1 思考过程展示测试                                         |
 | 2026-09-02 | 08f5012 | 新增 N2 路由体检测试（报告展示/立即体检/建议采纳/边界）+ 回归冒烟                  |
-| 2026-09-02 | 本次提交    | 新增 Chat 模型选择器（0.5）、定价红点透明化（2.6）；修订 C1 步骤（选择器直达 + 缓存注意） |
+| 2026-09-02 | 9c5bbcd | 新增 Chat 模型选择器（0.5）、定价红点透明化（2.6）；修订 C1 步骤（选择器直达 + 缓存注意） |
+| 2026-09-15 | 4ba43b5 / 5b39c0a | 新增 2.7 Prometheus /metrics、2.8 账单对账徽标测试；回归节补 /metrics；头部与已知边界同步 |
 
