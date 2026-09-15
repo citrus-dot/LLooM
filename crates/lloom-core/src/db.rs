@@ -1338,6 +1338,50 @@ impl Db {
         Ok(counts.into_iter().collect())
     }
 
+    /// N3.b：usage_records 按 (model, task_type, api_source) 计数（Prometheus 请求计数标签组）。
+    pub fn metrics_usage_by_source(&self) -> Result<Vec<(String, String, String, i64)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT model_name, COALESCE(task_type,'unknown'), COALESCE(api_source,'webui'), COUNT(*)
+             FROM usage_records WHERE cost >= 0
+             GROUP BY model_name, task_type, api_source",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// N3.b：故障转移事件数——决策成功但实际服务模型 ≠ 主选（含 fallback 与 escalation 升档）。
+    /// 同一 request_id 多条 usage（编排逐角色）只计一次 DISTINCT 决策。
+    pub fn metrics_failover_count(&self) -> Result<i64> {
+        let conn = self.conn()?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT d.id) FROM routing_decisions d
+             WHERE d.outcome = 'success' AND EXISTS (
+               SELECT 1 FROM usage_records u
+               WHERE u.request_id = d.request_id AND u.model_name != d.selected)",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
+
+    /// N3.b：路由决策按 (task_type, outcome) 计数（Prometheus 标签组）。
+    pub fn metrics_routing_by_outcome(&self) -> Result<Vec<(String, String, i64)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(task_type,'unknown'), COALESCE(outcome,'pending'), COUNT(*)
+             FROM routing_decisions GROUP BY task_type, outcome",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn get_model_task_score(
         &self,
         model_name: &str,

@@ -1671,6 +1671,26 @@ async fn routing_overhead(
     })))
 }
 
+/// N3.b：Prometheus 指标导出（文本 0.0.4 格式，零新依赖，见 metrics.rs）。
+async fn metrics_export(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    match crate::metrics::render(&state.db) {
+        Ok(body) => (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; version=0.0.4; charset=utf-8",
+            )],
+            body,
+        ),
+        Err(e) => (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; version=0.0.4; charset=utf-8",
+            )],
+            format!("# metrics render error: {e}\n"),
+        ),
+    }
+}
+
 /// P3：主动探测——对 `down`/`degraded` 模型每 `health.probe_sec` 发最小请求试探恢复。
 /// 探针成功 → `down`→`up`（状态机驱动），失败保持，不阻塞主流程。
 async fn health_probe_loop(db: db::Db) {
@@ -1801,6 +1821,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/routing/plan-subtask", post(rust_plan_subtask)) // P4.a Python 每子任务回调
         .route("/api/routing/overhead", get(routing_overhead))
+        // N3.b：Prometheus 指标导出（环回默认，不鉴权——与 /api/health 同级）
+        .route("/metrics", get(metrics_export))
         // N2 闭环评估：报告读取 / 手动刷新 / 建议采纳（不自动生效）
         .route("/api/routing/review", get(routing_review))
         .route("/api/routing/review/refresh", post(routing_review_refresh))
