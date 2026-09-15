@@ -1535,13 +1535,37 @@ impl Db {
     pub fn recent_conversation_model(&self, conversation_id: &str) -> Result<Option<String>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT model FROM usage_records
-         WHERE conversation_id = ?1 AND model IS NOT NULL AND model <> ''
+            // 修复潜伏 bug：列名是 model_name（旧 SQL 写成 model → 查询恒错，被调用方 .ok() 吞掉，
+            // PR-5 会话亲和实际从未生效；B15 落地时修正）
+            "SELECT model_name FROM usage_records
+         WHERE conversation_id = ?1 AND model_name IS NOT NULL AND model_name <> ''
          ORDER BY rowid DESC LIMIT 1",
         )?;
         let mut rows = stmt.query(params![conversation_id])?;
         match rows.next()? {
             Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// B15 会话级缓存感知：本会话 × 指定模型的历史平均缓存命中 tokens
+    /// （仅统计 cached_tokens>0 的行，0 不稀释均值）；无命中记录 → None。
+    pub fn conversation_cache_avg(
+        &self,
+        conversation_id: &str,
+        model: &str,
+    ) -> Result<Option<f64>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT AVG(cached_tokens) FROM usage_records
+         WHERE conversation_id = ?1 AND model_name = ?2 AND cached_tokens > 0",
+        )?;
+        let mut rows = stmt.query(params![conversation_id, model])?;
+        match rows.next()? {
+            Some(row) => {
+                let avg: Option<f64> = row.get(0)?;
+                Ok(avg.filter(|v| *v > 0.0))
+            }
             None => Ok(None),
         }
     }
@@ -2249,5 +2273,57 @@ mod c2_input_cost_tests {
             .unwrap();
         assert!((est - 0.0002).abs() < 1e-12);
         assert!((act - 0.00015).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod b15_conversation_cache_tests {
+    use super::*;
+
+    /// B15：会话×模型的平均缓存命中——仅 cached_tokens>0 行参与均值（0 不稀释），跨会话/模型隔离。
+    #[test]
+    fn conversation_cache_avg_ignores_zero_rows() {
+        let dir = std::env::temp_dir().join(format!("lloom_b15_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("b15.db");
+        let _ = std::fs::remove_file(&path);
+        let db = Db::new(&path).unwrap();
+
+        // 无记录 → None
+        assert_eq!(db.conversation_cache_avg("conv-1", "m").unwrap(), None);
+
+        let rec = |conv: &'static str, model: &'static str, cached: i64| UsageRecord {
+            model_name: model,
+            user_id: "default",
+            input_tokens: 1000,
+            output_tokens: 10,
+            cost: 0.001,
+            task_type: Some("simple_qa"),
+            cache_hit: false,
+            latency_ms: None,
+            request_id: None,
+            extra: Some(UsageExtra {
+                conversation_id: Some(conv.to_string()),
+                cached_tokens: cached,
+                ..Default::default()
+            }),
+        };
+
+        // 混合 0 与非 0 命中：均值只看 cached>0 行 → (300+500)/2 = 400
+        db.insert_usage(&rec("conv-1", "m", 0)).unwrap();
+        db.insert_usage(&rec("conv-1", "m", 300)).unwrap();
+        db.insert_usage(&rec("conv-1", "m", 500)).unwrap();
+        let avg = db.conversation_cache_avg("conv-1", "m").unwrap().unwrap();
+        assert!((avg - 400.0).abs() < 1e-9);
+
+        // 全 0 命中 → None（无缓存证据，sticky 回落旧固定值）
+        db.insert_usage(&rec("conv-2", "m", 0)).unwrap();
+        assert_eq!(db.conversation_cache_avg("conv-2", "m").unwrap(), None);
+
+        // 跨会话/跨模型隔离
+        db.insert_usage(&rec("conv-3", "other", 999)).unwrap();
+        assert_eq!(db.conversation_cache_avg("conv-3", "m").unwrap(), None);
+
+        let _ = std::fs::remove_file(&path);
     }
 }

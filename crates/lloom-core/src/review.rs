@@ -167,6 +167,7 @@ fn replay_once(
         budget_tier: "normal",
         hit_rate: &hit_rate,
         last_model_conv: None,
+        conv_sticky: None, // 离线重放无会话上下文，sticky 走 PR-5 旧固定值
         deferrable: false,
     };
     let outcome = router::plan(&input).ok()?;

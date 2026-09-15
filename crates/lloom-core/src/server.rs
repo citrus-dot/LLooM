@@ -555,6 +555,7 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
         &user_text,
         classifier.as_ref(),
         last_model.as_deref(),
+        req.conversation_id.as_deref(), // B15：会话级缓存感知粘性证据来源
     )
     .await;
     if !sr_domain.is_empty() {
@@ -2004,7 +2005,7 @@ async fn run_shadow_pair(
 
     // 1) 现网路由：走真实 plan() 看「系统会选谁」；direct/未注册退回注册表首选。
     let classifier = pick_classifier(&models);
-    let routing = router::route(db, "auto", query, classifier.as_ref(), None).await;
+    let routing = router::route(db, "auto", query, classifier.as_ref(), None, None).await;
     let routed_model = if models.iter().any(|m| m.name == routing.model) {
         routing.model.clone()
     } else {

@@ -241,6 +241,11 @@
 
 - **仓库清理**：删根目录 default.profraw（2.2MB 覆盖率产物，已 gitignore）+ drop 09-02 遗留 doc-backup stash（已核实为文档回滚备份）
 
+**2026-09-15 三轮（B15 会话级缓存感知路由落地；工作区待审查）**：
+
+- **B15 实现**（台账 B15 行为权威描述）：`StickyEvidence` 注入 `PlanInput`，`sticky_bonus` 升级为动态公式（随会话缓存累积增大、封顶 0.25、无证据回落旧值）；`route()` 增加 `conversation_id` 参数（server chat 路径传入，proxy/影子/编排传 None）；+2 单测（117 全绿）。**顺带修复 PR-5 潜伏 bug**：`recent_conversation_model` 查询列名错写（错误被 `.ok()` 吞掉 → 会话亲和从未生效），本轮修正后会话亲和首次真正激活
+- **Mimosa 提交门加固顺带**：测试密钥字面量运行时构造（json! + repeat）、对账报告写盘 containment、`_plan_subtask` 回调环回/内网校验 + httpx 化、embedding 下载仅限配置镜像主机（httpx 流式，保持 Range 续传）
+
 ***
 
 **过往已实现并验证**（见 memory / 历史 commit）：
@@ -370,7 +375,7 @@
 | B12 | **BEST-Route 并行采样**（低置信请求并行采两轻量档 + 裁决）  | 远期，待级联/裁判机制成熟                                                                              | `ROUTING-PLAN.md:213`                        | 🕐 |
 | B13 | **OpenRouter** **`usage.cost`** **对账源** | 未来对账增强                                                                                     | `ROUTING-PLAN.md:202`                        | 🕐 |
 | B14 | **L3 关键事实抽取**（摘要之上抽实体/偏好/约束）            | 远期为超长项目型对话准备；L2 已落地，按需再加                                                                   | `CONTEXT-PLAN.md:126`                        | 🕐 |
-| B15 | **会话级缓存感知路由**（切换模型代价量化）                    | 当前 sticky_bonus 固定 0.05，不反映缓存失效实际损失。需：① 会话维度追踪各模型累积缓存命中量；② 量化切换代价 = 历史平均 cached_tokens × 缓存单价差；③ 评分公式加入动态粘性加分。会话越长，切换代价越大，粘性越强。 | 讨论记录 2026-09-06，`router.rs:349-360`，`pricing.rs:352-358` | 🕐 |
+| B15 | **会话级缓存感知路由**                             | ✅ **已落地**（2026-09-15）：① 证据由 `route()` 现查——`db.conversation_cache_avg`（会话×模型，cached_tokens>0 行均值）× 粘滞模型 `pricing.rs cache_price_delta`（主档 input − cache_read）；② 动态粘性 = `cost_weight × loss/(loss+med_ec)`，loss=平均缓存命中×价差，上限 `STICKY_CAP=0.25`，无证据回落 PR-5 固定 +0.05（`router.rs sticky_bonus`）；③ 仅 WebUI chat 路径注入证据（proxy/编排/影子重放无会话上下文走旧值）；④ **顺带修复潜伏 bug**：`recent_conversation_model` 列名错写 `model`（真实列 model_name），错误被调用方 `.ok()` 吞掉——PR-5 会话亲和实际从未生效，B15 落地时修正。+2 单测（合计 117 绿）；cap/权重阈值待真实流量观察后调 | `router.rs sticky_bonus/StickyEvidence`、`db.rs conversation_cache_avg`、`pricing.rs cache_price_delta` | ✅ 已落地 |
 
 ### 独立小项台账（C 类：无前置依赖，可随时插队）
 

@@ -221,6 +221,7 @@ pub async fn chat_completions(
         &user_text,
         classifier.as_ref(),
         None,
+        None, // 代理请求无 lloom 会话上下文（B15 证据仅在 WebUI chat 路径注入）
     )
     .await;
 

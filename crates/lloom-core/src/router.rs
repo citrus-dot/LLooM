@@ -158,6 +158,8 @@ pub struct PlanInput<'a> {
     pub hit_rate: &'a HashMap<String, f64>,
     /// PR-5 §5.2 会话亲和：本会话上一轮所用模型（sticky）。None = 不粘。
     pub last_model_conv: Option<&'a str>,
+    /// B15 会话级缓存证据：上一轮模型在本会话的历史缓存命中与价差。None = 无证据（回落固定 sticky）。
+    pub conv_sticky: Option<StickyEvidence>,
     /// PR-8：deferrable=1 时按「预计谷时执行时刻」估成本（若 2h 内进谷则用谷价+该候选机会成本下降）。
     /// 实时 chat/编排默认 false（实时路径零延迟变化）。
     pub deferrable: bool,
@@ -170,6 +172,15 @@ pub struct Candidate {
     pub est_cost: f64,
     pub quality: f64,
     pub capability_tier: i64,
+}
+
+/// B15 会话级缓存感知粘性的证据（route() 从 usage_records + price_specs 解析，router 保持纯函数）。
+#[derive(Debug, Clone, Copy)]
+pub struct StickyEvidence {
+    /// 本会话粘滞模型的历史平均缓存命中 tokens（cached_tokens>0 行均值）
+    pub avg_cached_tokens: f64,
+    /// 粘滞模型的缓存价差（input − cache_read，USD/token）；无缓存计价 → 0
+    pub cache_price_delta: f64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -402,20 +413,34 @@ fn hit_of(input: &PlanInput, m: &Model) -> f64 {
         .clamp(0.0, 1.0)
 }
 
-/// PR-5 §5.2：会话亲和加分——仅缓存敏感通道（spec 有 cache_read 区分）且命中本会话末模型时 +0.05。
-fn sticky_bonus(input: &PlanInput, m: &Model) -> f64 {
+/// B15 会话级缓存感知粘性（升级 PR-5 的固定 +0.05）：
+/// 切换代价 = 历史平均 cached_tokens × 缓存单价差（input − cache_read），
+/// 与 norm_cost 同尺度折算成分数：cost_weight × loss/(loss + med_ec)，上限 STICKY_CAP——
+/// 会话越长累积缓存越多、粘性越强，但不会锁死评分。无证据（None）回落 PR-5 固定 +0.05。
+const STICKY_CAP: f64 = 0.25;
+
+fn sticky_bonus(input: &PlanInput, m: &Model, med_ec: f64) -> f64 {
     if input.last_model_conv != Some(m.name.as_str()) {
         return 0.0;
     }
-    let cache_sensitive = input
-        .price_specs
-        .get(&(m.provider_name().to_string(), m.name.clone()))
-        .map(|s| s.cache_read_cost.is_some())
-        .unwrap_or(false);
-    if cache_sensitive {
-        0.05
-    } else {
-        0.0
+    match input.conv_sticky {
+        Some(ev) if ev.avg_cached_tokens > 0.0 && ev.cache_price_delta > 0.0 => {
+            let loss = ev.avg_cached_tokens * ev.cache_price_delta;
+            (input.policy.cost_weight * loss / (loss + med_ec.max(1e-12))).min(STICKY_CAP)
+        }
+        // PR-5 旧行为兜底：无会话缓存证据（或零证据）时，仅缓存敏感通道给固定小加分
+        _ => {
+            let cache_sensitive = input
+                .price_specs
+                .get(&(m.provider_name().to_string(), m.name.clone()))
+                .map(|s| s.cache_read_cost.is_some())
+                .unwrap_or(false);
+            if cache_sensitive {
+                0.05
+            } else {
+                0.0
+            }
+        }
     }
 }
 
@@ -488,7 +513,7 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
                 - input.policy.cost_weight * tier_cost_multiplier(input.budget_tier) * norm_cost
                 - input.policy.latency_weight * norm_latency
                 + 0.05 * m.priority as f64
-                + sticky_bonus(input, m); // PR-5 §5.2 会话亲和
+                + sticky_bonus(input, m, med_ec); // PR-5 §5.2 + B15 会话级缓存感知
             if m.needs_calibration != 0 && tier_req > 1 {
                 s -= 0.3;
             }
@@ -522,6 +547,7 @@ pub async fn route(
     user_text: &str,
     classifier: Option<&ModelSpec>,
     last_model: Option<&str>,
+    conversation_id: Option<&str>,
 ) -> RoutingDecision {
     let models = db.list_models(true).unwrap_or_default();
     if model != "auto" && model != "auto-route" {
@@ -582,6 +608,33 @@ pub async fn route(
         .map(budget_tier_from_ratio)
         .unwrap_or("normal");
 
+    // B15 会话级缓存证据：粘滞模型在本会话的平均缓存命中 × 其缓存价差（input − cache_read）。
+    // 价差真源 = 粘滞模型的 PriceSpec 主档；激活表查不到 provider 时按模型名扫 spec
+    // （粘滞模型可能已停用）。无缓存计价 → 价差 0 → 回落旧固定 sticky。
+    let conv_sticky = match (conversation_id, last_model) {
+        (Some(cid), Some(lm)) => {
+            let avg_cached = db
+                .conversation_cache_avg(cid, lm)
+                .ok()
+                .flatten()
+                .unwrap_or(0.0);
+            let delta = match models.iter().find(|m| m.name == lm).map(|m| m.provider_name()) {
+                Some(p) => spec_map.get(&(p.to_string(), lm.to_string())),
+                None => spec_map
+                    .iter()
+                    .find(|((_, n), _)| n == lm)
+                    .map(|(_, s)| s),
+            }
+            .map(|s| s.cache_price_delta(500))
+            .unwrap_or(0.0);
+            Some(StickyEvidence {
+                avg_cached_tokens: avg_cached,
+                cache_price_delta: delta,
+            })
+        }
+        _ => None,
+    };
+
     let input = PlanInput {
         task_type: &task_type,
         band,
@@ -596,6 +649,7 @@ pub async fn route(
         budget_tier,
         hit_rate: &hit_rate,
         last_model_conv: last_model,
+        conv_sticky,
         deferrable: false, // 实时 chat 永不延迟（PR-8）
     };
 
@@ -707,6 +761,7 @@ pub fn plan_for_task(
         budget_tier,
         hit_rate: &hit_rate,
         last_model_conv: None,
+        conv_sticky: None,
         deferrable,
     };
     plan(&input)
@@ -815,6 +870,7 @@ mod tests {
             budget_tier: "normal",
             hit_rate: &ctx.hit,
             last_model_conv: ctx.sticky.as_deref(),
+            conv_sticky: None,
             deferrable: false,
         }
     }
@@ -1331,16 +1387,71 @@ mod tests {
         let m = models.iter().find(|x| x.name == "qwen-plus").unwrap();
         let mut inp = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
         inp.last_model_conv = Some("qwen-plus");
-        assert_eq!(sticky_bonus(&inp, m), 0.05);
+        assert_eq!(sticky_bonus(&inp, m, 0.0), 0.05);
         // 粘其他模型 → 0
         let mut inp2 = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
         inp2.last_model_conv = Some("gpt-4o");
-        assert_eq!(sticky_bonus(&inp2, m), 0.0);
+        assert_eq!(sticky_bonus(&inp2, m, 0.0), 0.0);
         // 非缓存敏感（gpt spec cache_read None）→ 即使命中也 0
         let g = models.iter().find(|x| x.name == "gpt-4o").unwrap();
         let mut inp3 = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
         inp3.last_model_conv = Some("gpt-4o");
-        assert_eq!(sticky_bonus(&inp3, g), 0.0);
+        assert_eq!(sticky_bonus(&inp3, g, 0.0), 0.0);
+    }
+
+    #[test]
+    fn b15_dynamic_sticky_scales_with_conversation_cache() {
+        let models = registry();
+        let mut specs = prices();
+        specs.insert(
+            ("dashscope".into(), "qwen-plus".into()),
+            PriceSpec {
+                cache_read_cost: Some(2.22e-8),
+                ..spec("dashscope", "qwen-plus", 1.11e-7, 4.4e-7)
+            },
+        );
+        let policy = RoutingPolicy::default();
+        let ctx = Ctx::new();
+        let m = models.iter().find(|x| x.name == "qwen-plus").unwrap();
+        // 价差 = 1.11e-7 − 2.22e-8 = 8.88e-8 USD/token（与 cache_price_delta 同源）
+        let delta = specs
+            .get(&("dashscope".into(), "qwen-plus".into()))
+            .unwrap()
+            .cache_price_delta(500);
+        assert!((delta - (1.11e-7 - 2.22e-8)).abs() < 1e-15);
+        let med_ec = 0.01_f64;
+
+        let mut inp = base_input(&models, &specs, "general", "medium", &policy, 100, &ctx);
+        inp.last_model_conv = Some("qwen-plus");
+        // 无证据 → 旧固定 0.05
+        assert!((sticky_bonus(&inp, m, med_ec) - 0.05).abs() < 1e-9);
+
+        // 短会话小证据 → 加分小；长会话大证据 → 加分增大（会话越长粘性越强）
+        inp.conv_sticky = Some(StickyEvidence {
+            avg_cached_tokens: 1_000.0,
+            cache_price_delta: delta,
+        });
+        let short = sticky_bonus(&inp, m, med_ec);
+        inp.conv_sticky = Some(StickyEvidence {
+            avg_cached_tokens: 50_000.0,
+            cache_price_delta: delta,
+        });
+        let long = sticky_bonus(&inp, m, med_ec);
+        assert!(short > 0.0 && short < long, "粘性应随会话缓存累积增大: {short} < {long}");
+
+        // 超长会话不超封顶
+        inp.conv_sticky = Some(StickyEvidence {
+            avg_cached_tokens: 1e9,
+            cache_price_delta: delta,
+        });
+        assert!((sticky_bonus(&inp, m, med_ec) - STICKY_CAP).abs() < 1e-9);
+
+        // 零价差（无缓存计价区分）→ 无动态粘性，回落旧固定值
+        inp.conv_sticky = Some(StickyEvidence {
+            avg_cached_tokens: 50_000.0,
+            cache_price_delta: 0.0,
+        });
+        assert_eq!(sticky_bonus(&inp, m, med_ec), 0.05);
     }
 
     #[test]

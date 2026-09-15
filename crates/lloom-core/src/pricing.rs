@@ -419,6 +419,13 @@ impl PriceSpec {
         BandRef::Flat(self)
     }
 
+    /// B15 会话级缓存感知路由：主档缓存价差（input − cache_read，USD/token）。
+    /// 无缓存计价区分 → 0（等价切换无缓存损失，粘性回落旧固定值）。
+    pub fn cache_price_delta(&self, prompt_tokens: i64) -> f64 {
+        let b = self.band(prompt_tokens);
+        (b.in_cost() - b.cache_read()).max(0.0)
+    }
+
     /// 时段系数。规则缺失/未命中 → 1.0（不优惠、不报错，校准层会暴露）
     pub fn zone_multiplier(&self, t_epoch_secs: i64, zr: &ZoneResolver) -> f64 {
         let Some(zref) = &self.zone_ref else {
