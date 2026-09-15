@@ -73,7 +73,7 @@ fn new_id() -> String {
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u128;
+        .as_millis();
     let pid = std::process::id() as u128;
     format!("{:016x}", (ms << 20) | (pid & 0xf_ffff))
 }

@@ -1,0 +1,66 @@
+# 质量 CI：锁住「构建 + 测试全绿再提交」约定
+#
+# 与 release.yml 的关系：release 只管三平台打包发版；本文件是质量门。
+# 触发：push v2 / PR / 手动；纯 md 变更不触发。
+# 注：网络不受限的 runner 上直接用官方源，本地受限网络镜像约定不适用于 CI。
+
+name: ci
+
+on:
+  push:
+    branches: [v2]
+    paths-ignore: ["**.md"]
+  pull_request:
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+jobs:
+  rust:
+    name: Rust clippy + test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy（0 告警门）
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --workspace
+
+  webui:
+    name: WebUI typecheck + build
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: webui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - run: npm ci
+      # build = tsc -b && vite build，类型检查一并覆盖
+      - run: npm run build
+
+  python:
+    name: Python static checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # 装运行依赖是为了 pyright 能解析 litellm/chromadb 类型（本地约定：pyright error 级全 0）
+      - name: Install deps + linters
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" pyflakes pyright
+      - name: pyflakes
+        run: python -m pyflakes api/ scripts/
+      - name: pyright (error level)
+        # --pythonpath 显式绑解释器：pyright 不继承 pip 安装环境时会误报全部导入不可解析
+        run: python -m pyright --pythonpath "$(which python)" --level error api/

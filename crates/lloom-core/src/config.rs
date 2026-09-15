@@ -51,7 +51,7 @@ mod settings {
 
     /// Persist the semantic-cache similarity threshold (called by the tuner).
     pub fn set_cache_threshold(db: &crate::db::Db, t: f64) -> std::result::Result<(), String> {
-        let clamped = t.max(0.70).min(0.92);
+        let clamped = t.clamp(0.70, 0.92);
         db.set_setting("cache_threshold", &format!("{clamped:.4}"))
             .map_err(|e| e.to_string())
     }
@@ -259,13 +259,13 @@ mod net {
     ) -> u16 {
         over.ai_port
             .or_else(|| ai_port_env.and_then(|p| p.parse().ok()))
-            .or_else(|| ai_url_env.as_deref().and_then(extract_port_from_url))
+            .or_else(|| ai_url_env.and_then(extract_port_from_url))
             .unwrap_or(DEFAULT_AI_PORT)
     }
 
     fn extract_port_from_url(url: &str) -> Option<u16> {
         url.split(':')
-            .last()
+            .next_back()
             .and_then(|p| p.trim_end_matches('/').parse().ok())
     }
 

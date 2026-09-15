@@ -178,6 +178,7 @@ fn replay_once(
 /// - 省成本方向（更便宜）：相对省额 − 质量损失；
 /// - 提质量方向（更准）：质量增益 − 0.5×成本相对增幅；
 /// - 两者皆非（同点/更贵且更差）→ −∞。
+///
 /// 与 aiq_replay.py 结论逻辑同向：AIQ 高省不足 → 省成本建议；质量掉损 → 提质量建议。
 fn point_score(cost: f64, quality: f64, cur_cost: f64, cur_quality: f64) -> f64 {
     if cost < cur_cost - 1e-12 {
@@ -216,7 +217,7 @@ pub fn grid_search_suggestions(db: &crate::db::Db) -> Result<Vec<Value>> {
         *sample_counts.entry(r.task_type.as_str()).or_insert(0) += 1;
     }
     let mut task_counts: Vec<(&str, i64)> = sample_counts.into_iter().collect();
-    task_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    task_counts.sort_by_key(|item| std::cmp::Reverse(item.1));
 
     let mut suggestions = Vec::new();
     for (task_type, samples) in task_counts {
@@ -297,7 +298,7 @@ pub fn adopt_suggestions(db: &crate::db::Db, task_type: Option<&str>) -> Result<
         serde_json::from_str(&latest.suggestions_json).unwrap_or_default();
     let picked: Vec<&Value> = suggestions
         .iter()
-        .filter(|s| task_type.map_or(true, |t| s["task_type"].as_str() == Some(t)))
+        .filter(|s| task_type.is_none_or(|t| s["task_type"].as_str() == Some(t)))
         .collect();
     if picked.is_empty() {
         return Err(AppError::InvalidRequest(format!(

@@ -1340,7 +1340,7 @@ async fn run_daily_calibration(db: &db::Db) -> Result<()> {
         // 命中率 EWMA（喂路由 hit_rates——PR-5 落地后读取；当前先行维护）
         let _ = HIT_RATE_EWMA_ALPHA;
         // stale 去抖：连续 3 天越界才标（单日计费异常不误报）
-        if ratio > DRIFT_UPPER || ratio < DRIFT_LOWER {
+        if !(DRIFT_LOWER..=DRIFT_UPPER).contains(&ratio) {
             let streak = db.stale_streak(&r.provider, &r.model, STALE_STREAK_DAYS)?;
             if streak >= STALE_STREAK_DAYS {
                 db.mark_price_stale(&r.provider, &r.model, true, "calibration_drift")?;
@@ -1712,7 +1712,7 @@ async fn routing_overhead(
     Query(q): Query<OverheadQuery>,
 ) -> Result<Json<Value>> {
     let days = q.days.unwrap_or(0);
-    if days < 0 || days > 90 {
+    if !(0..=90).contains(&days) {
         return Err(AppError::InvalidRequest("days 需在 [0,90]".into()));
     }
     let (count, avg, p95, max, slow) = state.db.routing_overhead_report(days)?;
@@ -1787,10 +1787,7 @@ async fn probe_down_models(db: &db::Db) {
             "role": "user",
             "content": "ping"
         }]);
-        let ok = match ai_client::chat(&spec, &[probe_msg], 1, 0.0).await {
-            Ok(_) => true,
-            Err(_) => false,
-        };
+        let ok = ai_client::chat(&spec, &[probe_msg], 1, 0.0).await.is_ok();
         let state = crate::health::record_outcome(db, &m.name, ok);
         if ok {
             eprintln!("[health] probe recovered {} → {state}", m.name);
@@ -2259,7 +2256,7 @@ fn blocked_response(sec: &SecurityReport) -> Response {
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/event-stream"),
         )
-        .body(Body::from(format!("data: {}\n\n", body.to_string())))
+        .body(Body::from(format!("data: {}\n\n", body)))
         .unwrap()
 }
 
@@ -2271,7 +2268,7 @@ fn sse_error(detail: &str) -> Response {
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/event-stream"),
         )
-        .body(Body::from(format!("data: {}\n\n", body.to_string())))
+        .body(Body::from(format!("data: {}\n\n", body)))
         .unwrap()
 }
 

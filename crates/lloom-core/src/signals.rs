@@ -163,6 +163,12 @@ fn complexity_rx() -> &'static [Regex] {
             r"(分析|analyze|对比|compare|评估|evaluate|综述|research|论文|paper)",
             r"(推理|reason|证明|prove|逻辑|logic)",
             r"(多步|多重|多个|多项).{1,}(任务|步骤|方面|模块)",
+            // ── C4 入口统一：并入原 router::complexity_regex 的时序/步骤/复合模式 ──
+            r"(然后|接着|再|之后|最后).{2,}",
+            r"(第[一二三四五1-5]步|Step\s?\d)",
+            r"(同时|并且|此外|另外)",
+            r"(写|实现|开发).+(并|然后|接着).*(测试|验证|部署)",
+            r"(翻译|总结|摘要).+(并|然后).+(分析|评论)",
         ]
         .iter()
         .map(|p| Regex::new(p).unwrap())
@@ -261,6 +267,13 @@ fn complexity_score(text: &str) -> f64 {
 fn context_score(text: &str) -> f64 {
     let tokens = est_tokens(text);
     (tokens as f64 / 32768.0).clamp(0.0, 1.0)
+}
+
+/// 复杂判定（布尔门，C4 入口统一）：与 [`complexity_score`] 同源——
+/// 正则命中 0.6 直接过线；长度/句数仅作评分项累计（如 >100 字 + >2 句 = 0.5 过线）。
+/// 单独的「>100 字」或「>2 句」不再硬触发（旧行为差异，见台账 C4）；阈值调优待标注语料（O5），当前不盲调。
+pub fn is_complex(text: &str) -> bool {
+    complexity_score(text) >= 0.5
 }
 
 /// 输入 token 粗估（中英混合 ~0.6 token/字符）
@@ -517,5 +530,17 @@ mod tests {
         let s = compute("分析这张截图里的图表，并调用工具算出总和", &w, 0.33, 0.66);
         assert!(s.needs_vision);
         assert!(s.needs_tools);
+    }
+
+    #[test]
+    fn is_complex_unified_entry() {
+        // 正则命中 → 0.6 直接过线（时序模式来自原 router::complexity_regex 并集）
+        assert!(is_complex("先做方案A，然后对比方案B，最后给结论"));
+        // 长度 + 句数累计过线（>100 字 + >2 句 = 0.3 + 0.2 = 0.5）
+        let long_multi = "这句话很长。".repeat(20);
+        assert!(is_complex(&long_multi));
+        // 短而简单的查询不误判
+        assert!(!is_complex("你好"));
+        assert!(!is_complex("今天天气怎么样？"));
     }
 }

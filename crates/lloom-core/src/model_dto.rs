@@ -552,8 +552,13 @@ mod tests {
         if let Backend::Cloud { api_key, .. } = &mut cloud.backend {
             *api_key = Some(ApiKeyRef::parse("DASHSCOPE_API_KEY").unwrap());
         }
-        let patch: ModelPatch =
-            serde_json::from_str(r#"{"api_key":"****KEY_","input_cost_per_token":1e-6}"#).unwrap();
+        // 哨兵值运行时构造：mask_secret 输出即真实客户端回显的掩码，源码不留密钥形状字面量
+        let masked_echo = mask_secret(&"x".repeat(20));
+        let patch: ModelPatch = serde_json::from_value(json!({
+            "api_key": masked_echo,
+            "input_cost_per_token": 1e-6,
+        }))
+        .unwrap();
         let after = patch.resolve_against(&cloud).unwrap();
         assert_eq!(
             after.api_key_env(),
@@ -566,7 +571,11 @@ mod tests {
     #[test]
     fn patch_local_with_key_is_rejected() {
         let local = Model::local_fixture("qwen3:8b", LocalCompat::Ollama);
-        let patch: ModelPatch = serde_json::from_str(r#"{"api_key":"sk-abc123"}"#).unwrap();
+        // 本地模型带 key 必须拒收；值运行时构造，避免密钥形状字面量
+        let patch: ModelPatch = serde_json::from_value(json!({
+            "api_key": "x".repeat(12),
+        }))
+        .unwrap();
         assert!(patch.resolve_against(&local).is_err());
     }
 

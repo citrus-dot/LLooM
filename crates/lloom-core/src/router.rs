@@ -76,42 +76,13 @@ fn task_rules() -> &'static Vec<(&'static str, Vec<Regex>)> {
 
 // ── Complexity detection (band projection) ──
 
-fn complexity_regex() -> &'static Vec<Regex> {
-    static CR: OnceLock<Vec<Regex>> = OnceLock::new();
-    CR.get_or_init(|| {
-        [
-            r"(然后|接着|再|之后|最后).{2,}",
-            r"(第[一二三四五1-5]步|Step\s?\d)",
-            r"(同时|并且|此外|另外)",
-            r"(对比|比较|分析|评估).+(和|与|跟|vs)",
-            r"(写|实现|开发).+(并|然后|接着).*(测试|验证|部署)",
-            r"(翻译|总结|摘要).+(并|然后).+(分析|评论)",
-        ]
-        .iter()
-        .map(|p| Regex::new(p).expect("valid complexity regex"))
-        .collect()
-    })
-}
-
+/// 复杂判定统一入口（C4）：委托 `signals::is_complex`（评分 ≥0.5）。
+/// 正则/长度/句数的单一真源在 `signals::complexity_score`，router 不再自持一套。
 pub fn is_complex(query: &str) -> bool {
-    for re in complexity_regex() {
-        if re.is_match(query) {
-            return true;
-        }
-    }
-    if query.chars().count() > 100 {
-        return true;
-    }
-    let sentences: Vec<&str> = query
-        .split(['。', '！', '？', '.', '!', '?'])
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-    sentences.len() > 2
+    crate::signals::is_complex(query)
 }
 
-/// 难度带投影（P0.d 简版：task_type 基线 + 复杂度正则提档；
-/// P0.g 信号层落地后由 prefix_stability 等信号精化）。
+/// 难度带投影：task_type 基线 + 统一复杂判定提档（C4 入口统一，signals 评分层为真源）。
 pub fn band_for(task_type: &str, query: &str) -> &'static str {
     let base = match task_type {
         "simple_qa" => "easy",
@@ -459,7 +430,7 @@ pub fn next_valley_epoch(zr: &ZoneResolver, now: i64) -> Option<i64> {
         // 当前已是谷价（multiplier<1）→ 无需延迟；无分时渠道 multiplier 恒 1 → 无谷时窗口，自然跳过。
         if zone.multiplier_at(now) >= 1.0 {
             if let Some(v) = zone.first_valley_epoch(now, VALLEY_HORIZON_SECS) {
-                if best.map_or(true, |b| v < b) {
+                if best.is_none_or(|b| v < b) {
                     best = Some(v);
                 }
             }
@@ -753,11 +724,10 @@ pub fn enhance_with_domain(task_type: &str, sr_domain: &str) -> (String, bool) {
                 return ("math_logic".to_string(), true);
             }
         }
-        "computer_science" | "engineering" => {
-            if task_type != "coding" && task_type != "complex_reasoning" {
+        "computer_science" | "engineering"
+            if task_type != "coding" && task_type != "complex_reasoning" => {
                 return ("coding".to_string(), true);
             }
-        }
         _ => {}
     }
     (task_type.to_string(), false)

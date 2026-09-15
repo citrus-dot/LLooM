@@ -1036,12 +1036,35 @@ def _rust_base_url(req: OrchestrateRequest) -> str:
     return os.environ.get("LLOOM_ROUTER_URL", "http://localhost:7861").rstrip("/")
 
 
+def _is_internal_host(host: str) -> bool:
+    """SSRF 防线：Python↔Rust 回调只允许环回/内网地址；跨机部署用 LLOOM_ALLOW_REMOTE_ROUTER=1 显式放开。"""
+    import ipaddress
+
+    if host in ("localhost", "::1", ""):
+        return True
+    if host.startswith("127."):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_private
+
+
 def _plan_subtask(task_type: str, est_in: int, rust_base_url: str,
                   est_out: int | None = None, budget_tier: str | None = None) -> dict:
     """回调 Rust `POST /api/routing/plan-subtask`，拿 primary + fallback 链 + escalation 开关。
     失败（网络/Rust 未启动）返回空 dict，调用方回落原有 assignments/selected_model，绝不死链。
     est_in 由调用方 tiktoken 精确分词传入；est_out/budget_tier 不传时 Rust 侧取真实均值/预算水位默认。"""
     try:
+        # SSRF 防线：回调目标必须环回/内网（或 env 显式放开）；不满足直接走回落路径
+        from urllib.parse import urlparse
+
+        if not (
+            _is_internal_host(urlparse(rust_base_url).hostname or "")
+            or os.environ.get("LLOOM_ALLOW_REMOTE_ROUTER") == "1"
+        ):
+            return {}
         payload = {
             "task_type": task_type,
             "est_in_tokens": max(int(est_in or 0), 0),
@@ -1050,15 +1073,14 @@ def _plan_subtask(task_type: str, est_in: int, rust_base_url: str,
             payload["est_out_tokens"] = max(int(est_out), 0)
         if budget_tier is not None:
             payload["budget_tier"] = budget_tier
-        import urllib.request  # 标准库，避免新增 httpx 依赖
-        body = json.dumps(payload).encode("utf-8")
-        reqq = urllib.request.Request(
-            f"{rust_base_url}/api/routing/plan-subtask", data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        import httpx  # litellm 硬依赖，进程内必有
+
+        resp = httpx.post(
+            f"{rust_base_url}/api/routing/plan-subtask",
+            json=payload,
+            timeout=3.0,
         )
-        with urllib.request.urlopen(reqq, timeout=3) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        data = resp.json()
         if not data.get("primary"):
             return {}
         return {"primary": data["primary"],

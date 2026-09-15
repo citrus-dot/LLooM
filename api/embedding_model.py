@@ -230,25 +230,35 @@ def _download_one(url: str, dest: Path, spec: dict[str, Any], base_done: int) ->
     if resume_from:
         headers["Range"] = f"bytes={resume_from}-"
 
-    req = urllib.request.Request(url, headers=headers)
+    # SSRF 防线：只允许向已配置的镜像主机发起下载（env 覆盖的镜像同样以配置清单为准）
+    from urllib.parse import urlparse
+
+    allowed_hosts = {urlparse(tpl).hostname or "" for _label, tpl in mirrors()}
+    if (urlparse(url).hostname or "") not in allowed_hosts:
+        raise OSError(f"refusing to fetch from non-mirror host: {url}")
+
     file_start = time.monotonic()
     window_start = file_start
     window_bytes = 0
 
-    with urllib.request.urlopen(req, timeout=_READ_TIMEOUT) as resp:
+    # httpx（litellm 硬依赖）流式下载：带 Range 续传；只校验入口 URL 主机，
+    # 镜像 CDN 重定向行为与原 urllib 默认一致（follow_redirects=True）。
+    import httpx
+
+    with httpx.stream(
+        "GET", url, headers=headers, timeout=_READ_TIMEOUT, follow_redirects=True
+    ) as resp:
+        status = resp.status_code
         # 206 = resumed; 200 = full (server ignored Range -> restart fresh).
-        if resume_from and resp.status == 200:
+        if resume_from and status == 200:
             written = 0
             hasher = hashlib.sha256()
-        elif resp.status not in (200, 206):
-            raise OSError(f"HTTP {resp.status}")
+        elif status not in (200, 206):
+            raise OSError(f"HTTP {status}")
         # Append when we have a verified prefix (206); otherwise write fresh.
         mode = "ab" if written > 0 else "wb"
         with open(tmp, mode) as fh:
-            while True:
-                chunk = resp.read(_CHUNK)
-                if not chunk:
-                    break
+            for chunk in resp.iter_bytes(_CHUNK):
                 fh.write(chunk)
                 hasher.update(chunk)
                 written += len(chunk)

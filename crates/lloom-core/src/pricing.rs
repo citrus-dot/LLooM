@@ -391,6 +391,10 @@ impl ZoneResolver {
         self.inner.read().unwrap().len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// 已加载分时渠道快照（PR-8 峰谷调度扫描用）。
     pub fn zones(&self) -> Vec<Zone> {
         self.inner.read().unwrap().values().cloned().collect()
@@ -490,12 +494,10 @@ fn holiday_key(t_epoch_secs: i64, tz_offset_hours: i32) -> String {
 
 impl Zone {
     /// 从 DB 行构造。rule_json / holidays_json 解析失败 → 空规则（不报错，等价不分时）。
-    pub fn from_db(provider: &str, rule_json: &str, tz: &str, holidays_json: &str) -> Zone {
-        let tz_offset_hours = if tz == "Asia/Shanghai" || tz.is_empty() {
-            8
-        } else {
-            8 // 本项目仅支持北京时间；其余时区留待未来
-        };
+    /// `tz` 仅北京/空语义当前等价（见上）；参数保留以对齐 DB 行结构。
+    pub fn from_db(provider: &str, rule_json: &str, _tz: &str, holidays_json: &str) -> Zone {
+        // 本项目仅支持北京时间（Asia/Shanghai / 空）；其余时区留待未来
+        let tz_offset_hours = 8;
         let rules = serde_json::from_str(rule_json).unwrap_or_default();
         let holidays: HashSet<String> = serde_json::from_str(holidays_json).unwrap_or_default();
         Zone {

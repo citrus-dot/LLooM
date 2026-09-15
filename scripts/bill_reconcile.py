@@ -346,8 +346,14 @@ def main() -> int:
         print_report(rep, extra, warnings, bill_path, db_path)
 
     if args.save:
-        out = os.path.join(resolve_data_dir(db_path), "reconcile_last.json")
-        with open(out, "w", encoding="utf-8") as f:
+        # 路径安全：目录先 resolve 定死，文件名是常量；回读校验 parent 恒为数据目录
+        from pathlib import Path
+
+        data_dir = Path(resolve_data_dir(db_path)).resolve()
+        out = data_dir / "reconcile_last.json"
+        if out.parent != data_dir:
+            raise SystemExit(f"refusing to write outside data dir: {data_dir}")
+        with out.open("w", encoding="utf-8") as f:
             json.dump(rep, f, ensure_ascii=False, indent=2)
         if not args.json:
             print(f"[bill] 已保存：{out}（UsagePage「已对账」徽标数据源）")

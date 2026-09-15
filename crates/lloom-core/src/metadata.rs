@@ -94,7 +94,7 @@ fn fill_from_overlay_in(m: &mut Model, data_dir: &Path) -> OverlayHits {
         Ok(v) => v,
         Err(_) => return hits,
     };
-    let Some(entry) = root.get(&overlay_key(m)) else {
+    let Some(entry) = root.get(overlay_key(m)) else {
         return hits;
     };
     if let Some(v) = entry.get("capability_tier").and_then(|x| x.as_i64()) {
@@ -158,7 +158,7 @@ pub fn cold_start_quality_in(m: &Model, task_type: &str, data_dir: &Path) -> Opt
     let path = data_dir.join("model_catalog.json");
     let raw = std::fs::read_to_string(path).ok()?;
     let root: Value = serde_json::from_str(&raw).ok()?;
-    let by_task = root.get(&overlay_key(m))?.get("quality_by_task")?;
+    let by_task = root.get(overlay_key(m))?.get("quality_by_task")?;
     by_task.get(task_type)?.as_f64()
 }
 

@@ -225,10 +225,10 @@ async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::e
         if !is_cloud(m) {
             continue; // 本轮只探云端；本地免费通道探针留待后续扩展
         }
-        if budget().failure_count(&m.provider_name(), &m.name) >= FAIL_PAUSE_THRESHOLD {
+        if budget().failure_count(m.provider_name(), &m.name) >= FAIL_PAUSE_THRESHOLD {
             continue;
         }
-        if !budget().try_charge(&m.provider_name(), &m.name, PER_ROUND_CAP_USD) {
+        if !budget().try_charge(m.provider_name(), &m.name, PER_ROUND_CAP_USD) {
             continue;
         }
         let spec = ModelSpec::from(m);
@@ -236,12 +236,12 @@ async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::e
         // ① 暖机（写缓存）
         match ai_client::chat(&spec, &msgs, 8, 0.0).await {
             Ok(res) => {
-                budget().note_success(&m.provider_name(), &m.name);
+                budget().note_success(m.provider_name(), &m.name);
                 let cost = record_probe_usage(db, m, &res.usage, false);
-                budget().charge(&m.provider_name(), &m.name, cost);
+                budget().charge(m.provider_name(), &m.name, cost);
             }
             Err(e) => {
-                let n = budget().note_failure(&m.provider_name(), &m.name);
+                let n = budget().note_failure(m.provider_name(), &m.name);
                 record_probe_failure(db, m);
                 eprintln!(
                     "[core] probe {}/{} failed ({n} consecutive): {e}",
@@ -254,10 +254,10 @@ async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::e
         // ② 验证隐式缓存命中（同载荷应命中）
         match ai_client::chat(&spec, &msgs, 8, 0.0).await {
             Ok(res) => {
-                budget().note_success(&m.provider_name(), &m.name);
+                budget().note_success(m.provider_name(), &m.name);
                 let hit = res.usage.cached_tokens > 0;
                 let cost = record_probe_usage(db, m, &res.usage, hit);
-                budget().charge(&m.provider_name(), &m.name, cost);
+                budget().charge(m.provider_name(), &m.name, cost);
                 if !hit {
                     eprintln!(
                         "[core] probe {}/{} cache-verify MISS (cached_tokens=0) — 校准层将核对表价",
@@ -267,7 +267,7 @@ async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::e
                 }
             }
             Err(e) => {
-                let n = budget().note_failure(&m.provider_name(), &m.name);
+                let n = budget().note_failure(m.provider_name(), &m.name);
                 record_probe_failure(db, m);
                 eprintln!(
                     "[core] probe {}/{} round-2 failed ({n} consecutive): {e}",
@@ -288,7 +288,7 @@ fn record_probe_usage(
     usage: &pricing::UsageDetail,
     hit: bool,
 ) -> f64 {
-    let (act_cost, act_input_cost, zm) = match db.get_price_spec(&m.provider_name(), &m.name) {
+    let (act_cost, act_input_cost, zm) = match db.get_price_spec(m.provider_name(), &m.name) {
         Ok(Some(ps)) => {
             let zr = crate::server::zone_resolver(db);
             let t = crate::server::now_epoch_secs();

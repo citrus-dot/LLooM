@@ -460,7 +460,7 @@ pub fn keyword_domain(text: &str) -> Option<String> {
             scores.push((domain, score));
         }
     }
-    scores.sort_by(|a, b| b.1.cmp(&a.1));
+    scores.sort_by_key(|item| std::cmp::Reverse(item.1));
     scores.first().map(|(d, _)| (*d).to_string())
 }
 

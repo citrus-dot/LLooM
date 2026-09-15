@@ -1650,7 +1650,7 @@ impl Db {
              VALUES (?1, ?2, ?3, 0, CURRENT_TIMESTAMP)",
                 params![model_name, t, cold.clamp(0.0, 1.0)],
             )?;
-            seeded += inserted as usize;
+            seeded += inserted;
         }
         Ok(seeded)
     }
@@ -1815,7 +1815,7 @@ impl Db {
                 b.max_budget,
                 b.duration,
                 b.scope_task_type,
-                b.soft_limit_ratio.map(|v| v as f64),
+                b.soft_limit_ratio,
                 b.action_on_exceed,
             ],
         )?;
