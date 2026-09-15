@@ -49,6 +49,20 @@ pub struct ChatResult {
     pub usage: crate::pricing::UsageDetail,
     #[serde(default)]
     pub model: String,
+    /// C1：推理模型的思考链（模型返回 reasoning_content 时非空）
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    /// CONTEXT-PLAN Phase 4：两层缓存命中（L1 精确 / L2 语义）
+    #[serde(default)]
+    pub cache_hit: bool,
+}
+
+/// chat 主路径的两层缓存装配（opt-in）。probe/shadow 必须传 None——
+/// 缓存命中会把成本样本污染成 0，校准数据全部失真。
+pub struct ChatCacheCtx<'a> {
+    pub conversation_id: &'a str,
+    pub cache_dir: &'a str,
+    pub similarity_threshold: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,14 +128,22 @@ pub async fn chat(
     messages: &[Value],
     max_tokens: i64,
     temperature: f64,
+    cache: Option<&ChatCacheCtx<'_>>,
 ) -> Result<ChatResult> {
     let url = format!("{}/v1/chat", base_url());
-    let body = json!({
+    let mut body = json!({
         "model": spec,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
     });
+    // CONTEXT-PLAN Phase 4：主聊天路径接两层缓存（与 orchestrate 同约定）；
+    // cache=None 时 Python 侧退化为裸调用（probe/shadow 校准路径）
+    if let Some(c) = cache {
+        body["conversation_id"] = json!(c.conversation_id);
+        body["cache_dir"] = json!(c.cache_dir);
+        body["similarity_threshold"] = json!(c.similarity_threshold);
+    }
     let resp = client()
         .post(&url)
         .json(&body)

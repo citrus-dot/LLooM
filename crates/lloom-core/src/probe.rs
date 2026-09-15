@@ -234,7 +234,7 @@ async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::e
         let spec = ModelSpec::from(m);
         let msgs = probe_messages();
         // ① 暖机（写缓存）
-        match ai_client::chat(&spec, &msgs, 8, 0.0).await {
+        match ai_client::chat(&spec, &msgs, 8, 0.0, None).await {
             Ok(res) => {
                 budget().note_success(m.provider_name(), &m.name);
                 let cost = record_probe_usage(db, m, &res.usage, false);
@@ -252,7 +252,7 @@ async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::e
             }
         }
         // ② 验证隐式缓存命中（同载荷应命中）
-        match ai_client::chat(&spec, &msgs, 8, 0.0).await {
+        match ai_client::chat(&spec, &msgs, 8, 0.0, None).await {
             Ok(res) => {
                 budget().note_success(m.provider_name(), &m.name);
                 let hit = res.usage.cached_tokens > 0;

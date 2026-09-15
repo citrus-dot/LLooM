@@ -119,6 +119,11 @@ class ChatRequest(BaseModel):
     max_tokens: int = 500
     temperature: float = 0.3
     timeout: int = 60
+    # CONTEXT-PLAN Phase 4：主聊天路径两层缓存装配（与 orchestrate 同约定；cache_dir 空则裸调用）
+    conversation_id: str = ""
+    cache_dir: str = ""
+    similarity_threshold: float = 0.80
+    ttl: int = 86400
 
 
 class ClassifyRequest(BaseModel):
@@ -597,6 +602,22 @@ def _fingerprint(conv_id: str, history: list[dict]) -> str:
     return hashlib.sha256(f"{conv_id}:{tail}".encode()).hexdigest()[:16]
 
 
+def _resolve_caches(cache_dir: str, threshold: float, ttl: int) -> tuple["ExactCache | None", "SemanticCache | None"]:
+    """两层缓存装配（chat / orchestrate 共用约定，CONTEXT-PLAN §4）。
+
+    cache_dir 为空 → (None, None)（裸调用，probe/shadow 校准路径用）；
+    否则 L1 精确缓存落在 cache_dir 同目录（cache_exact.sqlite3），
+    L2 语义缓存用 chroma 目录。命中实例均为单例，重复装配零成本。
+    """
+    if not cache_dir:
+        return None, None
+    exact_path = os.path.join(os.path.dirname(cache_dir.rstrip("/")) or ".", "cache_exact.sqlite3")
+    exact = ExactCache.get(exact_path, ttl)
+    sem = SemanticCache.get(cache_dir, threshold, ttl)
+    _start_eviction_thread(exact, sem)
+    return exact, sem
+
+
 def _exact_key(model: str, system_id: str, fingerprint: str, query: str) -> str:
     raw = f"{model}|{system_id}|{fingerprint}|{_normalize_query(query)}"
     return hashlib.sha256(raw.encode()).hexdigest()
@@ -863,56 +884,94 @@ def classify_domain(req: DomainRequest) -> dict:
 
 @app.post("/v1/chat")
 def chat(req: ChatRequest) -> dict:
-    kwargs = _litellm_kwargs(
+    """单次 LLM 调用（Rust chat 主路径入口）。
+
+    CONTEXT-PLAN Phase 4 修复（2026-09-16）：此前是裸 litellm 调用——两层缓存
+    与推理透传对 WebUI 主聊天路径不生效（功能回归）；现统一走 `_call_llm`，
+    缓存装配与 orchestrate 同约定（cache_dir 空 = 裸调用，probe/shadow 校准路径）。
+    """
+    exact, sem = _resolve_caches(req.cache_dir, req.similarity_threshold, req.ttl)
+    history = [m for m in req.messages if m.get("role") in ("user", "assistant")]
+    query = next(
+        (m.get("content") or "" for m in reversed(req.messages) if m.get("role") == "user"),
+        "",
+    )
+    context_free = _is_context_free(query, history[:-1])
+    fingerprint = "" if context_free else _fingerprint(req.conversation_id, history)
+    cache_hit: list[bool] = []
+    reasoning: list[str] = []
+    usage_ref: dict = {}
+
+    content = _call_llm(
         req.model,
         messages=req.messages,
         max_tokens=req.max_tokens,
         temperature=req.temperature,
         timeout=req.timeout,
+        exact=exact,
+        sem=sem,
+        cache_query=query,
+        conv_id=req.conversation_id,
+        fingerprint=fingerprint,
+        context_free=context_free,
+        cache_hit_ref=cache_hit,
+        usage_ref=usage_ref,
+        reasoning_ref=reasoning,
     )
-    response = cast(litellm.ModelResponse, litellm.completion(**kwargs))
-    content = response.choices[0].message.content or ""
-    u = _usage_detail(getattr(response, "usage", None))
+    u = usage_ref.get("usage") or _usage_detail(None)
     return {
         "content": content,
         "input_tokens": u["prompt_tokens"],
         "output_tokens": u["completion_tokens"],
         "usage": u,
         "model": req.model.name,
+        "cache_hit": bool(cache_hit),
+        "reasoning": "".join(reasoning) or None,
     }
 
 
 @app.post("/v1/chat/stream")
 def chat_stream(req: ChatRequest) -> StreamingResponse:
-    kwargs = _litellm_kwargs(
-        req.model,
-        messages=req.messages,
-        max_tokens=req.max_tokens,
-        temperature=req.temperature,
-        timeout=req.timeout,
-        stream=True,
-        stream_options={"include_usage": True},
+    """流式单次调用（真流式 + 两层缓存 + 推理透传，2026-09-16 修复同 /v1/chat）。"""
+    exact, sem = _resolve_caches(req.cache_dir, req.similarity_threshold, req.ttl)
+    history = [m for m in req.messages if m.get("role") in ("user", "assistant")]
+    query = next(
+        (m.get("content") or "" for m in reversed(req.messages) if m.get("role") == "user"),
+        "",
     )
+    context_free = _is_context_free(query, history[:-1])
+    fingerprint = "" if context_free else _fingerprint(req.conversation_id, history)
+    cache_hit: list[bool] = []
+    reasoning: list[str] = []
+    usage_ref: dict = {}
 
     def gen():
-        usage = None
         try:
-            chunks = cast(Iterator[Any], litellm.completion(**kwargs))
-            for chunk in chunks:
-                delta = chunk.choices[0].delta
-                if delta and delta.content:
-                    yield _plain_sse({"chunk": delta.content})
-                # Providers that support include_usage attach usage on the last
-                # chunk; capture it for the final "done" event.
-                u = getattr(chunk, "usage", None)
-                if u is not None:
-                    usage = u
-            u = _usage_detail(usage)
+            for delta in _call_llm_stream(
+                req.model,
+                messages=req.messages,
+                max_tokens=req.max_tokens,
+                temperature=req.temperature,
+                timeout=req.timeout,
+                exact=exact,
+                sem=sem,
+                cache_query=query,
+                conv_id=req.conversation_id,
+                fingerprint=fingerprint,
+                context_free=context_free,
+                cache_hit_ref=cache_hit,
+                usage_ref=usage_ref,
+                reasoning_ref=reasoning,
+            ):
+                yield _plain_sse({"chunk": delta})
+            u = usage_ref.get("usage") or _usage_detail(None)
             yield _plain_sse({
                 "done": True,
                 "usage": u,
                 "input_tokens": u["prompt_tokens"],
                 "output_tokens": u["completion_tokens"],
+                "cache_hit": bool(cache_hit),
+                "reasoning": "".join(reasoning) or None,
             })
         except Exception as e:
             yield _plain_sse({"error": True, "detail": str(e)})

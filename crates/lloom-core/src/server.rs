@@ -455,6 +455,8 @@ pub(crate) struct FailoverRequest<'a> {
     pub messages: &'a [Value],
     pub max_tokens: i64,
     pub temperature: f64,
+    /// CONTEXT-PLAN Phase 4：两层缓存装配（chat 主路径 Some，probe/shadow/代理 None）
+    pub cache: Option<ai_client::ChatCacheCtx<'a>>,
 }
 
 /// P3：按 `primary` + `fallback_chain` 顺序故障转移。成功即返回，对失败模型打健康哨点；
@@ -471,6 +473,7 @@ pub(crate) async fn chat_with_failover(
         messages,
         max_tokens,
         temperature,
+        cache,
     } = req;
     let mut try_names: Vec<String> = Vec::with_capacity(1 + fallback_chain.len());
     try_names.push(primary.to_string());
@@ -486,7 +489,7 @@ pub(crate) async fn chat_with_failover(
             continue;
         };
         let spec = ModelSpec::from(m);
-        match ai_client::chat(&spec, messages, max_tokens, temperature).await {
+        match ai_client::chat(&spec, messages, max_tokens, temperature, cache.as_ref()).await {
             Ok(res) => {
                 crate::health::record_outcome(db, name, true);
                 // 跳升到非主选：给所有先前失败模型记一次 escalation（副作用小，但真实代价信号）
@@ -628,6 +631,17 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
 
     // P3：按 primary + fallback_chain 故障转移（失败自动打健康哨点并跳升重试）
     let chat_start = std::time::Instant::now();
+    // CONTEXT-PLAN Phase 4：主聊天路径装配两层缓存（无会话也走全局精确缓存）
+    let chat_conv_id = req.conversation_id.clone().unwrap_or_default();
+    let chat_cache_dir = config::data_dir()
+        .join("chroma")
+        .to_string_lossy()
+        .to_string();
+    let chat_cache = ai_client::ChatCacheCtx {
+        conversation_id: &chat_conv_id,
+        cache_dir: &chat_cache_dir,
+        similarity_threshold: config::cache_threshold(&state.db),
+    };
     let tail = match chat_with_failover(
         &state.db,
         FailoverRequest {
@@ -638,6 +652,7 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
             messages: &processed_messages,
             max_tokens: 500,
             temperature: 0.3,
+            cache: Some(chat_cache),
         },
     )
     .await
@@ -658,8 +673,14 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
             // （est_cost（总额估算）恒 0：总额对账已由 C2 输入侧分项取代）
             // P1.a：只记成功路径；失败/重试走 routing_decisions.outcome。
             let latency_ms = chat_start.elapsed().as_secs_f64() * 1000.0;
-            let (act_cost, act_input_cost, zm) =
+            let (mut act_cost, act_input_cost, zm) =
                 priced_usage(&state.db, provider, &used_model, &res.usage);
+            // Phase 4 缓存命中记账（与 orchestrate 同约定）：供应商未被真正调用，
+            // 本应花费的金额保留进 cache_saved_cost（「缓存为您节省」账实来源），实际 cost 记 0。
+            let cache_saved_cost = if res.cache_hit { act_cost } else { 0.0 };
+            if res.cache_hit {
+                act_cost = 0.0;
+            }
             let _ = state.db.insert_usage(&db::UsageRecord {
                 model_name: &used_model,
                 user_id: "default",
@@ -679,7 +700,7 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
                     // B15/PR-5：chat 用量带会话 ID——会话亲和回查与缓存证据的数据源
                     conversation_id: req.conversation_id.clone(),
                     field_missing: res.usage.field_missing,
-                    cache_saved_cost: 0.0,
+                    cache_saved_cost,
                     api_source: None,
                     est_input_cost: routing_est_input_cost,
                     act_input_cost,
@@ -711,6 +732,8 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
                     "input_tokens": res.usage.prompt_tokens,
                     "output_tokens": res.usage.completion_tokens,
                     "cached_tokens": res.usage.cached_tokens,
+                    "cache_hit": res.cache_hit,
+                    "reasoning": res.reasoning,
                 })
             )
         }
@@ -1789,7 +1812,7 @@ async fn probe_down_models(db: &db::Db) {
             "role": "user",
             "content": "ping"
         }]);
-        let ok = ai_client::chat(&spec, &[probe_msg], 1, 0.0).await.is_ok();
+        let ok = ai_client::chat(&spec, &[probe_msg], 1, 0.0, None).await.is_ok();
         let state = crate::health::record_outcome(db, &m.name, ok);
         if ok {
             eprintln!("[health] probe recovered {} → {state}", m.name);
@@ -2041,14 +2064,30 @@ async fn run_shadow_pair(
         (Some(r), Some(b)) => {
             let msgs = vec![serde_json::json!({ "role": "user", "content": query })];
             let (rr, br) = tokio::join!(
-                ai_client::chat(&r, &msgs, 500, 0.3),
-                ai_client::chat(&b, &msgs, 500, 0.3),
+                ai_client::chat(&r, &msgs, 500, 0.3, None),
+                ai_client::chat(&b, &msgs, 500, 0.3, None),
             );
+            // 修复：priced_usage 第一参是 provider（此前误传模型名 → spec 永远查不到 →
+            // 影子成本恒 0，三线对比/AIQ/权重建议全部失效）
             let cost_of =
-                |res: &std::result::Result<ai_client::ChatResult, AppError>, model: &str| -> f64 {
+                |res: &std::result::Result<ai_client::ChatResult, AppError>, spec_model: &str| -> f64 {
                     match res {
                         Ok(x) => {
-                            let (c, _, _) = priced_usage(db, model, &x.model, &x.usage);
+                            let provider = models
+                                .iter()
+                                .find(|m| m.name == spec_model)
+                                .map(|m| m.provider_name().to_string())
+                                .unwrap_or_default();
+                            let (c, _, _) = priced_usage(db, &provider, &x.model, &x.usage);
+                            if c == 0.0
+                                && x.usage.prompt_tokens + x.usage.completion_tokens > 0
+                                && !spec_model.is_empty()
+                            {
+                                // 护栏（历史 bug）：收费模型 tokens>0 却计价 0 → spec 查找失败，样本不可信
+                                eprintln!(
+                                    "[shadow] ⚠ {spec_model} tokens>0 但计价为 0（PriceSpec 缺失或 provider 不匹配）"
+                                );
+                            }
                             c
                         }
                         Err(_) => 0.0,

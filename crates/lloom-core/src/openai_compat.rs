@@ -287,6 +287,7 @@ pub async fn chat_completions(
             messages: &processed_messages,
             max_tokens,
             temperature,
+            cache: None, // 代理请求无 lloom 会话/缓存命名空间
         },
     )
     .await;

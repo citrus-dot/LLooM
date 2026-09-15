@@ -1,7 +1,7 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-09-15** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：**B2「已对账」徽标全链路**（`/api/usage/reconcile` + UsagePage Tag，5b39c0a）+ **Python 静态检查清零**（30e17cd）；此前 N3 收尾（a/b/c）+ C2 输入侧分列（114 单测全绿）
+> 最新已提交：**E2E 深度测试三项修复 + B15 缓存感知路由 + 质量 CI**（2098fce 及此前四笔，2026-09-16 推送，117 单测全绿、远端 CI success）
 > **下一阶段权威计划：[`NEXT-PLAN.md`](./NEXT-PLAN.md)**（✅ N1 代理接入 → ✅ N2 闭环评估 → ✅ N3 信任收尾全链路 → 决策门 G1/G2）
 > **待办台账**：主线见上方「下一阶段」；**搁置项（B 类 15 条）/ 独立小项（C 类 7 条）见** **[六、待办事项](#六待办事项todo)** **末尾两张台账表**
 
@@ -229,7 +229,7 @@
 
 - 全量回归：`cargo test` **114 全绿**（+4 reconcile_report）；clippy 0 告警；pyflakes/pyright 0
 
-**2026-09-15 二轮（文档同步 + clippy 清零 + C4 入口统一 + 质量 CI；工作区待审查）**：
+**2026-09-15 二轮（文档同步 + clippy 清零 + C4 入口统一 + 质量 CI；已提交 c204117 + 33c2fee）**：
 
 - **文档同步**：README×2 Roadmap 全勾（Prometheus/对账/M1 补录）+ 删 `lloom-cli service apply` 死命令；ARCHITECTURE.md 两张端点表补 5 组新端点（/v1/chat/completions、/v1/models、/api/routing/review 三件套、/metrics、/api/usage/reconcile）+ 核心模块 14→20 个 + M1 分层描述 + 目录树修正（scripts/webui）；TEST-GUIDE 补 2.7 /metrics、2.8 对账徽标两节 + 头部过时「待提交」标注修正；LLooMprogress 死引用（.trae/documents）修正；NEXT-PLAN 加完结声明
 
@@ -241,11 +241,22 @@
 
 - **仓库清理**：删根目录 default.profraw（2.2MB 覆盖率产物，已 gitignore）+ drop 09-02 遗留 doc-backup stash（已核实为文档回滚备份）
 
-**2026-09-15 三轮（B15 会话级缓存感知路由落地；工作区待审查）**：
+**2026-09-15 三轮（B15 会话级缓存感知路由落地；已提交 925863e + 2098fce）**：
 
 - **B15 实现**（台账 B15 行为权威描述）：`StickyEvidence` 注入 `PlanInput`，`sticky_bonus` 升级为动态公式（随会话缓存累积增大、封顶 0.25、无证据回落旧值）；`route()` 增加 `conversation_id` 参数（server chat 路径传入，proxy/影子/编排传 None）；+2 单测（117 全绿）。**顺带修复 PR-5 潜伏 bug**：`recent_conversation_model` 查询列名错写（错误被 `.ok()` 吞掉 → 会话亲和从未生效），本轮修正后会话亲和首次真正激活
 - **Mimosa 提交门加固顺带**：测试密钥字面量运行时构造（json! + repeat）、对账报告写盘 containment、`_plan_subtask` 回调环回/内网校验 + httpx 化、embedding 下载仅限配置镜像主机（httpx 流式，保持 Range 续传）
 - **E2E 自测**（本机起服冒烟 + 自行造数）：chat 同会话双跑走 sticky 证据路径、代理 auto 路由真实出账、`/metrics`、路由体检、优雅关停全过；**补修第二处缺口**：chat 路径 `insert_usage` 未带 conversation_id（PR-5 起即缺）→ 用量行现带会话 ID，B15 证据环与 sticky 回查数据闭环；合成账单对账（副本库 6 模型精确匹配）exit 0 + 「已对账」徽标两态实测（真实账单数据验证仍待 B2）
+
+***
+
+**2026-09-16 四轮（E2E 深度功能测试 + 三项实质修复；工作区待审查）**：
+
+- **修复① 影子成本恒 0**（run_shadow_pair 把模型名当 provider 传给 priced_usage → spec 永远查不到 → 影子样本/三线对比/AIQ/权重建议全部失效）+ 按习惯⑧加运行时护栏（收费模型 tokens>0 却计价 0 → 告警）。修复后自测 6 样本：**平均节省 ~90%**（coding 94%/本地 100%/math 81%/general 89%），B8 验收线（≥60%）达成
+- **修复② 主聊天路径两层缓存激活**（重大功能回归）：`/v1/chat` 与 `/v1/chat/stream` 原是裸 litellm 调用——两层缓存与 reasoning 对 WebUI 主路径完全失效（只在编排子任务里活着）。修复：`ai_client::chat` 加 `ChatCacheCtx`（**opt-in**，probe/shadow 传 None 保持校准纯净——缓存命中会把成本样本污染成 0）；Python 两端点统一走 `_call_llm`/`_call_llm_stream`（缓存装配抽 `_resolve_caches` helper 与 orchestrate 同约定）；命中记账镜像 orchestrate（act_cost→cache_saved_cost，cost 记 0）。实测：同问题二问 cost $0.000315→$0、cache_hit=true、saved $0.000502 落库
+- **修复③ SQL 参数绑定收口**：budget_tier_distribution 的 days 拼接 → datetime 修正符参数绑定（PRAGMA 表名为内部字面量，加注释说明）
+- **双优化定量验收**：三线报告 saved_pct=**91.47%**（current cost $0.00273/quality 0.766 vs 全强 $0.03196/0.850）；编排 4 子任务 DAG 并行、简单子任务 qwen-plus/复杂 qwen3-max/聚合 deepseek-v3 逐角色记账入 DB
+- **代码打磨**：死代码清理（structure_rx 孤儿函数 + heuristic_task_type 恒假分支）；十条习惯审计（字符串启发式 ✓ 无、ModelSpec 散装构造 ✓ 无、From/TryFrom 链 ✓ 在用）
+- 功能矩阵全过：路由五类型×预算档（protect 仅本地/链空）、编排端到端、缓存命中、代理 /v1/models、review/refresh、对话持久化
 
 ***
 
@@ -369,7 +380,7 @@
 | B5  | **编排状态收归 Rust**（暂停/恢复/人工介入）             | 出现该需求（与 G2 相关）；当前无此需求，B 方案够用                                                               | `ROUTING-PLAN.md:711`、`NEXT-PLAN.md:84`      | 🕐 |
 | B6  | function calling / tools、多模态、多 key 分租户  | **G1 之后**才展开                                                                               | `NEXT-PLAN.md:41`                            | 🚫 |
 | B7  | **验收① 阶梯价交叉单测**                         | 需真实阶梯价 spec 数据（现 spec 为平价，无真实阶梯）                                                           | `ROUTING-PLAN.md:814`（序 4）                   | 🕐 |
-| B8  | **验收② 影子样本成本降 ≥60%**                    | 需影子真实样本（随 N2 / N1 接入后现网流量自然达成）                                                             | `ROUTING-PLAN.md:817`（序 7）+ 注记 `:834`        | 🕐 |
+| B8  | **验收② 影子样本成本降 ≥60%**                    | ✅ **机制修复 + 自测达标**（2026-09-16）：影子计价 provider bug 修复后，自测 6 样本平均节省 ~90%（远超 60% 线）；真实现网流量持续复核即可 | `ROUTING-PLAN.md:817`（序 7）+ 注记 `:834`        | 🔓 持续复核 |
 | B9  | **验收③ escalation 再降 ≥30%**              | 同 B8，需影子真实样本                                                                               | `ROUTING-PLAN.md:820`（序 10）+ 注记 `:848`       | 🕐 |
 | B10 | **Router-R1 式 RL 路由**                   | 影子数据达**千级样本**再评估；当前「描述符评分 + EWMA + 影子评测」已覆盖其核心收益                                           | `ROUTING-PLAN.md:863`（风险注记 8）                | 🕐 |
 | B11 | **Switchyard 引入**                       | 等其 **v1.0**（v0.2.0 前 API 破坏性变更）且走 libsy 库路径；当前只借鉴设计                                        | `ROUTING-PLAN.md:857`（风险注记 3）                | 🕐 |

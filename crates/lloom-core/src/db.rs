@@ -474,6 +474,7 @@ impl Db {
         cols: &[(&str, &str)],
     ) -> Result<()> {
         let mut have: Vec<String> = Vec::new();
+        // 表名是内部静态字面量（PRAGMA 无法参数绑定标识符）；列存在性探测用
         let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
         for name in rows {
@@ -1361,15 +1362,22 @@ impl Db {
     /// 旧记录无 budget_tier 字段 → 计入 "unknown"；无记录 → 空表。
     pub fn budget_tier_distribution(&self, days: i64) -> Result<Vec<(String, i64)>> {
         let conn = self.conn()?;
+        // days 走参数绑定（时间修正符作为绑定值传给 datetime()），不拼接进 SQL 文本；
+        // days<=0 → 恒真占位，保持单一语句形状
         let where_clause = if days > 0 {
-            format!("WHERE created_at >= datetime('now', '-{days} days')")
+            "WHERE created_at >= datetime('now', ?1)"
+        } else {
+            "WHERE ?1 IS NOT NULL"
+        };
+        let bind_days = if days > 0 {
+            format!("-{days} days")
         } else {
             String::new()
         };
         let mut stmt = conn.prepare(&format!(
             "SELECT signals_json FROM routing_decisions {where_clause}"
         ))?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map([bind_days], |r| r.get::<_, String>(0))?;
         let mut counts: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
         for row in rows {
             let json = row?;

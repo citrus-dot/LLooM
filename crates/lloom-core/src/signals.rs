@@ -138,22 +138,6 @@ pub fn llm_classify_needed(signal: &SignalSet, confidence_floor: f64) -> bool {
         && signal.difficulty <= 1.0 - confidence_floor
 }
 
-fn structure_rx() -> &'static [Regex] {
-    static RX: OnceLock<Vec<Regex>> = OnceLock::new();
-    RX.get_or_init(|| {
-        [
-            r"(然后|接着|再|之后|最后).{2,}",
-            r"(第[一二三四五1-5]步|Step\s?\d)",
-            r"(同时|并且|此外|另外)",
-            r"(对比|比较|分析|评估).+(和|与|跟|vs)",
-            r"(写|实现|开发).+(并|然后|接着).*(测试|验证|部署)",
-        ]
-        .iter()
-        .map(|p| Regex::new(p).unwrap())
-        .collect()
-    })
-}
-
 fn complexity_rx() -> &'static [Regex] {
     static RX: OnceLock<Vec<Regex>> = OnceLock::new();
     RX.get_or_init(|| {
@@ -283,7 +267,6 @@ pub fn est_tokens(text: &str) -> u32 {
 
 /// 启发式任务类型（正则快路径，purity：不触 DB / 不触发 LLM 分类）
 fn heuristic_task_type(text: &str) -> Option<String> {
-    let s = structure_rx();
     let low = text.to_lowercase();
     // 复杂>编码>数学>简单 的优先级顺序，与 router::rule_classify 一致取首命中
     for (name, pats) in [
@@ -321,9 +304,6 @@ fn heuristic_task_type(text: &str) -> Option<String> {
         ),
     ] {
         for p in pats {
-            if s.iter().any(|_| false) {
-                break;
-            }
             if Regex::new(p).unwrap().is_match(&low) {
                 return Some(name.to_string());
             }
