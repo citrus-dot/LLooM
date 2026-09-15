@@ -1,9 +1,9 @@
 # LLooM v2 项目进度
 
-> 最后更新：**2026-09-02** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：**N1 OpenAI 兼容代理**（含 O2 绑定收尾 + C3 api\_source 列，89 单测全绿）；此前 CONTEXT-PLAN 2–5 审计收尾（488d156）
-> **下一阶段权威计划：[`NEXT-PLAN.md`](./NEXT-PLAN.md)**（✅ N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2）
-> **待办台账**：主线见上方「下一阶段」；**搁置项（B 类 14 条）/ 独立小项（C 类 7 条）见** **[六、待办事项](#六待办事项todo)** **末尾两张台账表**
+> 最后更新：**2026-09-15** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
+> 最新已提交：**N3 信任收尾**（N3.a 并行 / N3.b Prometheus `/metrics` / N3.c 账单对账脚本先行）+ **C2 输入侧成本分列**（110 单测全绿）；此前 M1 模型分层（本地/云端 Backend 领域层）
+> **下一阶段权威计划：[`NEXT-PLAN.md`](./NEXT-PLAN.md)**（✅ N1 代理接入 → ✅ N2 闭环评估 → ✅ N3 信任收尾（余留 UsagePage「已对账」徽标待真实账期）→ 决策门 G1/G2）
+> **待办台账**：主线见上方「下一阶段」；**搁置项（B 类 15 条）/ 独立小项（C 类 7 条）见** **[六、待办事项](#六待办事项todo)** **末尾两张台账表**
 
 ***
 
@@ -57,6 +57,10 @@
 - **`metadata.rs`**（d6912b9 已提交）— P0.e 模型元数据五级打标：`resolve_and_fill`（overlay > 启发式，供 `insert_model` 自动回填）
 
 - **`health.rs`**（P3，2026-08-27）— 健康状态机：滑窗 degraded/连续失败 down/熔断/成功恢复，`set_model_health` 持久化
+
+- **`openai_compat.rs`**（N1，2026-09-02）— OpenAI 兼容代理：`/v1/chat/completions` + `/v1/models`，Bearer 鉴权，路由/容灾/计价全复用
+
+- **`metrics.rs`**（N3.b，2026-09-15）— Prometheus 文本格式指标导出（`/metrics`，0.0.4），纯函数 `render(db)` 可单测
 
 ***
 
@@ -205,6 +209,16 @@
 
 - 冒烟：`cargo test` **110 全绿**（+7 model_dto：默认值填充/非法组合拒收/kind 切换清 key/掩码哨兵/DTO 掩码）；`tsc --noEmit` + `vite build` 全过
 
+**2026-09-15 落地（NEXT-PLAN N3 信任收尾 + C2 输入侧分列；N3 阶段主体完成）**：
+
+- **N3.b Prometheus `/metrics`**（4ba43b5）：新模块 `metrics.rs` 纯函数 `render(db)` 输出 0.0.4 文本格式——`lloom_up`/`lloom_build_info`、用量（按 model×task_type×api_source 计数与 token）、成本总额、缓存命中/节省、failover、路由 outcome 分布、预算、模型健康；`db.rs` 增 `metrics_usage_by_source` 等聚合查询；server 挂 `/metrics`（无鉴权，绑环回即安全）；+2 单测（空库合法/有数据）
+
+- **C2 est/act_input_cost 输入侧分列**（2721d1c）：`db.rs` `ensure_columns` 幂等补列框架（1de8645 重构后恢复的最小升级路径，旧库无损升级有单测）；`pricing.rs::actual_input_cost`（actual_cost 输入项拆分：非缓存×原价 + 缓存×读价 + 写价，含时段系数，与总额恒等有单测）；`router::PlanOutcome`/`RoutingDecision` 透传主选 `est_input_cost`（est_in × effective_input_cost，与 est_cost 输入项同源不立第二真源）；chat/proxy/orchestrate/probe 四路径落库；Python 编排 `task_done` 经 `est_input_cost` 回传；**日校准升级**：对账比优先输入侧（act_in/est_in，无 est_out 误差），est_input 全 0 回落总额口径
+
+- **N3.c 账单对账脚本先行**（417ba29）：`scripts/bill_reconcile.py`——解析百炼账单详情 CSV（实例ID分号段取模型/方向、金额列模糊匹配、utf-8-sig/gbk 回退、产品行过滤、多账期告警、千Token 单位换算）× `usage_records` 真实调用口径（`act_cost>0`，缓存命中不出账单）对账；逐模型偏差 + 总偏差报告，`--model-map`/`--tolerance`/`--json`/`--save`（落 `reconcile_last.json` 供后续「已对账」徽标消费）；退出码 0 对平/1 偏差/2 缺数据（与 aiq_replay 约定一致）。**合成数据全场景验证**：对平/超阈值/映射落空/GBK/多账期/控制台格式B（首段空 ApiKeyID）。真实账单导出（等 key/账期）到位后补 UsagePage「已对账」徽标（B2）
+
+- 冒烟：`cargo test` **110 全绿**；合成账单 8 场景退出码/结论全部符合预期；`/metrics` 端到端 curl 校验（200 + 合法 0.0.4 格式 + 旧库迁移后可导出）
+
 **过往已实现并验证**（见 memory / 历史 commit）：
 
 - 编辑对话名称（`rename_conversation`，PUT `/api/conversations/{id}`）
@@ -297,7 +311,7 @@
 
 - [x] ✅ **N2 闭环评估**（2026-09-02，本阶段）：**N2.a 报告闭环**——`aiq_replay.py` 加 `--json`（计算与输出分离，与文本报告数字同源一致；顺手修 SELECT 缺 `id` 列 KeyError 与 sqlite `?1` 占位符弃用警告）；新表 `policy_review`（幂等建表，三线成本/质量 + AIQ + saved\_pct + 预算档分布 + 建议快照）；周期 job `aiq_report_loop` 挂 `spawn_background_jobs()`（6h，首 tick 立即出报告，失败只打日志下周期自愈）；`GET /api/routing/review`（最新报告）+ `POST /api/routing/review/refresh`（手动立即体检）。**N2.b 权重建议**——Rust 侧 `review.rs::grid_search_suggestions` 用 `plan()` 对影子样本无副作用网格重放（cost/quality 权重 7×7，打分 = 质量增益 − 0.5×成本增幅，物性门槛 0.05），找支配当前策略的帕累托点；`POST /api/routing/review/adopt` 人工采纳后 upsert `routing_policy`（每请求读库，下一请求即生效；**不自动改策略**）；WebUI OverviewPage「路由体检」折叠卡（三线表 + 预算档分布 + 建议对比表 + 全部采纳/立即体检按钮，遵循重要信息折叠收纳约定）。**验收**：94 单测全绿（+4 review：网格建议更便宜模型 / 无空间不出建议 / 采纳后换选 / policy\_review 往返+档分布）；curl 冒烟全过（启动首跑写报告 id=1、refresh 追加 id=2、无建议时 adopt 正确拒绝）；`--json` 与文本数字一致已核
 
-- [ ] **N3 信任与收尾**：a) ✅ **O6 子任务并行**（2026-09-03）——`ai_service.py` 编排路径按 `depends_on` 分波：同波无依赖子任务以 `ThreadPoolExecutor` 并发（`_call_llm` 为同步调用，等价 `asyncio.gather` 语义；ExactCache/SemanticCache 内部锁 + `completed`/计数器仅主线程变动，线程安全），`task_start` 先行、`task_done` 按原序在波末统一下发，依赖环兜底为无上下文执行（同旧串行行为）；子任务执行体重构为 `_execute_task`（plan 回调 → fallback 链 → escalation 不变），SSE 契约无改动。冒烟：3 子任务时长和 17.17s > 墙钟 17.7s（含 decompose+汇总 1.93s）证实并发，聚合输入完整；94 单测全绿 b) `/metrics` Prometheus 导出 c) 账单对账脚本（**阻塞：需真实账单导出**，脚本先行）
+- [x] ✅ **N3 信任与收尾**（2026-09-15，本阶段）：a) ✅ **O6/N3.a 子任务并行**（2026-09-03）——`ai_service.py` 编排路径按 `depends_on` 分波：同波无依赖子任务以 `ThreadPoolExecutor` 并发（`_call_llm` 为同步调用，等价 `asyncio.gather` 语义；ExactCache/SemanticCache 内部锁 + `completed`/计数器仅主线程变动，线程安全），`task_start` 先行、`task_done` 按原序在波末统一下发，依赖环兜底为无上下文执行（同旧串行行为）；子任务执行体重构为 `_execute_task`（plan 回调 → fallback 链 → escalation 不变），SSE 契约无改动。冒烟：3 子任务时长和 17.17s > 墙钟 17.7s（含 decompose+汇总 1.93s）证实并发，聚合输入完整 b) ✅ **N3.b `/metrics` Prometheus 导出**（2026-09-15，4ba43b5，见第四节）c) ✅ **N3.c 账单对账脚本先行**（2026-09-15，417ba29，见第四节）；**余留**：真实账单到位后 UsagePage「已对账」徽标（见 B2，阻塞在 key/账期）
 
 ### 历史遗留（LLooMprogress 原 TODO）
 
@@ -319,7 +333,7 @@
 | #   | 搁置项                                     | 解锁条件（触发即做）                                                                                 | 权威落点                                         | 状态 |
 | --- | --------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------- | -- |
 | B1  | **batch 通道**（百炼 Batch 5 折，无缓存折扣、非实时）    | ✅ **前置已全部就绪**（schema 预留 `batch_multiplier`，PR-8 峰谷调度已落地）；属「省钱」非「提能力」，建议排 N1 之后才有量可省        | `PRICING-PLAN.md:592` §5.5（schema 预留 `:170`） | 🔓 |
-| B2  | **账单对账**（N3.c）                          | 需 DashScope 真实账单导出（等 key / 账期）；脚本可先行                                                       | `NEXT-PLAN.md:69`                            | ⏳  |
+| B2  | **账单对账收尾**（N3.c 徽标）                     | 脚本 ✅ 已先行落地（2026-09-15，`bill_reconcile.py`，`--save` 出 `reconcile_last.json`）；**剩 UsagePage「已对账」徽标**（Rust 端点读报告文件 + 前端徽标），等真实账单导出验证解析后再接（等 key / 账期） | `NEXT-PLAN.md:69`、`scripts/bill_reconcile.py` | ⏳  |
 | B3  | **G1 多租户**                              | 出现家庭之外的固定用户 → 触发则 SQLite 迁 PG + 鉴权/配额层（**架构级分叉，需单独立项**）                                    | `NEXT-PLAN.md:77`                            | 🕐 |
 | B4  | **G2 MCP 接入**                           | 开始做 Agent 运行时 / 有外部智能体要消费 LLooM；作 server（暴露路由/缓存/定价为 MCP 工具）与作 client（编排消费 MCP 工具）**先后需定** | `NEXT-PLAN.md:78`                            | 🕐 |
 | B5  | **编排状态收归 Rust**（暂停/恢复/人工介入）             | 出现该需求（与 G2 相关）；当前无此需求，B 方案够用                                                               | `ROUTING-PLAN.md:711`、`NEXT-PLAN.md:84`      | 🕐 |
@@ -339,14 +353,14 @@
 | #  | 小项                                                                               | 完成路径（要点）                                                                                                                                                                                                                                                                                                                                                                                         | 权威落点                                                    | 代价            |
 | -- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- | ------------- |
 | C1 | **~~思考过程深度展示~~** ✅ **已完成**（2026-09-02）                                           | `_call_llm`/`_call_llm_stream` 新增 `reasoning_ref` 捕获 litellm `message.reasoning_content`（流式为 delta 累积）；简单/聚合两路径 `result` 事件携带 `reasoning`；Rust orchestrate SSE 原样透传；chatStore 捕获+meta 持久化+历史加载映射；ChatPage `Collapse` 折叠卡（字数标签+滚动容器）。**E2E 已验证**：deepseek-r1 全链路 644 字思考+真实 usage（41/827 tok）。**顺手修复既有生产 bug**：`_call_llm_stream` 引用未定义 `usage` 变量（流式带 usage\_ref 必抛 NameError，聚合阶段长期静默回退子任务原文拼接） | `ai_service.py:1303-1334`、`chatStore.ts`、`ChatPage.tsx` | 已落地           |
-| C2 | **est\_input\_cost 分列**（精确输入侧对账）                                                 | `db.rs` 幂等 ALTER 列表加两列（迁移框架已支持），对账从「总额口径」升级为「输入侧分项」                                                                                                                                                                                                                                                                                                                                              | `PRICING-PLAN.md:36`                                    | 低             |
+| C2 | **~~est\_input\_cost 分列~~** ✅ **已完成**（2026-09-15，2721d1c）                                  | `db.rs` `ensure_columns` 幂等补列（est\_input\_cost/act\_input\_cost，旧库无损升级有单测）+ `pricing.rs::actual_input_cost`（与总额恒等有单测）+ 四路径落库 + 日校准优先输入侧比值；对账已从「总额口径」升级为「输入侧分项」                                                                                                                                                             | `PRICING-PLAN.md:36`                                    | 已落地          |
 | C3 | **~~`api_source`\~\~\~\~列~~** ~~（区分代理流量）~~ ✅ 已完成（2026-09-02，1a22825，随 N1 提前独立提交） | 幂等加列默认 `'webui'`，代理流量标 `'proxy'`                                                                                                                                                                                                                                                                                                                                                                 | `NEXT-PLAN.md:34`                                       | 已落地           |
 | C4 | **O5 复杂判定调优**                                                                    | ⚠️ **先统一入口**：现 `router.rs:86 is_complex`（正则）与 `signals.rs:234 complexity_score`（评分，`:322` 调用）**两处判定并存**，须合并后再调阈值；且需 50–100 条标注语料，否则是盲调                                                                                                                                                                                                                                                           | `router.rs:86`、`signals.rs:234`                         | 中（**阻塞在语料**）  |
 | C5 | 多模型拆分真正生效                                                                        | **非开发项（无代码改动）**：需在设置页配置「可用模型 + 有效 Key」才生效，属配置引导                                                                                                                                                                                                                                                                                                                                                  | —                                                       | 配置            |
 | C6 | EWMA α 灵敏度调整                                                                     | 仅当出现**日级调价**时（当前 α=0.15 ≈ 10 天半衰，对周级调价够用）                                                                                                                                                                                                                                                                                                                                                        | `PRICING-PLAN.md:931`                                   | 条件触发，**建议不动** |
 | C7 | 多时区 chrono                                                                       | 仅当需多时区；当前纯标准库（+8 偏移 + Sakamoto + Hinnant）是**有意规避** crates.io 拉取风险                                                                                                                                                                                                                                                                                                                                | `PRICING-PLAN.md:34`                                    | 条件触发，**建议不动** |
 
-> **C 类建议顺序**：~~C1~~（✅ 已完成）→ C2 → （N1 顺带 C3 ✅）。C4 等语料（可用 N1 接入后的真实流量自动采集）；C6/C7 条件未到不动。
+> **C 类建议顺序**：~~C1~~（✅ 已完成）→ ~~C2~~（✅ 已完成）→ （N1 顺带 C3 ✅）。C4 等语料（可用 N1 接入后的真实流量自动采集）；C6/C7 条件未到不动。
 > **C1 附注**：为验证推理链路注册了 `deepseek-r1`（dashscope，已配真实单价 5.5e-7/2.2e-6 USD/token + reasoning\_cost），保留在注册表中供 WebUI 思考折叠展示测试。
 
 ***
@@ -425,8 +439,8 @@
 
 | 文件                           | 用途                                                   | 同步状态                       |
 | ---------------------------- | ---------------------------------------------------- | -------------------------- |
-| `LLooMprogress.md`（本文件）      | 项目总进度、决策、待办台账（主线 + B 类搁置 14 条 + C 类小项 7 条）、约束、文档索引   | 更新至 2026-09-10（M1 模型分层） |
-| **`NEXT-PLAN.md`**           | **下一阶段权威计划**：N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2 | 2026-08-29 纳入（本次提交）        |
+| `LLooMprogress.md`（本文件）      | 项目总进度、决策、待办台账（主线 + B 类搁置 15 条 + C 类小项 7 条）、约束、文档索引   | 更新至 2026-09-15（N3 收尾 + C2） |
+| **`NEXT-PLAN.md`**           | **下一阶段权威计划**：N1 代理接入 → N2 闭环评估 → N3 信任收尾 + 决策门 G1/G2 | 2026-09-15 同步（N1–N3 全勾，余 B2 徽标） |
 | `ARCHITECTURE.md`            | 分层架构、端点、数据流、技术栈                                      | 已同步至 488d156               |
 | `README.md` / `README-ZH.md` | 用户文档（功能、快速开始、配置）                                     | 已同步至 488d156               |
 | `CONTEXT-PLAN.md`            | 上下文优化方案（Phase 1–5 已全部落地）                             | 已提交，与 488d156 一致           |
@@ -434,5 +448,5 @@
 | `ROUTING-PLAN.md`            | 路由重构方案（v3 + 注记至 P5，P0–P5 全部落地）                       | 已提交；遗留 3 个待真实样本复验的验收指标     |
 | `ROUTING-PLAN.md` 引用的外部研究    | Switchyard / vLLM Semantic Router / Router-R1 等      | 设计借鉴，不引入依赖                 |
 
-> **接手检查清单**：① **先读** **`NEXT-PLAN.md`**（下一阶段权威计划），再读 CONTEXT/PRICING/ROUTING-PLAN 三份（均已完结，作背景）；② 内核 P0–P5、PR-1\~8、Phase 1–5 已全部完成；③ 下一优先项 = **N1 OpenAI 兼容代理**（含 O2 收尾）→ N2 → N3；④ **全部待办看本文第六节末尾两张台账**：B 类 15 条（条件触发，未触发不动）+ C 类 7 条（无前置，可插队），每条含解锁条件与权威落点行号，不必全项目 grep。每次 `cargo build`/`cargo test` 全绿 → 用户审查 → 才 push。
+> **接手检查清单**：① **先读** **`NEXT-PLAN.md`**（下一阶段权威计划），再读 CONTEXT/PRICING/ROUTING-PLAN 三份（均已完结，作背景）；② 内核 P0–P5、PR-1\~8、Phase 1–5、N1–N3 已全部完成；③ **主线已无未开工项**——下一步在两张台账里挑：B 类解锁即可做（B1 batch 通道前置已就绪 🔓；B2 徽标等真实账期），或等决策门 G1/G2 触发；④ **全部待办看本文第六节末尾两张台账**：B 类 15 条（条件触发，未触发不动）+ C 类 7 条（无前置，可插队），每条含解锁条件与权威落点行号，不必全项目 grep。每次 `cargo build`/`cargo test` 全绿 → 用户审查 → 才 push。
 

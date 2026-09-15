@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | N1 | OpenAI 兼容代理 | `/v1/chat/completions`（流/非流）+ `/v1/models`，透明走既有路由/缓存/健康/预算链 | 无 | ✅ 已落地（2026-09-02，含 O2 收尾 + C3 api_source 列，89 单测）|
 | N2 | 闭环评估 | 影子数据定时出 AIQ 报告 → UI 审查 → 一键采纳回写 routing_policy | 无（可与 N1 并行） | ✅ 已落地（2026-09-02，policy_review 表 + 6h 周期 job + Rust 网格建议 + 体检卡，94 单测）|
-| N3 | 信任与收尾 | O6 子任务并行 + `/metrics` 指标导出 + DashScope 账单对账 | 无（小项可插队） | ⏳（a ✅ 2026-09-03：按依赖分波 + 线程池并发，冒烟证实延迟下降、顺序与聚合完整；b/c 待做） |
+| N3 | 信任与收尾 | O6 子任务并行 + `/metrics` 指标导出 + DashScope 账单对账 | 无（小项可插队） | ✅ 已落地（a 2026-09-03 分波并发；b 2026-09-15 `metrics.rs` + `/metrics`；c 2026-09-15 `bill_reconcile.py` 脚本先行 + C2 输入侧分列；余 UsagePage「已对账」徽标 → B2 台账） |
 | M1 | 模型分层 + 本地/云端类型 | DB 行层（ModelRow）/ 领域层（Backend 枚举）/ API DTO 三层拆分，From/TryFrom 显式转换；模型显式 `kind: local|cloud`（云端 provider+base+key，本地 Ollama / OpenAI 兼容），废除 `is_local_endpoint` 启发式 | 无 | ✅ 已落地（2026-09-10，110 单测；WebUI/CLI/TUI 同步） |
 
 顺序建议 N1 → N2 → N3；N3 各小项独立，可随时插队。
@@ -61,13 +61,13 @@
 
 ---
 
-## 四、N3：信任与收尾（小项，可插队）
+## 四、N3：信任与收尾（小项，可插队）✅ 全部完成（2026-09-15；B2 徽标余留见 LLooMprogress 台账）
 
 | 项 | 内容 | 验收 | 备注 |
 |---|---|---|---|
-| N3.a O6 并行 | Python 编排：无依赖子任务 `asyncio.gather` 并行执行（依赖关系来自 decomposer 输出的任务结构） | 多子任务复杂查询端到端延迟下降；结果拼接顺序不乱、聚合输入完整 | 当前为串行执行，依赖上下文已折叠进 messages |
-| N3.b 指标导出 | `GET /metrics` Prometheus 文本格式：按模型/任务类型/预算档计数、缓存命中、fallback 事件、路由开销 | curl 可抓取、格式合法（promtool 校验可选） | 不引 Docker，只开端点 |
-| N3.c 账单对账 | `scripts/bill_reconcile.py`：DashScope 账单导出 × `usage_records.actual_cost` 对账，报告偏差；UsagePage 节省卡加「已对账」徽标 | 对账报告含总偏差与分模型偏差 | **阻塞项：需真实账单导出**（等 key/账期），脚本先行 |
+| ✅ N3.a O6 并行 | Python 编排：无依赖子任务 `asyncio.gather` 并行执行（依赖关系来自 decomposer 输出的任务结构） | 多子任务复杂查询端到端延迟下降；结果拼接顺序不乱、聚合输入完整 | ✅ 2026-09-03 落地（ThreadPoolExecutor 分波，SSE 契约不变，时序冒烟证实并发） |
+| ✅ N3.b 指标导出 | `GET /metrics` Prometheus 文本格式：按模型/任务类型/预算档计数、缓存命中、fallback 事件、路由开销 | curl 可抓取、格式合法（promtool 校验可选） | ✅ 2026-09-15 落地（`metrics.rs` 纯函数 render + db 聚合查询，+2 单测，curl 冒烟过） |
+| ✅ N3.c 账单对账 | `scripts/bill_reconcile.py`：DashScope 账单导出 × `usage_records.actual_cost` 对账，报告偏差；UsagePage 节省卡加「已对账」徽标 | 对账报告含总偏差与分模型偏差 | ✅ 2026-09-15 脚本落地（合成数据 8 场景验证；C2 输入侧分列同期完成）；**徽标余留**：等真实账单导出（key/账期）验证解析后接（`--save` 已出 `reconcile_last.json` 供消费） |
 
 ---
 
