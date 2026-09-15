@@ -16,6 +16,7 @@ env/
 
 # Rust build artifacts
 target/
+*.profraw
 
 # TUI (SolidJS + OpenTUI)
 tui/node_modules/
