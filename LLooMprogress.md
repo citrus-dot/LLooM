@@ -1,8 +1,8 @@
 # LLooM v2 项目进度
 
 > 最后更新：**2026-09-15** · 仓库 `citrus-dot/LLooM` · 分支 `v2` · 工作目录 `/Users/orange/LLooMv2`
-> 最新已提交：**N3 信任收尾**（N3.a 并行 / N3.b Prometheus `/metrics` / N3.c 账单对账脚本先行）+ **C2 输入侧成本分列**（110 单测全绿）；此前 M1 模型分层（本地/云端 Backend 领域层）
-> **下一阶段权威计划：[`NEXT-PLAN.md`](./NEXT-PLAN.md)**（✅ N1 代理接入 → ✅ N2 闭环评估 → ✅ N3 信任收尾（余留 UsagePage「已对账」徽标待真实账期）→ 决策门 G1/G2）
+> 最新已提交：**B2「已对账」徽标全链路**（`/api/usage/reconcile` + UsagePage Tag，5b39c0a）+ **Python 静态检查清零**（30e17cd）；此前 N3 收尾（a/b/c）+ C2 输入侧分列（114 单测全绿）
+> **下一阶段权威计划：[`NEXT-PLAN.md`](./NEXT-PLAN.md)**（✅ N1 代理接入 → ✅ N2 闭环评估 → ✅ N3 信任收尾全链路 → 决策门 G1/G2）
 > **待办台账**：主线见上方「下一阶段」；**搁置项（B 类 15 条）/ 独立小项（C 类 7 条）见** **[六、待办事项](#六待办事项todo)** **末尾两张台账表**
 
 ***
@@ -219,6 +219,16 @@
 
 - 冒烟：`cargo test` **110 全绿**；合成账单 8 场景退出码/结论全部符合预期；`/metrics` 端到端 curl 校验（200 + 合法 0.0.4 格式 + 旧库迁移后可导出）
 
+**2026-09-15 追加（静态检查清零 + B2 徽标全链路）**：
+
+- **Python 静态检查清零**（30e17cd，pyflakes + pyright error 级全 0）：SemanticCache 对 chromadb 松散返回类型（ids/distances/metadatas 可为 None、Metadata 值联合）加运行时守卫 + isinstance 收窄，sweep 改 zip 并行遍历防越界；litellm 六处 completion 调用点 cast 修正（非流式 `ModelResponse` / 流式 `Iterator[Any]`）；**修真实隐患**：classify/domain 的 `content.strip()` 在 content 为 None 时崩溃（部分供应商返回 None content → 分类静默全落 general）
+
+- **B2「已对账」徽标全链路**（5b39c0a）：`GET /api/usage/reconcile`（`read_reconcile_report` 纯函数读 `reconcile_last.json` 投影 6 字段，缺失/损坏回退 `reconciled=false`，+4 单测）+ UsagePage「缓存为您节省」卡绿/橙 Tag（tooltip：对账时间 + 模型对平数/偏差率）+ `api.ts` `getReconcileSummary`；冒烟：有/无报告两态 curl 过、tsc + vite build 过
+
+- **B1 评审结论**（台账更新）：batch 通道继续搁置——当前全实时流式语义，batch 是小时级异步产物，无真实离线批处理场景；触发条件与最小实现路径（`UsageDetail.is_batch` × `batch_multiplier`）已写入台账
+
+- 全量回归：`cargo test` **114 全绿**（+4 reconcile_report）；clippy 0 告警；pyflakes/pyright 0
+
 **过往已实现并验证**（见 memory / 历史 commit）：
 
 - 编辑对话名称（`rename_conversation`，PUT `/api/conversations/{id}`）
@@ -311,7 +321,7 @@
 
 - [x] ✅ **N2 闭环评估**（2026-09-02，本阶段）：**N2.a 报告闭环**——`aiq_replay.py` 加 `--json`（计算与输出分离，与文本报告数字同源一致；顺手修 SELECT 缺 `id` 列 KeyError 与 sqlite `?1` 占位符弃用警告）；新表 `policy_review`（幂等建表，三线成本/质量 + AIQ + saved\_pct + 预算档分布 + 建议快照）；周期 job `aiq_report_loop` 挂 `spawn_background_jobs()`（6h，首 tick 立即出报告，失败只打日志下周期自愈）；`GET /api/routing/review`（最新报告）+ `POST /api/routing/review/refresh`（手动立即体检）。**N2.b 权重建议**——Rust 侧 `review.rs::grid_search_suggestions` 用 `plan()` 对影子样本无副作用网格重放（cost/quality 权重 7×7，打分 = 质量增益 − 0.5×成本增幅，物性门槛 0.05），找支配当前策略的帕累托点；`POST /api/routing/review/adopt` 人工采纳后 upsert `routing_policy`（每请求读库，下一请求即生效；**不自动改策略**）；WebUI OverviewPage「路由体检」折叠卡（三线表 + 预算档分布 + 建议对比表 + 全部采纳/立即体检按钮，遵循重要信息折叠收纳约定）。**验收**：94 单测全绿（+4 review：网格建议更便宜模型 / 无空间不出建议 / 采纳后换选 / policy\_review 往返+档分布）；curl 冒烟全过（启动首跑写报告 id=1、refresh 追加 id=2、无建议时 adopt 正确拒绝）；`--json` 与文本数字一致已核
 
-- [x] ✅ **N3 信任与收尾**（2026-09-15，本阶段）：a) ✅ **O6/N3.a 子任务并行**（2026-09-03）——`ai_service.py` 编排路径按 `depends_on` 分波：同波无依赖子任务以 `ThreadPoolExecutor` 并发（`_call_llm` 为同步调用，等价 `asyncio.gather` 语义；ExactCache/SemanticCache 内部锁 + `completed`/计数器仅主线程变动，线程安全），`task_start` 先行、`task_done` 按原序在波末统一下发，依赖环兜底为无上下文执行（同旧串行行为）；子任务执行体重构为 `_execute_task`（plan 回调 → fallback 链 → escalation 不变），SSE 契约无改动。冒烟：3 子任务时长和 17.17s > 墙钟 17.7s（含 decompose+汇总 1.93s）证实并发，聚合输入完整 b) ✅ **N3.b `/metrics` Prometheus 导出**（2026-09-15，4ba43b5，见第四节）c) ✅ **N3.c 账单对账脚本先行**（2026-09-15，417ba29，见第四节）；**余留**：真实账单到位后 UsagePage「已对账」徽标（见 B2，阻塞在 key/账期）
+- [x] ✅ **N3 信任与收尾**（2026-09-15，本阶段）：a) ✅ **O6/N3.a 子任务并行**（2026-09-03）——`ai_service.py` 编排路径按 `depends_on` 分波：同波无依赖子任务以 `ThreadPoolExecutor` 并发（`_call_llm` 为同步调用，等价 `asyncio.gather` 语义；ExactCache/SemanticCache 内部锁 + `completed`/计数器仅主线程变动，线程安全），`task_start` 先行、`task_done` 按原序在波末统一下发，依赖环兜底为无上下文执行（同旧串行行为）；子任务执行体重构为 `_execute_task`（plan 回调 → fallback 链 → escalation 不变），SSE 契约无改动。冒烟：3 子任务时长和 17.17s > 墙钟 17.7s（含 decompose+汇总 1.93s）证实并发，聚合输入完整 b) ✅ **N3.b `/metrics` Prometheus 导出**（2026-09-15，4ba43b5，见第四节）c) ✅ **N3.c 账单对账**（2026-09-15，417ba29 + 5b39c0a，见第四节）——脚本（合成数据 8 场景验证）+ C2 输入侧分列 + **徽标端点 `/api/usage/reconcile`**（读 `reconcile_last.json` 投影 6 字段，文件缺失/损坏回退 `reconciled=false`）+ **UsagePage 绿/橙 Tag**（tooltip 展示对账时间与模型对平数/偏差率）；**余留**：真实账单到位后跑 `--save` 验证解析格式（脚本层不变，纯数据验证）
 
 ### 历史遗留（LLooMprogress 原 TODO）
 
@@ -332,8 +342,8 @@
 
 | #   | 搁置项                                     | 解锁条件（触发即做）                                                                                 | 权威落点                                         | 状态 |
 | --- | --------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------- | -- |
-| B1  | **batch 通道**（百炼 Batch 5 折，无缓存折扣、非实时）    | ✅ **前置已全部就绪**（schema 预留 `batch_multiplier`，PR-8 峰谷调度已落地）；属「省钱」非「提能力」，建议排 N1 之后才有量可省        | `PRICING-PLAN.md:592` §5.5（schema 预留 `:170`） | 🔓 |
-| B2  | **账单对账收尾**（N3.c 徽标）                     | 脚本 ✅ 已先行落地（2026-09-15，`bill_reconcile.py`，`--save` 出 `reconcile_last.json`）；**剩 UsagePage「已对账」徽标**（Rust 端点读报告文件 + 前端徽标），等真实账单导出验证解析后再接（等 key / 账期） | `NEXT-PLAN.md:69`、`scripts/bill_reconcile.py` | ⏳  |
+| B1  | **batch 通道**（百炼 Batch 5 折，无缓存折扣、非实时）    | ✅ 前置就绪（schema 预留 `batch_multiplier`）；**2026-09-15 评审后继续搁置**：当前编排/代理均为实时流式语义，batch 是小时级异步产物，接入会改变产品语义；且无真实离线批处理流量（夜间评测/大量离线文档）——强行实现是死代码。**触发即做**：出现真实离线批处理场景时，UsageDetail 加 `is_batch` 标记 × `actual_cost` 乘 `batch_multiplier`（计价侧半天量级），通道编排另立项 | `PRICING-PLAN.md:592` §5.5（schema 预留 `:170`） | 🕐 待场景 |
+| B2  | **账单对账收尾验证**（N3.c）                           | ✅ **代码链路已全部落地**（脚本 417ba29 + 徽标端点/Tag 5b39c0a，含 4 单测 + 两态冒烟）；**仅剩数据验证**：等真实 DashScope 账单导出（key / 账期）→ 跑 `python3 scripts/bill_reconcile.py --bill <csv> --save` 确认解析与徽标展示 | `NEXT-PLAN.md:69`、`scripts/bill_reconcile.py`、`server.rs read_reconcile_report` | ⏳ 仅数据 |
 | B3  | **G1 多租户**                              | 出现家庭之外的固定用户 → 触发则 SQLite 迁 PG + 鉴权/配额层（**架构级分叉，需单独立项**）                                    | `NEXT-PLAN.md:77`                            | 🕐 |
 | B4  | **G2 MCP 接入**                           | 开始做 Agent 运行时 / 有外部智能体要消费 LLooM；作 server（暴露路由/缓存/定价为 MCP 工具）与作 client（编排消费 MCP 工具）**先后需定** | `NEXT-PLAN.md:78`                            | 🕐 |
 | B5  | **编排状态收归 Rust**（暂停/恢复/人工介入）             | 出现该需求（与 G2 相关）；当前无此需求，B 方案够用                                                               | `ROUTING-PLAN.md:711`、`NEXT-PLAN.md:84`      | 🕐 |

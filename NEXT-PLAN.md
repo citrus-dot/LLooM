@@ -67,7 +67,7 @@
 |---|---|---|---|
 | ✅ N3.a O6 并行 | Python 编排：无依赖子任务 `asyncio.gather` 并行执行（依赖关系来自 decomposer 输出的任务结构） | 多子任务复杂查询端到端延迟下降；结果拼接顺序不乱、聚合输入完整 | ✅ 2026-09-03 落地（ThreadPoolExecutor 分波，SSE 契约不变，时序冒烟证实并发） |
 | ✅ N3.b 指标导出 | `GET /metrics` Prometheus 文本格式：按模型/任务类型/预算档计数、缓存命中、fallback 事件、路由开销 | curl 可抓取、格式合法（promtool 校验可选） | ✅ 2026-09-15 落地（`metrics.rs` 纯函数 render + db 聚合查询，+2 单测，curl 冒烟过） |
-| ✅ N3.c 账单对账 | `scripts/bill_reconcile.py`：DashScope 账单导出 × `usage_records.actual_cost` 对账，报告偏差；UsagePage 节省卡加「已对账」徽标 | 对账报告含总偏差与分模型偏差 | ✅ 2026-09-15 脚本落地（合成数据 8 场景验证；C2 输入侧分列同期完成）；**徽标余留**：等真实账单导出（key/账期）验证解析后接（`--save` 已出 `reconcile_last.json` 供消费） |
+| ✅ N3.c 账单对账 | `scripts/bill_reconcile.py`：DashScope 账单导出 × `usage_records.actual_cost` 对账，报告偏差；UsagePage 节省卡加「已对账」徽标 | 对账报告含总偏差与分模型偏差 | ✅ 2026-09-15 全链路落地（脚本合成数据 8 场景验证；C2 输入侧分列同期完成；徽标端点 `/api/usage/reconcile` + UsagePage 绿/橙 Tag 已接，5b39c0a）；**余留**：真实账单导出（key/账期）到位后跑 `--save` 验证解析格式 |
 
 ---
 
