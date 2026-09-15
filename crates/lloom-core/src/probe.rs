@@ -288,13 +288,17 @@ fn record_probe_usage(
     usage: &pricing::UsageDetail,
     hit: bool,
 ) -> f64 {
-    let (act_cost, zm) = match db.get_price_spec(&m.provider_name(), &m.name) {
+    let (act_cost, act_input_cost, zm) = match db.get_price_spec(&m.provider_name(), &m.name) {
         Ok(Some(ps)) => {
             let zr = crate::server::zone_resolver(db);
             let t = crate::server::now_epoch_secs();
-            (ps.actual_cost(usage, t, zr), ps.zone_multiplier(t, zr))
+            (
+                ps.actual_cost(usage, t, zr),
+                ps.actual_input_cost(usage, t, zr),
+                ps.zone_multiplier(t, zr),
+            )
         }
-        _ => (0.0, 1.0),
+        _ => (0.0, 0.0, 1.0),
     };
     let _ = db.insert_usage(&db::UsageRecord {
         model_name: &m.name,
@@ -316,6 +320,8 @@ fn record_probe_usage(
             field_missing: usage.field_missing,
             cache_saved_cost: 0.0,
             api_source: None,
+            est_input_cost: 0.0,
+            act_input_cost,
         }),
     });
     act_cost
@@ -343,6 +349,8 @@ fn record_probe_failure(db: &crate::db::Db, m: &Model) {
             field_missing: true,
             cache_saved_cost: 0.0,
             api_source: None,
+            est_input_cost: 0.0,
+            act_input_cost: 0.0,
         }),
     });
 }

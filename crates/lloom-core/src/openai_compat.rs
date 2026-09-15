@@ -236,6 +236,8 @@ pub async fn chat_completions(
 
     // 审计落库（与 chat_stream 同款：决策快照 + 耗时，outcome 调用后回填）
     let routing_task_type = routing.task_type.clone();
+    // C2：plan 路径主选的输入侧事前估算（direct 为 0）
+    let routing_est_input_cost = routing.est_input_cost;
     let request_id = format!(
         "proxy-{}",
         std::time::SystemTime::now()
@@ -301,7 +303,8 @@ pub async fn chat_completions(
                 .map(|m| m.provider_name())
                 .unwrap_or(primary_provider.as_str());
             let latency_ms = chat_start.elapsed().as_secs_f64() * 1000.0;
-            let (act_cost, zm) = priced_usage(&state.db, provider, &used_model, &res.usage);
+            let (act_cost, act_input_cost, zm) =
+                priced_usage(&state.db, provider, &used_model, &res.usage);
             let _ = state.db.insert_usage(&db::UsageRecord {
                 model_name: &used_model,
                 user_id: "default",
@@ -322,6 +325,8 @@ pub async fn chat_completions(
                     field_missing: res.usage.field_missing,
                     cache_saved_cost: 0.0,
                     api_source: Some("proxy".to_string()),
+                    est_input_cost: routing_est_input_cost,
+                    act_input_cost,
                 }),
             });
             state

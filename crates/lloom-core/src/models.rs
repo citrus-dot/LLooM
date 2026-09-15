@@ -505,6 +505,9 @@ pub struct RoutingDecision {
     /// 候补链（P3 故障转移按序重试；本阶段仅审计透传）
     #[serde(default)]
     pub fallback_chain: Vec<String>,
+    /// C2 输入侧对账：主选模型输入侧事前估算（plan 路径才有，direct/错误为 0）
+    #[serde(default)]
+    pub est_input_cost: f64,
 }
 
 /// P0.c 任务级路由策略（routing_policy 表行）

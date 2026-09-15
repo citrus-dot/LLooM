@@ -217,6 +217,9 @@ pub struct PlanOutcome {
     pub primary: String,
     pub fallback_chain: Vec<String>,
     pub candidates: Vec<Candidate>,
+    /// C2 输入侧对账：主选模型的输入侧事前估算（est_in × effective_input_cost，含命中率期望+时段系数）。
+    /// 无 PriceSpec（本地/未登记）为 0。
+    pub est_input_cost: f64,
 }
 
 /// P5.a：剩余预算比 r → 预算档（ROUTING-PLAN §P5.a）。纯函数，可单测。
@@ -351,6 +354,7 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
                 return Ok(PlanOutcome {
                     primary: pinned.to_string(),
                     fallback_chain: rest,
+                    est_input_cost: winner_est_input_cost(input, m),
                     candidates: vec![Candidate {
                         name: pinned.to_string(),
                         score: f64::INFINITY,
@@ -384,11 +388,28 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
         .take(input.policy.fallback_depth.max(0) as usize)
         .map(|c| c.name.clone())
         .collect();
+    let winner = gated.iter().find(|m| m.name == primary);
+    let est_input = winner.map(|m| winner_est_input_cost(input, m)).unwrap_or(0.0);
     Ok(PlanOutcome {
         primary,
         fallback_chain: chain,
+        est_input_cost: est_input,
         candidates,
     })
+}
+
+/// C2：主选模型的输入侧事前估算 = est_in × effective_input_cost（命中率期望 + 时段系数）。
+/// 与 plan() 评分里 est_cost() 的输入项同源（est_cost = est_in×eff_in + z×est_out×out），
+/// 不另立第二真源；无 PriceSpec（本地/未登记）→ 0。
+fn winner_est_input_cost(input: &PlanInput, m: &Model) -> f64 {
+    input
+        .price_specs
+        .get(&(m.provider_name().to_string(), m.name.clone()))
+        .map(|s| {
+            s.effective_input_cost(hit_of(input, m), cost_epoch(input), input.zones)
+                * input.est_in_tokens as f64
+        })
+        .unwrap_or(0.0)
 }
 
 fn quality_of(input: &PlanInput, m: &Model) -> f64 {
@@ -546,6 +567,7 @@ pub async fn route(
             band: String::new(),
             budget_tier: String::new(),
             fallback_chain: Vec::new(),
+            est_input_cost: 0.0,
         };
     }
 
@@ -621,6 +643,7 @@ pub async fn route(
                 band: band.to_string(),
                 budget_tier: budget_tier.to_string(),
                 fallback_chain: outcome.fallback_chain,
+                est_input_cost: outcome.est_input_cost,
             }
         }
         Err(e) => RoutingDecision {
@@ -631,6 +654,7 @@ pub async fn route(
             band: band.to_string(),
             budget_tier: budget_tier.to_string(),
             fallback_chain: Vec::new(),
+            est_input_cost: 0.0,
         },
     }
 }
@@ -876,6 +900,49 @@ mod tests {
             &empty, &specs, "general", "medium", &policy, 100, &ctx,
         ));
         assert!(matches!(r, Err(PlanError::NoCandidates { .. })));
+    }
+
+    /// C2：PlanOutcome 暴露主选模型输入侧事前估算（est_in × effective_input_cost）。
+    /// 无命中率（h=0）、无时段（z=1）时 = est_in × input_cost。
+    #[test]
+    fn plan_outcome_exposes_est_input_cost() {
+        let models = vec![model("deepseek-v3", "dashscope", 3, 65536)];
+        let mut specs = HashMap::new();
+        specs.insert(
+            ("dashscope".into(), "deepseek-v3".into()),
+            spec("dashscope", "deepseek-v3", 2.0e-7, 1.1e-6),
+        );
+        let policy = RoutingPolicy {
+            task_type: "coding".into(),
+            min_capability_tier: 1,
+            ..Default::default()
+        };
+        let ctx = Ctx::new();
+        let out = plan(&base_input(
+            &models, &specs, "coding", "hard", &policy, 1000, &ctx,
+        ))
+        .expect("plan");
+        assert_eq!(out.primary, "deepseek-v3");
+        assert!((out.est_input_cost - 1000.0 * 2.0e-7).abs() < 1e-15);
+    }
+
+    /// C2：无 PriceSpec 的模型（本地）est_input_cost 为 0。
+    #[test]
+    fn plan_outcome_est_input_zero_without_spec() {
+        let models = vec![model("qwen2.5-local", "ollama", 1, 32768)];
+        let specs = HashMap::new();
+        let policy = RoutingPolicy {
+            task_type: "simple_qa".into(),
+            min_capability_tier: 1,
+            ..Default::default()
+        };
+        let ctx = Ctx::new();
+        let out = plan(&base_input(
+            &models, &specs, "simple_qa", "easy", &policy, 1000, &ctx,
+        ))
+        .expect("plan");
+        assert_eq!(out.primary, "qwen2.5-local");
+        assert_eq!(out.est_input_cost, 0.0);
     }
 
     #[test]

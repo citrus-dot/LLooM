@@ -58,20 +58,24 @@ pub fn now_epoch_secs() -> i64 {
 }
 
 /// 按模型名查 PriceSpec 并计算实际成本（无 PriceSpec → 0，本地/未登记模型）。
-/// 返回 (act_cost, zone_multiplier)。
+/// 返回 (act_cost, act_input_cost, zone_multiplier)——C2 输入侧分项随行。
 pub(crate) fn priced_usage(
     db: &db::Db,
     provider: &str,
     model: &str,
     usage: &pricing::UsageDetail,
-) -> (f64, f64) {
+) -> (f64, f64, f64) {
     match db.get_price_spec(provider, model) {
         Ok(Some(ps)) => {
             let zr = zone_resolver(db);
             let t = now_epoch_secs();
-            (ps.actual_cost(usage, t, zr), ps.zone_multiplier(t, zr))
+            (
+                ps.actual_cost(usage, t, zr),
+                ps.actual_input_cost(usage, t, zr),
+                ps.zone_multiplier(t, zr),
+            )
         }
-        _ => (0.0, 1.0),
+        _ => (0.0, 0.0, 1.0),
     }
 }
 
@@ -573,6 +577,8 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
 
     // routing 会在 head 的 json! 中被 move，先取出落库需要的字段
     let routing_task_type = routing.task_type.clone();
+    // C2：plan 路径的主选输入侧事前估算（direct/错误为 0）
+    let routing_est_input_cost = routing.est_input_cost;
 
     let head = format!(
         "data: {}\n\n",
@@ -611,10 +617,11 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
                 .map(|m| m.provider_name())
                 .unwrap_or(primary_provider);
             // PRICING-PLAN §4.2/§6.1：Rust 单一计价真源，按真实 usage 分项计算并落库。
-            // （PR-5 落地前 est_cost 传 0；task_type 用路由分类结果）
+            // （est_cost（总额估算）恒 0：总额对账已由 C2 输入侧分项取代）
             // P1.a：只记成功路径；失败/重试走 routing_decisions.outcome。
             let latency_ms = chat_start.elapsed().as_secs_f64() * 1000.0;
-            let (act_cost, zm) = priced_usage(&state.db, provider, &used_model, &res.usage);
+            let (act_cost, act_input_cost, zm) =
+                priced_usage(&state.db, provider, &used_model, &res.usage);
             let _ = state.db.insert_usage(&db::UsageRecord {
                 model_name: &used_model,
                 user_id: "default",
@@ -635,6 +642,8 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
                     field_missing: res.usage.field_missing,
                     cache_saved_cost: 0.0,
                     api_source: None,
+                    est_input_cost: routing_est_input_cost,
+                    act_input_cost,
                 }),
             });
             // P1.c：正常完成信号 → 该 模型×任务 的 ewma_quality 上修（+0.7）
@@ -870,13 +879,19 @@ async fn orchestrate_stream(
                     cache_creation_tokens: 0,
                     field_missing: false,
                 };
-                let (mut act_cost, zm) = priced_usage(&db, provider, &model, &usage_detail);
+                let (mut act_cost, act_input_cost, zm) =
+                    priced_usage(&db, provider, &model, &usage_detail);
                 // P2.b 语义缓存命中省下的金额：未真正调用供应商费用为 0，但本应花费的 act_cost 保留，
                 // 用作「缓存为您节省 ¥X」的账实来源（cost 仍记 0）。
                 let cache_saved_cost = if is_hit { act_cost } else { 0.0 };
                 if is_hit {
                     act_cost = 0.0;
                 }
+                // C2：子任务级 est_input_cost 由 plan-subtask 响应经 Python task_done 透传
+                let est_input_cost = obj
+                    .get("est_input_cost")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
                 let _ = db.insert_usage(&db::UsageRecord {
                     model_name: &model,
                     user_id: "default",
@@ -897,6 +912,8 @@ async fn orchestrate_stream(
                         field_missing: false,
                         cache_saved_cost,
                         api_source: None,
+                        est_input_cost,
+                        act_input_cost,
                     }),
                 });
                 // P3：按 task_done 成功/失败喂健康哨点（模型可达性，无 role 归属冲突）
@@ -1252,8 +1269,11 @@ async fn run_daily_calibration(db: &db::Db) -> Result<()> {
         if r.calls < MIN_CALIBRATION_CALLS {
             continue;
         }
-        // 对账比（总额口径：act/est；est_out 误差在 P50 估计下有限）
-        let ratio = if r.est_cost > 0.0 {
+        // C2 对账升级：优先输入侧分项（act_input/est_input，精确无 est_out 误差）；
+        // est_input 全 0（旧数据/未落分列）回落总额口径 act/est。
+        let ratio = if r.est_input_cost > 0.0 {
+            r.act_input_cost / r.est_input_cost
+        } else if r.est_cost > 0.0 {
             r.act_cost / r.est_cost
         } else {
             1.0
@@ -1645,6 +1665,8 @@ async fn rust_plan_subtask(
         "escalation_enabled": escalation_enabled,
         "tier_req": 0,
         "defer_until": defer_until,
+        // C2：输入侧事前估算，Python task_done 原样透传回编排落库
+        "est_input_cost": outcome.est_input_cost,
     })))
 }
 
@@ -1989,7 +2011,7 @@ async fn run_shadow_pair(
                 |res: &std::result::Result<ai_client::ChatResult, AppError>, model: &str| -> f64 {
                     match res {
                         Ok(x) => {
-                            let (c, _) = priced_usage(db, model, &x.model, &x.usage);
+                            let (c, _, _) = priced_usage(db, model, &x.model, &x.usage);
                             c
                         }
                         Err(_) => 0.0,

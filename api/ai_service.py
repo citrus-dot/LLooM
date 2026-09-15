@@ -1035,7 +1035,9 @@ def _plan_subtask(task_type: str, est_in: int, rust_base_url: str,
             return {}
         return {"primary": data["primary"],
                 "fallback_chain": [x for x in (data.get("fallback_chain") or []) if isinstance(x, str)],
-                "escalation_enabled": bool(data.get("escalation_enabled", False))}
+                "escalation_enabled": bool(data.get("escalation_enabled", False)),
+                # C2：输入侧事前估算（Rust plan 对主选的 est_in × effective_input_cost），透传回落库
+                "est_input_cost": float(data.get("est_input_cost") or 0.0)}
     except Exception:
         return {}
 
@@ -1806,6 +1808,8 @@ def orchestrate_stream(req: OrchestrateRequest) -> StreamingResponse:
                 "saved_cost": task_usage.get("saved_cost", 0.0),
                 "cache_hit": hit,
                 "cache_sim": sim,
+                # C2：输入侧事前估算原样透传，Rust 编排落库（失败/兜底无 plan 时缺省 0）
+                "est_input_cost": plan_info.get("est_input_cost", 0.0),
             }
             # P4 SSE 契约：降级/升级字段（无则省）
             if retry_count > 0:

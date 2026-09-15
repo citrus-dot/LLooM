@@ -440,6 +440,18 @@ impl PriceSpec {
             + z * u.reasoning_tokens as f64 * band.reasoning()
     }
 
+    /// C2 输入侧分项：actual_cost 的输入部分（非缓存×原价 + 缓存×读价 + 写价，含时段系数）。
+    /// 与 `actual_cost` 的输入项公式保持一致，供输入侧对账（act_input_cost）。
+    pub fn actual_input_cost(&self, u: &UsageDetail, t_epoch_secs: i64, zr: &ZoneResolver) -> f64 {
+        let band = self.band(u.prompt_tokens);
+        let z = self.zone_multiplier(t_epoch_secs, zr);
+        let cached = u.cached_tokens.min(u.prompt_tokens).max(0);
+        let non_cached = (u.prompt_tokens - cached).max(0);
+        z * (non_cached as f64 * band.in_cost()
+            + cached as f64 * band.cache_read()
+            + u.cache_creation_tokens as f64 * band.cache_write())
+    }
+
     /// 有效输入单价（路由评分用）：命中率期望加权
     pub fn effective_input_cost(
         &self,
@@ -676,6 +688,35 @@ mod tests {
         assert!(
             (cost - expected).abs() < 1e-12,
             "cost={cost} expected={expected}"
+        );
+    }
+
+    #[test]
+    fn actual_input_cost_is_input_side_of_actual_cost() {
+        let s = test_spec();
+        let u = UsageDetail {
+            prompt_tokens: 10_000,
+            completion_tokens: 200,
+            cached_tokens: 4_000,
+            reasoning_tokens: 50,
+            ..Default::default()
+        };
+        let t = 0i64;
+        let zr = ZoneResolver::new();
+        let in_cost = s.actual_input_cost(&u, t, &zr);
+        // 输入侧 = 非缓存×原价 + 缓存×读价（不含输出/推理项）
+        let expected_in = 6_000.0 * 3.47e-7 + 4_000.0 * 6.94e-8;
+        assert!(
+            (in_cost - expected_in).abs() < 1e-12,
+            "in_cost={in_cost} expected={expected_in}"
+        );
+        // 恒等式：actual_input_cost + 输出/推理项 == actual_cost（同 band、同 z）
+        let total = s.actual_cost(&u, t, &zr);
+        let out_part = 200.0 * 1.389e-6 + 50.0 * 1.389e-6; // reasoning_cost=None→按输出价
+        assert!(
+            (in_cost + out_part - total).abs() < 1e-12,
+            "in+out={}; total={total}",
+            in_cost + out_part
         );
     }
 

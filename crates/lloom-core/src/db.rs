@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS usage_records (
     field_missing INTEGER DEFAULT 0,
     cache_saved_cost REAL DEFAULT 0,
     api_source TEXT DEFAULT 'webui',
+    est_input_cost REAL DEFAULT 0,
+    act_input_cost REAL DEFAULT 0,
     latency_ms REAL,
     request_id TEXT
 );
@@ -275,6 +277,10 @@ pub struct UsageExtra {
     pub cache_saved_cost: f64,
     /// C3 流量来源：`Some("proxy")` 为 OpenAI 兼容代理流量；None 走列默认 `'webui'`。
     pub api_source: Option<String>,
+    /// C2 输入侧分项：路由事前估算的输入成本（est_in × effective_input_cost，含命中率期望与时段系数）。
+    pub est_input_cost: f64,
+    /// C2 输入侧分项：事后精确输入成本（非缓存 token×原价 + 缓存 token×读价 + 写价，含时段系数）。
+    pub act_input_cost: f64,
 }
 
 // ── PR-x 第三方参考价（OpenRouter 参考层，独立表，不进 price_specs） ──
@@ -307,6 +313,9 @@ pub struct DailyAggregate {
     pub calls: i64,
     pub est_cost: f64,
     pub act_cost: f64,
+    /// C2 输入侧分项（usage_records 新列，旧数据为 0）
+    pub est_input_cost: f64,
+    pub act_input_cost: f64,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
@@ -440,9 +449,43 @@ impl Db {
             Ok(())
         });
         let pool = Pool::builder().max_size(8).build(manager)?;
-        // schema 只建一次：连接池初始化时执行。
-        pool.get()?.execute_batch(SCHEMA)?;
+        {
+            let conn = pool.get()?;
+            // schema 只建一次：连接池初始化时执行。
+            conn.execute_batch(SCHEMA)?;
+            // C2：幂等加列（1de8645 重构移除 migrate_db 后恢复的最小升级框架——
+            // CREATE TABLE IF NOT EXISTS 不给既有库补列，INSERT 引用新列会 no such column）。
+            Self::ensure_columns(
+                &conn,
+                "usage_records",
+                &[
+                    ("est_input_cost", "ALTER TABLE usage_records ADD COLUMN est_input_cost REAL DEFAULT 0"),
+                    ("act_input_cost", "ALTER TABLE usage_records ADD COLUMN act_input_cost REAL DEFAULT 0"),
+                ],
+            )?;
+        }
         Ok(Self { pool })
+    }
+
+    /// 幂等加列：PRAGMA table_info 检查缺失列再 ALTER，可重跑。
+    fn ensure_columns(
+        conn: &rusqlite::Connection,
+        table: &str,
+        cols: &[(&str, &str)],
+    ) -> Result<()> {
+        let mut have: Vec<String> = Vec::new();
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        for name in rows {
+            have.push(name?);
+        }
+        drop(stmt);
+        for (col, ddl) in cols {
+            if !have.iter().any(|h| h == col) {
+                conn.execute_batch(ddl)?;
+            }
+        }
+        Ok(())
     }
 
     /// 从连接池取一个连接（Deref 到 `rusqlite::Connection`）。
@@ -641,6 +684,8 @@ impl Db {
                 "conversation_id",
                 "field_missing",
                 "cache_saved_cost",
+                "est_input_cost",
+                "act_input_cost",
             ]);
             vals.push(rusqlite::types::Value::Integer(e.cached_tokens));
             vals.push(rusqlite::types::Value::Integer(e.reasoning_tokens));
@@ -657,6 +702,9 @@ impl Db {
                 0
             }));
             vals.push(rusqlite::types::Value::Real(e.cache_saved_cost));
+            // C2 输入侧分列
+            vals.push(rusqlite::types::Value::Real(e.est_input_cost));
+            vals.push(rusqlite::types::Value::Real(e.act_input_cost));
             // C3：仅显式标记来源时写列（None 落库默认 'webui'，旧行为不变）
             if let Some(src) = &e.api_source {
                 cols.push("api_source");
@@ -1616,6 +1664,8 @@ impl Db {
                 COUNT(*) as calls,
                 COALESCE(SUM(u.est_cost), 0.0) as est_cost,
                 COALESCE(SUM(u.act_cost), 0.0) as act_cost,
+                COALESCE(SUM(u.est_input_cost), 0.0) as est_input_cost,
+                COALESCE(SUM(u.act_input_cost), 0.0) as act_input_cost,
                 COALESCE(SUM(u.input_tokens), 0) as input_tokens,
                 COALESCE(SUM(u.output_tokens), 0) as output_tokens,
                 COALESCE(SUM(u.cached_tokens), 0) as cached_tokens,
@@ -1632,6 +1682,8 @@ impl Db {
                 calls: row.get("calls")?,
                 est_cost: row.get("est_cost")?,
                 act_cost: row.get("act_cost")?,
+                est_input_cost: row.get("est_input_cost")?,
+                act_input_cost: row.get("act_input_cost")?,
                 input_tokens: row.get("input_tokens")?,
                 output_tokens: row.get("output_tokens")?,
                 cached_tokens: row.get("cached_tokens")?,
@@ -2118,5 +2170,84 @@ mod model_row_tests {
             }
         ));
         assert_eq!(ModelRow::from(&model), row);
+    }
+}
+
+#[cfg(test)]
+mod c2_input_cost_tests {
+    use super::*;
+
+    /// C2：旧库（无 est/act_input_cost 列）打开时由 ensure_columns 幂等补列，
+    /// 补列后 insert_usage 携带新字段可正常落库并读回。
+    #[test]
+    fn legacy_db_upgrade_then_input_cost_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("lloom_c2_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("legacy.db");
+        let _ = std::fs::remove_file(&path);
+
+        // 1) 手工建「旧版」usage_records（不含 est_input_cost/act_input_cost）
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE usage_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_name TEXT NOT NULL,
+                    user_id TEXT DEFAULT 'default',
+                    input_tokens INTEGER NOT NULL,
+                    output_tokens INTEGER NOT NULL,
+                    cost REAL NOT NULL,
+                    task_type TEXT,
+                    cache_hit INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    cached_tokens INTEGER DEFAULT 0,
+                    reasoning_tokens INTEGER DEFAULT 0,
+                    est_cost REAL DEFAULT 0,
+                    act_cost REAL DEFAULT 0,
+                    zone_multiplier REAL DEFAULT 1.0,
+                    conversation_id TEXT,
+                    field_missing INTEGER DEFAULT 0,
+                    cache_saved_cost REAL DEFAULT 0,
+                    api_source TEXT DEFAULT 'webui',
+                    latency_ms REAL,
+                    request_id TEXT
+                );",
+            )
+            .unwrap();
+        }
+
+        // 2) Db::new 打开 → ensure_columns 补列；再次打开验证幂等
+        let db = Db::new(&path).unwrap();
+        let _ = Db::new(&path).unwrap(); // 幂等重跑不报错
+
+        // 3) 带新字段 insert_usage → 落库成功且数值正确
+        db.insert_usage(&UsageRecord {
+            model_name: "m",
+            user_id: "default",
+            input_tokens: 1000,
+            output_tokens: 200,
+            cost: 0.01,
+            task_type: Some("coding"),
+            cache_hit: false,
+            latency_ms: Some(100.0),
+            request_id: Some("req-1"),
+            extra: Some(UsageExtra {
+                est_input_cost: 0.0002,
+                act_input_cost: 0.00015,
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+        let (est, act): (f64, f64) = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT est_input_cost, act_input_cost FROM usage_records WHERE request_id = 'req-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!((est - 0.0002).abs() < 1e-12);
+        assert!((act - 0.00015).abs() < 1e-12);
     }
 }
