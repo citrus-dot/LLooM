@@ -53,3 +53,6 @@ README-preview*.html
 
 # Mimosa plugin runtime state
 .mimosa/
+
+# 本地研究报告集（暂不入库）
+research/

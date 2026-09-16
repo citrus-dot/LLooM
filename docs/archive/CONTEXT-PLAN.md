@@ -1,3 +1,5 @@
+> 📦 **已完结归档**（CONTEXT-PLAN.md）：本文档所载计划已全部落地并验证，仅作历史设计与验收依据留存。权威落点引用（`CONTEXT-PLAN.md:行号`）依然有效。最新待办见 [`LLooMprogress.md`](../../LLooMprogress.md) 第六节。
+
 # 模型上下文优化方案（CONTEXT-PLAN）
 
 > 分析对象：`v2` 分支（2026-08-24 工作区）

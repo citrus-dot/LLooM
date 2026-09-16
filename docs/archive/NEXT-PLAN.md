@@ -1,3 +1,5 @@
+> 📦 **已完结归档**（NEXT-PLAN.md）：本文档所载计划已全部落地并验证，仅作历史设计与验收依据留存。权威落点引用（`NEXT-PLAN.md:行号`）依然有效。最新待办见 [`LLooMprogress.md`](../../LLooMprogress.md) 第六节。
+
 
 > **状态（2026-09-15）：本计划已全部完结**——N1/N2/N3 全部落地（B2「已对账」徽标已收尾，仅余真实账单数据验证），M1 模型分层同期完成，114 单测全绿。后续工作入口：[`LLooMprogress.md`](./LLooMprogress.md) 第六节两张台账（B 类搁置 15 条 / C 类小项 7 条）与下方决策门 G1/G2。
 > 基线：`488d156`（ROUTING P0–P5 / PRICING PR-1~8 / CONTEXT Phase 1–5 全部落地，79 单测全绿）。

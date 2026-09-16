@@ -134,7 +134,7 @@ All via `.env` (see [.env.example](.env.example)):
 |-----|----------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Layer breakdown, full REST API reference, ports, data flows |
 | [TEST-GUIDE.md](TEST-GUIDE.md) | Feature test guide (`bash scripts/smoke_test.sh` covers 19 checks) |
-| [ROUTING-PLAN.md](ROUTING-PLAN.md) / [PRICING-PLAN.md](PRICING-PLAN.md) / [CONTEXT-PLAN.md](CONTEXT-PLAN.md) | Design docs for routing / pricing / context |
+| [ROUTING-PLAN.md](docs/archive/ROUTING-PLAN.md) / [PRICING-PLAN.md](docs/archive/PRICING-PLAN.md) / [CONTEXT-PLAN.md](docs/archive/CONTEXT-PLAN.md) | Design docs for routing / pricing / context |
 | [LLooMprogress.md](LLooMprogress.md) | Progress ledger |
 
 ## Roadmap

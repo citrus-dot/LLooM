@@ -114,7 +114,7 @@
 ### 业务核心（core）
 
 - **db.rs** — rusqlite SQLite 层，强类型（`Model`/`Budget`/`UsageStats`）
-- **router.rs** — 任务分类（正则层）+ **`plan()` 评分路由**（注册表门槛 + 成本/质量加权，已落地，见 ROUTING-PLAN.md P0.d）
+- **router.rs** — 任务分类（正则层）+ **`plan()` 评分路由**（注册表门槛 + 成本/质量加权，已落地，见 docs/archive/ROUTING-PLAN.md P0.d）
 - **pricing.rs** — 定价引擎（`PriceSpec`/`TierBand`/`ZoneRule`/`UsageDetail`/`ZoneResolver` + actual_cost/est_cost/effective_input_cost）
 - **probe.rs** — 常开探针（预算状态机 `ProbeBudget` + 探测循环，监控响应性与校准燃料）
 - **signals.rs** — 信号层（`prefix_stability` 等启发式信号，为路由评分提供特征）
@@ -305,7 +305,7 @@ LLooM/
 │       ├── lib.rs                # 模块声明
 │       ├── server.rs             # axum REST 服务器
 │       ├── db.rs                 # SQLite 层（ModelRow 行层 + 幂等迁移）
-│       ├── router.rs             # 任务分类 + `plan()` 评分路由（见 ROUTING-PLAN.md）
+│       ├── router.rs             # 任务分类 + `plan()` 评分路由（见 docs/archive/ROUTING-PLAN.md）
 │       ├── security.rs           # 正则安全层
 │       ├── ai_client.rs          # AI 微服务客户端
 │       ├── processes.rs          # 子进程管理

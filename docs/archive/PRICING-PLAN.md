@@ -1,3 +1,5 @@
+> 📦 **已完结归档**（PRICING-PLAN.md）：本文档所载计划已全部落地并验证，仅作历史设计与验收依据留存。权威落点引用（`PRICING-PLAN.md:行号`）依然有效。最新待办见 [`LLooMprogress.md`](../../LLooMprogress.md) 第六节。
+
 # 模型定价表优化方案 v2
 
 > 定位：`ROUTING-PLAN.md` 阶段 P2（定价表系统）的**细化与代码级落地版**。

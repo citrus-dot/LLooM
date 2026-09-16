@@ -130,7 +130,7 @@ LLM 提供商（DashScope / OpenAI / Anthropic / Ollama）
 |------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 分层详解、REST API 完整参考、端口、数据流 |
 | [TEST-GUIDE.md](TEST-GUIDE.md) | 功能测试指南（`bash scripts/smoke_test.sh` 覆盖 19 项检查） |
-| [ROUTING-PLAN.md](ROUTING-PLAN.md) / [PRICING-PLAN.md](PRICING-PLAN.md) / [CONTEXT-PLAN.md](CONTEXT-PLAN.md) | 路由 / 定价 / 上下文设计文档 |
+| [ROUTING-PLAN.md](docs/archive/ROUTING-PLAN.md) / [PRICING-PLAN.md](docs/archive/PRICING-PLAN.md) / [CONTEXT-PLAN.md](docs/archive/CONTEXT-PLAN.md) | 路由 / 定价 / 上下文设计文档 |
 | [LLooMprogress.md](LLooMprogress.md) | 项目进展台账 |
 
 ## 路线图
