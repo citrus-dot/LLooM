@@ -1831,6 +1831,12 @@ impl Db {
     // ── Budget ──
 
     pub fn upsert_budget(&self, b: &BudgetInput<'_>) -> Result<()> {
+        // 边界校验：负预算无语义（0=立即封顶，下游 ratio 已容忍）；错误止步于入口
+        if b.max_budget < 0.0 {
+            return Err(AppError::InvalidRequest(
+                "预算上限不能为负数；请输入 ≥ 0 的金额".into(),
+            ));
+        }
         let conn = self.conn()?;
         conn.execute(
             "INSERT INTO budgets (scope, scope_id, max_budget, duration, scope_task_type, soft_limit_ratio, action_on_exceed)
@@ -2332,6 +2338,40 @@ mod b15_conversation_cache_tests {
         db.insert_usage(&rec("conv-3", "other", 999)).unwrap();
         assert_eq!(db.conversation_cache_avg("conv-3", "m").unwrap(), None);
 
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 护栏（2026-09-18 边缘测试发现）：负预算此前无校验直接落库。
+    #[test]
+    fn upsert_budget_rejects_negative() {
+        let dir = std::env::temp_dir().join(format!("lloom_budget_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("budget.db");
+        let _ = std::fs::remove_file(&path);
+        let db = Db::new(&path).unwrap();
+        let err = db
+            .upsert_budget(&BudgetInput {
+                scope: "user",
+                scope_id: "default",
+                max_budget: -5.0,
+                duration: "30d",
+                scope_task_type: None,
+                soft_limit_ratio: None,
+                action_on_exceed: None,
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("不能为负数"), "报错带修复提示: {err}");
+        // 0 是合法边界（立即封顶语义），不拒
+        db.upsert_budget(&BudgetInput {
+            scope: "user",
+            scope_id: "default",
+            max_budget: 0.0,
+            duration: "30d",
+            scope_task_type: None,
+            soft_limit_ratio: None,
+            action_on_exceed: None,
+        })
+        .unwrap();
         let _ = std::fs::remove_file(&path);
     }
 }

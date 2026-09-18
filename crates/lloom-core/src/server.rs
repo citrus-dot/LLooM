@@ -518,7 +518,38 @@ pub(crate) async fn chat_with_failover(
     ))
 }
 
+/// 消息形状边界校验（chat 主路径与 OpenAI 代理共用）。
+/// role 白名单对齐 OpenAI 契约；content 允许字符串/多模态分段数组/缺省。
+pub(crate) fn validate_messages(messages: &[Value]) -> std::result::Result<(), String> {
+    const ROLES: [&str; 4] = ["system", "user", "assistant", "tool"];
+    if messages.is_empty() {
+        return Err("messages 不能为空：请至少提供一条 user 消息".into());
+    }
+    for (i, m) in messages.iter().enumerate() {
+        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if !ROLES.contains(&role) {
+            return Err(format!(
+                "messages[{i}] 的 role '{role}' 非法：仅支持 system/user/assistant/tool"
+            ));
+        }
+        if let Some(c) = m.get("content") {
+            if !(c.is_string() || c.is_array() || c.is_null()) {
+                let kind = if c.is_object() { "object" } else { "number/bool" };
+                return Err(format!(
+                    "messages[{i}] 的 content 类型非法（{kind}）：应为字符串或多模态分段数组"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -> Response {
+    // 边界校验（习惯③）：畸形 messages 此前穿透到 litellm 才报英文原生错误，
+    // 非法组合止步于 HTTP/SSE 边界
+    if let Err(msg) = validate_messages(&req.messages) {
+        return sse_error(&msg);
+    }
     let user_text = security::extract_user_text(&req.messages);
     let sec = security::check(&user_text, true, true);
     if sec.blocked {
@@ -2456,5 +2487,36 @@ mod reconcile_report_tests {
         assert_eq!(out["reconciled"], json!(false));
         assert_eq!(out["models_matched"], json!(0));
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod message_validation_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 护栏（2026-09-18 边缘测试发现）：畸形 messages 曾穿透到 litellm 才报英文错误。
+    #[test]
+    fn validate_messages_rejects_malformed() {
+        assert!(validate_messages(&[]).is_err(), "空数组拒收");
+        assert!(
+            validate_messages(&[json!({"role": "admin", "content": "hi"})]).is_err(),
+            "非法 role 拒收"
+        );
+        assert!(
+            validate_messages(&[json!({"role": "user", "content": {"a": 1}})]).is_err(),
+            "object content 拒收"
+        );
+        assert!(
+            validate_messages(&[json!({"role": "user", "content": 42})]).is_err(),
+            "数字 content 拒收"
+        );
+        // 合法形状放行：字符串 / 多模态分段数组 / content 缺省
+        assert!(validate_messages(&[json!({"role": "user", "content": "hi"})]).is_ok());
+        assert!(
+            validate_messages(&[json!({"role": "user", "content": [{"type": "text", "text": "hi"}]})])
+                .is_ok()
+        );
+        assert!(validate_messages(&[json!({"role": "assistant", "content": null})]).is_ok());
     }
 }

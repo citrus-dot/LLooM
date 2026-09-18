@@ -168,6 +168,10 @@ pub async fn chat_completions(
     }
 
     // 安全检查与 WebUI chat 路径同规则（security::check 只查当前请求文本）
+    // 边界校验（习惯③）：畸形 messages 止步于代理边界，不流入 AI 服务
+    if let Err(msg) = crate::server::validate_messages(&req.messages) {
+        return error_response(StatusCode::BAD_REQUEST, &msg, "invalid_request_error", "invalid_messages");
+    }
     let user_text = security::extract_user_text(&req.messages);
     let sec = security::check(&user_text, true, true);
     if sec.blocked {
