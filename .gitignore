@@ -56,3 +56,9 @@ README-preview*.html
 
 # 本地研究报告集（暂不入库）
 research/
+
+# 本地编码规范 / 协作文档（不入库）
+CODE_GUIDE.md
+
+# 本地 agent 协作规则（不入库，含个人偏好）
+/AGENTS.md
