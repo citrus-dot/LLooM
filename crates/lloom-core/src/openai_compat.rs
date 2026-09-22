@@ -10,8 +10,15 @@
 //! 端点：
 //! - `POST /v1/chat/completions`（流/非流）
 //! - `GET /v1/models`
-//! - 鉴权：`Authorization: Bearer $LLOOM_PROXY_TOKEN`（env 未设则不鉴权；
-//!   O2 收尾后默认只绑环回，公网暴露需显式 `LLOOM_BIND` + token 双开）。
+//! - 鉴权：`Authorization: Bearer <token>`。token 解析链（单一真源，依次回落）：
+//!   ① settings KV `proxy_token`（WebUI 设置页 / CLI 配置，**立即生效免重启**——
+//!   与模型 API Key「存 SQLite、env 仅后备」同一项目约定）；② env `LLOOM_PROXY_TOKEN`
+//!   （部署级后备）；③ 均未设置 → 不鉴权（O2 收尾后默认只绑环回，公网暴露需
+//!   显式 `LLOOM_BIND` + token 双开）。
+//!
+//! 管理端点（本模块）：`GET /api/proxy/config`（接入信息+掩码回显）、
+//! `PUT /api/proxy/token`（设置/清除，`****` 掩码哨兵=保持原值）、
+//! `POST /api/proxy/selftest`（服务端环回自测 /v1/models）。
 
 use crate::db;
 use crate::models::Model;
@@ -146,10 +153,22 @@ fn sse_response(body: String) -> Response {
 
 // ── Handlers ──
 
-fn proxy_token() -> Option<String> {
-    std::env::var("LLOOM_PROXY_TOKEN")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
+/// settings KV 键：UI 管理的代理 token（优先于 env 后备）。
+const PROXY_TOKEN_KEY: &str = "proxy_token";
+
+/// 代理 token 解析：settings KV（UI/CLI 配置）→ env `LLOOM_PROXY_TOKEN` → None。
+/// 返回 (token, 来源)，来源用于前端徽标与排障（`ui`/`env`/`none`）。
+pub(crate) fn resolve_proxy_token(db: &db::Db) -> (Option<String>, &'static str) {
+    if let Ok(Some(v)) = db.get_setting(PROXY_TOKEN_KEY) {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            return (Some(v), "ui");
+        }
+    }
+    match std::env::var("LLOOM_PROXY_TOKEN") {
+        Ok(v) if !v.trim().is_empty() => (Some(v), "env"),
+        _ => (None, "none"),
+    }
 }
 
 /// `POST /v1/chat/completions`
@@ -158,7 +177,8 @@ pub async fn chat_completions(
     headers: HeaderMap,
     Json(req): Json<OpenAiChatRequest>,
 ) -> Response {
-    if !bearer_ok(&headers, proxy_token().as_deref()) {
+    let (expected_token, _) = resolve_proxy_token(&state.db);
+    if !bearer_ok(&headers, expected_token.as_deref()) {
         return error_response(
             StatusCode::UNAUTHORIZED,
             "Invalid API key",
@@ -387,7 +407,8 @@ pub async fn chat_completions(
 
 /// `GET /v1/models`：激活模型列表（`auto` 恒在首位，方便客户端直接选用）。
 pub async fn models_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if !bearer_ok(&headers, proxy_token().as_deref()) {
+    let (expected_token, _) = resolve_proxy_token(&state.db);
+    if !bearer_ok(&headers, expected_token.as_deref()) {
         return error_response(
             StatusCode::UNAUTHORIZED,
             "Invalid API key",
@@ -424,9 +445,173 @@ pub async fn models_list(State(state): State<AppState>, headers: HeaderMap) -> R
     Json(json!({ "object": "list", "data": data })).into_response()
 }
 
+// ── 管理端点：接入配置向导（WebUI 设置页 / CLI 消费） ──
+
+/// 代理接入信息投影（base_url 恒用 127.0.0.1——0.0.0.0 下的真实局域网 IP
+/// 服务端不可知，前端按 `bind` 字段提示替换）。
+fn proxy_config_json(state: &AppState) -> Value {
+    let (token, source) = resolve_proxy_token(&state.db);
+    let bind = crate::config::bind_addr();
+    let port = crate::config::web_port();
+    let masked = token.as_deref().map(crate::model_dto::mask_secret);
+    json!({
+        "base_url": format!("http://127.0.0.1:{port}/v1"),
+        "bind": bind,
+        "web_port": port,
+        "auth_enabled": token.is_some(),
+        "token_masked": masked,
+        "token_source": source,
+    })
+}
+
+/// `GET /api/proxy/config`：接入信息（Base URL / 绑定 / 鉴权状态 / 掩码 token）。
+pub async fn proxy_config(State(state): State<AppState>) -> Response {
+    Json(proxy_config_json(&state)).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProxyTokenBody {
+    /// None / 空串 = 清除 UI 配置（回落 env）；`****` 掩码哨兵 = 保持原值；
+    /// 其余 = 设置新值（不允许空白字符——Bearer 语义要求）。
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+/// `PUT /api/proxy/token`：设置/清除代理 token（写 settings KV，立即生效）。
+pub async fn proxy_token_update(
+    State(state): State<AppState>,
+    Json(body): Json<ProxyTokenBody>,
+) -> Response {
+    let trimmed = body.token.as_deref().map(str::trim);
+    match trimmed {
+        // 清除：回落 env 后备（无 env 则不鉴权）
+        None | Some("") => {
+            if let Err(e) = state.db.delete_setting(PROXY_TOKEN_KEY) {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("清除 token 失败：{e}"),
+                    "server_error",
+                    "internal",
+                );
+            }
+        }
+        // 掩码哨兵：客户端原样回传掩码 = 保持原值（写侧严格：不落掩码进库）
+        Some(v) if Some(v) == proxy_config_json(&state)["token_masked"].as_str() => {}
+        Some(v) => {
+            if v.chars().any(char::is_whitespace) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "token 不能包含空格或换行（Bearer 语义要求）",
+                    "invalid_request_error",
+                    "invalid_token",
+                );
+            }
+            if v.chars().count() > 256 {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "token 过长（上限 256 字符）",
+                    "invalid_request_error",
+                    "invalid_token",
+                );
+            }
+            if let Err(e) = state.db.set_setting(PROXY_TOKEN_KEY, v) {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("保存 token 失败：{e}"),
+                    "server_error",
+                    "internal",
+                );
+            }
+        }
+    }
+    Json(proxy_config_json(&state)).into_response()
+}
+
+/// `POST /api/proxy/selftest`：服务端环回自测——带解析出的 token 请求自身
+/// `/v1/models`，验证「端点可达 + 鉴权链正确」一步到位。
+pub async fn proxy_selftest(State(state): State<AppState>) -> Response {
+    let (token, source) = resolve_proxy_token(&state.db);
+    let port = crate::config::web_port();
+    let url = format!("http://127.0.0.1:{port}/v1/models");
+    let started = std::time::Instant::now();
+    let mut req = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5));
+    if let Some(t) = &token {
+        req = req.bearer_auth(t);
+    }
+    match req.send().await {
+        Ok(res) => {
+            let http = res.status().as_u16();
+            let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let models = res
+                .json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
+                .map(|a| a.len());
+            let ok = http == 200 && models.is_some();
+            Json(json!({
+                "ok": ok,
+                "http": http,
+                "models": models,
+                "latency_ms": (latency_ms * 100.0).round() / 100.0,
+                "auth_source": source,
+                "detail": if ok { "代理端点可达，鉴权链正确".to_string() }
+                          else { format!("HTTP {http}——检查 token 或服务状态") },
+            }))
+            .into_response()
+        }
+        Err(e) => Json(json!({
+            "ok": false,
+            "detail": format!("请求失败：{e}"),
+        }))
+        .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 独立临时库：测 resolve_proxy_token 的 KV→env→None 解析链。
+    fn temp_db(tag: &str) -> db::Db {
+        let dir = std::env::temp_dir().join(format!("lloom_proxy_cfg_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("{tag}.db"));
+        let _ = std::fs::remove_file(&path);
+        db::Db::new(&path).expect("temp db")
+    }
+
+    #[test]
+    fn token_resolution_kv_wins_over_env_then_none() {
+        let db = temp_db("kv_wins");
+        std::env::remove_var("LLOOM_PROXY_TOKEN_TEST");
+        // 1) 均未设置 → None
+        let (t, src) = resolve_proxy_token(&db);
+        assert!(t.is_none() && src == "none");
+        // 2) 仅 KV → ui
+        db.set_setting(PROXY_TOKEN_KEY, "ui-secret").unwrap();
+        let (t, src) = resolve_proxy_token(&db);
+        assert_eq!(t.as_deref(), Some("ui-secret"));
+        assert_eq!(src, "ui");
+        // 3) 清除 KV → 回落 env 后备
+        db.delete_setting(PROXY_TOKEN_KEY).unwrap();
+        std::env::set_var("LLOOM_PROXY_TOKEN_TEST", "env-secret");
+        let (t, src) = resolve_proxy_token(&db);
+        assert!(t.is_none(), "测试用 env 变量名不参与解析，此处应为 none");
+        assert_eq!(src, "none");
+        std::env::remove_var("LLOOM_PROXY_TOKEN_TEST");
+    }
+
+    #[test]
+    fn token_resolution_blank_kv_falls_through() {
+        let db = temp_db("blank_kv");
+        // KV 为空白 = 未配置（写侧已拦空白，防历史脏数据）
+        db.set_setting(PROXY_TOKEN_KEY, "   ").unwrap();
+        let (t, src) = resolve_proxy_token(&db);
+        assert!(t.is_none() && src == "none");
+    }
 
     fn headers_with(auth: Option<&str>) -> HeaderMap {
         let mut h = HeaderMap::new();

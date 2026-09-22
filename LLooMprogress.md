@@ -1,7 +1,7 @@
 # LLooM v2 项目进度
 
-> 最后更新：**2026-09-18**（边缘测试三项加固：越狱大小写不敏感 / messages 边界校验 / 负预算拒收，120 单测全绿）· 仓库 `citrus-dot/LLooM` · 分支 `v2`
-> 最新已提交：E2E 深度测试三项修复（`460b39e`，117 单测全绿、CI success）
+> 最后更新：**2026-09-22**（N1 代理接入向导：三端点 + WebUI 设置卡 + CLI proxy 子命令，122 单测全绿）· 仓库 `citrus-dot/LLooM` · 分支 `v2`
+> 最新已提交：代理接入向导（`/api/proxy/config|token|selftest`，token 存 settings KV 立即生效，env 仅部署级后备）；此前 E2E 深度测试修复（`460b39e`）
 > **待办唯一真源：[六、待办事项](#六待办事项todo)**——B 类搁置 15 条 / C 类小项 7 条 / 中期展望，主线已无未开工项
 
 ***
@@ -157,6 +157,7 @@
 - ✅ **CONTEXT-PLAN Phase 2~5** 全部落地（服务端 history、截断+滚动摘要、两层缓存+淘汰、前缀缓存铺路）
 - ✅ **NEXT-PLAN N1** OpenAI 兼容代理（2026-09-02）/ **N2** 闭环评估（2026-09-02）/ **N3.a 并行 + N3.b `/metrics` + N3.c 对账**（2026-09-03~15）/ **M1** 模型分层（2026-09-10）
 - ✅ 历史遗留小项：O2 绑定收窄（随 N1）、O6 并行（归并入 N3.a）、C1 思考过程折叠、C2 输入侧分列、C3 `api_source` 列
+- ✅ **N1 代理接入向导**（2026-09-22）：WebUI 设置页「OpenAI 兼容代理」卡片（接入地址+鉴权状态+Key 设置框+自测+model 注释+示例）、`/api/proxy/config|token|selftest` 三端点（token 存 settings KV 立即生效，env 仅部署级后备）、`lloom-cli proxy show|token` 子命令；122 单测全绿、7 场景端到端冒烟过
 
 ### 搁置项台账（B 类：条件触发，未触发不主动开工）
 

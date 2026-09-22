@@ -839,6 +839,13 @@ impl Db {
         Ok(())
     }
 
+    /// 删除一条 settings KV（不存在时静默成功）。清空 UI 管理的配置后回落 env 后备。
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
     // ── Semantic-cache calibration ──
 
     /// Silent, per-request log used to (a) monitor the similarity distribution and

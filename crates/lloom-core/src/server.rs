@@ -1896,6 +1896,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/pricing/calibration", get(pricing_calibration))
         .route("/api/probe/stats", get(probe_stats))
         .route("/api/probe/budget", put(probe_budget_update))
+        // OpenAI 兼容代理接入配置（N1 向导）
+        .route("/api/proxy/config", get(crate::openai_compat::proxy_config))
+        .route("/api/proxy/token", put(crate::openai_compat::proxy_token_update))
+        .route("/api/proxy/selftest", post(crate::openai_compat::proxy_selftest))
         // Stats
         .route("/api/stats", get(get_stats))
         // Conversations

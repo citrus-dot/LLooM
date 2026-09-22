@@ -55,6 +55,23 @@ enum Command {
     /// Conversation management
     #[command(subcommand)]
     Conversation(ConversationCmd),
+    /// OpenAI-compatible proxy: show access info / manage API key
+    #[command(subcommand)]
+    Proxy(ProxyCmd),
+}
+
+#[derive(Subcommand)]
+enum ProxyCmd {
+    /// Show proxy Base URL, auth status and model-field notes
+    Show,
+    /// Set or clear the proxy API key (immediate effect, no restart)
+    Token {
+        /// New token value (omit together with --clear to just show status)
+        value: Option<String>,
+        /// Clear the UI-managed token (falls back to LLOOM_PROXY_TOKEN env)
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -234,6 +251,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => cmd_chat(&client, &query, session.as_deref(), interactive).await?,
         Command::Orchestrate { query } => cmd_orchestrate(&client, &query).await?,
         Command::Conversation(c) => cmd_conversation(&client, c).await?,
+        Command::Proxy(c) => cmd_proxy(&client, c).await?,
     }
     Ok(())
 }
@@ -793,6 +811,102 @@ async fn cmd_conversation(
         }
     }
     Ok(())
+}
+
+// ── OpenAI 兼容代理（N1 接入向导） ──
+
+async fn cmd_proxy(client: &Client, cmd: ProxyCmd) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        ProxyCmd::Token { value, clear } => {
+            let token = if clear {
+                Some(Value::Null)
+            } else {
+                value.clone().map(|v| {
+                    if v.trim().is_empty() {
+                        Value::Null
+                    } else {
+                        Value::String(v.trim().to_string())
+                    }
+                })
+            };
+            if let Some(body_token) = token {
+                // PUT /api/proxy/token：null=清除；字符串=设置（立即生效）
+                let res = client
+                    .put(format!("{BASE}/api/proxy/token"))
+                    .json(&serde_json::json!({ "token": body_token }))
+                    .send()
+                    .await?;
+                if !res.status().is_success() {
+                    return Err(format!("设置失败: HTTP {}", res.status()).into());
+                }
+                let cfg: Value = res.json().await?;
+                let action = if clear
+                    || value
+                        .as_deref()
+                        .map(|v| v.trim().is_empty())
+                        .unwrap_or(false)
+                {
+                    "已清除"
+                } else {
+                    "已设置"
+                };
+                println!(
+                    "{action}（立即生效）  鉴权: {}",
+                    if cfg["auth_enabled"].as_bool().unwrap_or(false) {
+                        "启用"
+                    } else {
+                        "未鉴权"
+                    }
+                );
+                return Ok(());
+            }
+            // 无 value 无 --clear → 打印当前状态（落到 Show）
+            let cfg: Value = get(client, "/api/proxy/config").await?;
+            print_proxy_info(&cfg);
+            return Ok(());
+        }
+        ProxyCmd::Show => {
+            let cfg: Value = get(client, "/api/proxy/config").await?;
+            print_proxy_info(&cfg);
+        }
+    }
+    Ok(())
+}
+
+fn print_proxy_info(cfg: &Value) {
+    let base = cfg["base_url"].as_str().unwrap_or("");
+    let bind = cfg["bind"].as_str().unwrap_or("");
+    let auth = cfg["auth_enabled"].as_bool().unwrap_or(false);
+    let source = cfg["token_source"].as_str().unwrap_or("none");
+    println!("OpenAI 兼容代理接入");
+    println!("  Base URL : {base}");
+    if bind != "127.0.0.1" && bind != "localhost" {
+        println!("  绑定     : {bind}（局域网可达——远程接入把 127.0.0.1 换成本机 IP）");
+    }
+    println!(
+        "  鉴权     : {}",
+        if auth {
+            match source {
+                "ui" => format!("启用（Key 来自本服务配置库，掩码 {}）", cfg["token_masked"].as_str().unwrap_or("****")),
+                "env" => "启用（Key 来自环境变量 LLOOM_PROXY_TOKEN）".to_string(),
+                _ => format!("启用（掩码 {}）", cfg["token_masked"].as_str().unwrap_or("****")),
+            }
+        } else {
+            "未鉴权（任何能访问该端口的程序都可调用；仅环回绑定时可接受）".to_string()
+        }
+    );
+    println!();
+    println!("  接入示例（任意 OpenAI 客户端）:");
+    println!("    Base URL = {base}");
+    println!("    API Key  = 上述鉴权 token（未鉴权时填任意非空串）");
+    println!();
+    println!("  model 字段:");
+    println!("    auto        智能路由（按任务/成本/质量/预算自动选模型，推荐）");
+    println!("    注册模型名  直连该模型，跳过路由（GET /v1/models 可列出）");
+    println!("    未知名      自动回落 auto，不报错");
+    println!();
+    println!("  限制: 流式为整段下发；不支持 tools/多模态；编排分解不在本通道。");
+    println!("  管理: lloom-cli proxy token <VALUE> 设置 / --clear 清除（立即生效）。");
 }
 
 async fn cmd_orchestrate(client: &Client, query: &str) -> Result<(), Box<dyn std::error::Error>> {

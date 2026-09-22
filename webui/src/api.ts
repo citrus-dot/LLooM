@@ -460,6 +460,44 @@ export function getReconcileSummary(): Promise<ReconcileSummary> {
   return jget('/api/usage/reconcile');
 }
 
+// ── OpenAI 兼容代理接入（N1 向导） ──
+
+/** GET /api/proxy/config 响应：接入信息（token 只回掩码，永不回明文）。 */
+export interface ProxyConfig {
+  /** 形如 http://127.0.0.1:7861/v1 */
+  base_url: string;
+  /** 实际绑定地址（0.0.0.0 = 局域网可达，提示替换 host） */
+  bind: string;
+  web_port: number;
+  /** true = 有 token，客户端必须带 Bearer */
+  auth_enabled: boolean;
+  /** `****tail` 掩码；未配置为 null */
+  token_masked: string | null;
+  /** token 来源：ui=设置页配置 / env=环境变量 / none=未配置 */
+  token_source: 'ui' | 'env' | 'none';
+}
+
+export function getProxyConfig(): Promise<ProxyConfig> {
+  return jget('/api/proxy/config');
+}
+
+/** 设置/清除代理 token：null/空 = 清除；立即生效，返回最新配置。 */
+export function setProxyToken(token: string | null): Promise<ProxyConfig> {
+  return jput('/api/proxy/token', { token });
+}
+
+/** POST /api/proxy/selftest：服务端环回自测 /v1/models（验证可达+鉴权链）。 */
+export function proxySelftest(): Promise<{
+  ok: boolean;
+  http?: number;
+  models?: number;
+  latency_ms?: number;
+  auth_source?: string;
+  detail: string;
+}> {
+  return jpost('/api/proxy/selftest');
+}
+
 // ── Budgets ──
 
 export function getBudgets(): Promise<{ budgets: Budget[] }> {
