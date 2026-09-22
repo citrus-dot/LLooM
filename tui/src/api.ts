@@ -106,6 +106,16 @@ async function del<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function put<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<T>
+}
+
 export async function getServicesStatus(): Promise<ServicesStatus> {
   return get("/api/services/status")
 }
@@ -159,6 +169,45 @@ export async function getUsage(): Promise<{ usage: UsageRow[]; total_spend: numb
 
 export async function getBudgets(): Promise<{ budgets: { scope: string; scope_id: string; max_budget: number; duration?: string }[] }> {
   return get("/api/budgets")
+}
+
+// ── OpenAI 兼容代理接入（N1 向导） ──
+
+/** GET /api/proxy/config 响应：接入信息（token 只回掩码，永不回明文）。 */
+export interface ProxyConfig {
+  /** 形如 http://127.0.0.1:7861/v1 */
+  base_url: string
+  /** 实际绑定地址（0.0.0.0 = 局域网可达） */
+  bind: string
+  web_port: number
+  /** true = 有 token，客户端必须带 Bearer */
+  auth_enabled: boolean
+  /** `****tail` 掩码；未配置时为 null */
+  token_masked: string | null
+  /** token 来源：ui=本端配置库 / env=环境变量 / none=未配置 */
+  token_source: "ui" | "env" | "none"
+}
+
+export async function getProxyConfig(): Promise<ProxyConfig> {
+  return get("/api/proxy/config")
+}
+
+/** 设置/清除代理 token：null/空 = 清除（回落 env）；立即生效。 */
+export async function setProxyToken(token: string | null): Promise<ProxyConfig> {
+  return put("/api/proxy/token", { token })
+}
+
+export interface ProxySelftestResult {
+  ok: boolean
+  http?: number
+  models?: number
+  latency_ms?: number
+  detail: string
+}
+
+/** POST /api/proxy/selftest：服务端环回自测 /v1/models。 */
+export async function proxySelftest(): Promise<ProxySelftestResult> {
+  return post("/api/proxy/selftest")
 }
 
 export async function setBudget(scope: string, scopeId: string, maxBudget: number, duration: string): Promise<{ set: boolean }> {

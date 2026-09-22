@@ -1,9 +1,22 @@
-// Settings route — service status & control. API keys are per-model settings
-// edited on the Models route; env (.env) editing was removed.
+// Settings route — service status & control, OpenAI-compatible proxy access
+// (N1). API keys are per-model settings edited on the Models route; env (.env)
+// editing was removed — proxy token lives in the server's settings KV instead.
 
+import { createSignal, onMount, Show } from "solid-js"
 import { theme } from "../theme"
-import { getServiceLogs, restartService, stopService, startService } from "../api"
+import {
+  getServiceLogs,
+  restartService,
+  stopService,
+  startService,
+  getProxyConfig,
+  setProxyToken,
+  proxySelftest,
+  type ProxyConfig,
+} from "../api"
 import { useDialog } from "../ui/dialog"
+import { dialogOpen } from "../app"
+import { useBindings } from "@opentui/keymap/solid"
 import { healthServices, pollHealth } from "../health"
 
 // Display name → control API name (Core Server is the host itself; not manageable).
@@ -12,6 +25,105 @@ const SERVICE_KEYS: Record<string, string> = { "Ollama": "ollama", "AI Service":
 export function Settings(props: { setStatus: (s: string) => void }) {
   const services = healthServices
   const dialog = useDialog()
+  const [proxy, setProxy] = createSignal<ProxyConfig | null>(null)
+
+  // ── OpenAI 兼容代理接入（N1） ──
+  const refreshProxy = async () => {
+    try {
+      setProxy(await getProxyConfig())
+    } catch {
+      /* server down — health banner already surfaces it */
+    }
+  }
+  onMount(() => {
+    void refreshProxy()
+  })
+
+  const authDetail = () => {
+    const p = proxy()
+    if (!p) return ""
+    if (!p.auth_enabled) return "客户端无需 Key（仅环回绑定时安全）"
+    const src =
+      p.token_source === "ui"
+        ? "本服务配置库"
+        : p.token_source === "env"
+          ? "环境变量 LLOOM_PROXY_TOKEN"
+          : ""
+    return `${p.token_masked} · ${src}`
+  }
+
+  const doSetKey = () => {
+    dialog.prompt("设置代理 API Key（立即生效，免重启）", {
+      placeholder: "Bearer token；作为客户端 API Key 下发",
+      onConfirm: async (v) => {
+        const t = v.trim()
+        if (!t) return
+        try {
+          setProxy(await setProxyToken(t))
+          props.setStatus("✓ 代理 API Key 已保存，立即生效")
+        } catch (e) {
+          props.setStatus(`设置失败: ${e}`)
+        }
+      },
+    })
+  }
+
+  const doClearKey = async () => {
+    try {
+      setProxy(await setProxyToken(null))
+      props.setStatus("✓ 已清除本端配置的代理 Key")
+    } catch (e) {
+      props.setStatus(`清除失败: ${e}`)
+    }
+  }
+
+  const doSelftest = async () => {
+    props.setStatus("⏳ 代理自测中...")
+    try {
+      const r = await proxySelftest()
+      const lines = [`结果  : ${r.ok ? "✓ 通过" : "✗ 失败"}`]
+      if (r.http != null) lines.push(`HTTP  : ${r.http}`)
+      if (r.models != null) lines.push(`模型数: ${r.models}`)
+      if (r.latency_ms != null) lines.push(`延迟  : ${r.latency_ms}ms`)
+      lines.push("", r.detail)
+      dialog.logs("代理连通性自测（环回 /v1/models）", { logs: lines.join("\n") })
+      props.setStatus(r.ok ? "✓ 代理自测通过" : "代理自测失败")
+    } catch (e) {
+      props.setStatus(`自测失败: ${e}`)
+    }
+  }
+
+  const proxyMenu = () => {
+    const items = [
+      {
+        title: "设置 API Key",
+        desc: "写入本地库，立即生效（免重启）",
+        onSelect: () => doSetKey(),
+      },
+      {
+        title: "连通性自测",
+        desc: "服务端环回请求 /v1/models",
+        onSelect: () => void doSelftest(),
+      },
+      ...(proxy()?.token_source === "ui"
+        ? [
+            {
+              title: "清除 Key",
+              desc: "回落环境变量或恢复不鉴权",
+              danger: true,
+              onSelect: () => void doClearKey(),
+            },
+          ]
+        : []),
+    ]
+    dialog.menu("OpenAI 兼容代理", { items })
+  }
+
+  // p = proxy（本页无输入框，不冲突）
+  useBindings(() => ({
+    enabled: () => !dialogOpen(),
+    bindings: [{ key: "p", cmd: () => proxyMenu(), desc: "OpenAI 代理菜单" }],
+  }))
 
   const serviceKey = (displayName: string) => SERVICE_KEYS[displayName]
   const controllable = (displayName: string) => serviceKey(displayName) !== undefined
@@ -102,6 +214,43 @@ export function Settings(props: { setStatus: (s: string) => void }) {
       ))}
       <box height={1} />
       <text fg={theme.textDim}>  右键服务名弹出操作菜单</text>
+
+      {/* ── OpenAI 兼容代理接入（N1）：右键本区或按 p 弹菜单 ── */}
+      <box height={1} />
+      <box onMouseUp={() => proxyMenu()}>
+        <box flexDirection="row" gap={1}>
+          <text fg={theme.primary} attributes={1}>⏵ OpenAI 兼容代理</text>
+          <text fg={theme.textDim}>· 按 p / 右键打开菜单</text>
+        </box>
+      </box>
+      <Show when={proxy()} keyed>
+        {(p) => (
+          <box flexDirection="column" paddingLeft={2}>
+            <box flexDirection="row" gap={1}>
+              <text fg={theme.textDim}>Base URL</text>
+              <text fg={theme.text}>{p.base_url}</text>
+            </box>
+            <box flexDirection="row" gap={1}>
+              <text fg={theme.textDim}>鉴权</text>
+              <text fg={p.auth_enabled ? theme.success : theme.warning}>
+                {p.auth_enabled ? "启用" : "未鉴权"}
+              </text>
+              <text fg={theme.textMuted}>{authDetail()}</text>
+            </box>
+            {p.bind !== "127.0.0.1" && p.bind !== "localhost" && (
+              <box flexDirection="row" gap={1}>
+                <text fg={theme.textDim}>绑定</text>
+                <text fg={theme.info}>{p.bind}</text>
+                <text fg={theme.textMuted}>· 局域网接入把 127.0.0.1 换成本机 IP</text>
+              </box>
+            )}
+            <text fg={theme.textDim}>model: auto 智能路由（推荐）· 注册模型名直连 · 未知名回落 auto</text>
+          </box>
+        )}
+      </Show>
+      <Show when={!proxy()}>
+        <text fg={theme.textMuted} paddingLeft={2}>（正在读取接入信息...）</text>
+      </Show>
     </box>
   )
 }
