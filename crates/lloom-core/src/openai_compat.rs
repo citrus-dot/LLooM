@@ -112,6 +112,7 @@ pub(crate) fn completion_json(
 /// 流式 SSE 帧序列：`role delta → content delta → finish_reason → [DONE]`。
 /// 底层调用是非流式 `ai_client::chat`，content 以单帧整段下发（帧契约完整，
 /// 客户端零改造兼容；token 级真流式留待后续按需开）。
+#[cfg(test)]
 pub(crate) fn sse_frames(id: &str, created: i64, model: &str, content: &str) -> String {
     let chunk = |delta: Value, finish: Value| {
         json!({
@@ -136,6 +137,20 @@ fn sse_response(body: String) -> Response {
         )
         .body(Body::from(body))
         .unwrap()
+}
+
+fn openai_chunk(id: &str, created: i64, model: &str, delta: Value, finish: Value) -> String {
+    format!(
+        "data: {}\n\n",
+        json!({
+            "id":id,"object":"chat.completion.chunk","created":created,"model":model,
+            "choices":[{"index":0,"delta":delta,"finish_reason":finish}]
+        })
+    )
+}
+
+async fn send_frame(tx: &tokio::sync::mpsc::Sender<String>, frame: String) -> bool {
+    tx.send(frame).await.is_ok()
 }
 
 // ── Handlers ──
@@ -297,6 +312,121 @@ pub async fn chat_completions(
     let max_tokens = req.max_tokens.unwrap_or(4096);
     let temperature = req.temperature.unwrap_or(1.0);
 
+    if req.stream.unwrap_or(false) {
+        let mut names = vec![routing.model.clone()];
+        names.extend(routing.fallback_chain.clone());
+        names.dedup();
+        let mut selected = None;
+        let mut first_error = None;
+        for name in names {
+            let Some(model) = models.iter().find(|m| m.name == name) else {
+                continue;
+            };
+            let spec = crate::ai_client::ModelSpec::from(model);
+            match crate::providers::stream(&spec, &processed_messages, max_tokens, temperature)
+                .await
+            {
+                Ok(stream) => {
+                    selected = Some((model.clone(), stream));
+                    break;
+                }
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error.to_string());
+                    }
+                }
+            }
+        }
+        let Some((selected_model, mut stream)) = selected else {
+            let detail = first_error.unwrap_or_else(|| "all providers failed".into());
+            return sse_response(format!(
+                "data: {}\n\ndata: [DONE]\n\n",
+                error_body(&detail, "server_error", "upstream_failure")
+            ));
+        };
+        let model_name = selected_model.name.clone();
+        let provider = selected_model.provider_name().to_string();
+        let db = state.db.clone();
+        let id = new_completion_id();
+        let created = now_secs();
+        let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+        if !send_frame(
+            &tx,
+            openai_chunk(
+                &id,
+                created,
+                &model_name,
+                json!({"role":"assistant"}),
+                Value::Null,
+            ),
+        )
+        .await
+        {
+            return sse_response(String::new());
+        }
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut usage = crate::pricing::UsageDetail::default();
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(crate::providers::StreamEvent::Content(delta)) => {
+                        if !send_frame(
+                            &tx,
+                            openai_chunk(
+                                &id,
+                                created,
+                                &model_name,
+                                json!({"content":delta}),
+                                Value::Null,
+                            ),
+                        )
+                        .await
+                        {
+                            return;
+                        }
+                    }
+                    Ok(crate::providers::StreamEvent::Usage(value)) => usage = value,
+                    Ok(crate::providers::StreamEvent::Done) => break,
+                    Ok(crate::providers::StreamEvent::Reasoning(_)) => {}
+                    Err(error) => {
+                        send_frame(
+                            &tx,
+                            format!(
+                                "data: {}\n\n",
+                                error_body(&error.to_string(), "server_error", "upstream_failure")
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            }
+            let (cost, _, _) = priced_usage(&db, &provider, &model_name, &usage);
+            if api_key_id > 0 {
+                if let Err(error) = db.add_api_key_usage(api_key_id, cost) {
+                    eprintln!("[proxy] key usage update failed: {error}");
+                }
+            }
+            let final_frame = format!(
+                "{}data: [DONE]\n\n",
+                openai_chunk(&id, created, &model_name, json!({}), json!("stop"))
+            );
+            send_frame(&tx, final_frame).await;
+        });
+        let body = Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|frame| (Ok::<_, std::io::Error>(bytes::Bytes::from(frame)), rx))
+        }));
+        return Response::builder()
+            .header(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/event-stream; charset=utf-8"),
+            )
+            .body(body)
+            .unwrap();
+    }
+
     let chat_start = std::time::Instant::now();
     let result = chat_with_failover(
         &state.db,
@@ -366,19 +496,15 @@ pub async fn chat_completions(
 
             let id = new_completion_id();
             let created = now_secs();
-            if req.stream.unwrap_or(false) {
-                sse_response(sse_frames(&id, created, &used_model, &res.content))
-            } else {
-                Json(completion_json(
-                    &id,
-                    created,
-                    &used_model,
-                    &res.content,
-                    res.usage.prompt_tokens,
-                    res.usage.completion_tokens,
-                ))
-                .into_response()
-            }
+            Json(completion_json(
+                &id,
+                created,
+                &used_model,
+                &res.content,
+                res.usage.prompt_tokens,
+                res.usage.completion_tokens,
+            ))
+            .into_response()
         }
         Err(e) => {
             if decision_id > 0 {
@@ -387,20 +513,12 @@ pub async fn chat_completions(
                     .update_routing_decision_outcome(decision_id, "failed");
             }
             let msg = e.to_string();
-            if req.stream.unwrap_or(false) {
-                // OpenAI 流式错误约定：SSE data 帧携带 error 对象后以 [DONE] 收尾
-                sse_response(format!(
-                    "data: {}\n\ndata: [DONE]\n\n",
-                    error_body(&msg, "server_error", "upstream_failure")
-                ))
-            } else {
-                error_response(
-                    StatusCode::BAD_GATEWAY,
-                    &msg,
-                    "server_error",
-                    "upstream_failure",
-                )
-            }
+            error_response(
+                StatusCode::BAD_GATEWAY,
+                &msg,
+                "server_error",
+                "upstream_failure",
+            )
         }
     }
 }

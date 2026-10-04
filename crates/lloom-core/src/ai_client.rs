@@ -4,8 +4,10 @@
 use crate::config;
 use crate::error::{AppError, Result};
 use crate::models::Model;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::pin::Pin;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSpec {
@@ -57,6 +59,17 @@ pub struct ChatResult {
     /// CONTEXT-PLAN Phase 4：两层缓存命中（L1 精确 / L2 语义）
     #[serde(default)]
     pub cache_hit: bool,
+}
+
+pub type ChatStream = Pin<Box<dyn Stream<Item = Result<crate::providers::StreamEvent>> + Send>>;
+
+pub async fn chat_stream(
+    spec: &ModelSpec,
+    messages: &[Value],
+    max_tokens: i64,
+    temperature: f64,
+) -> Result<ChatStream> {
+    crate::providers::stream(spec, messages, max_tokens, temperature).await
 }
 
 /// chat 主路径的两层缓存装配（opt-in）。probe/shadow 必须传 None——
@@ -355,14 +368,14 @@ pub async fn orchestrate_native(
     query: &str,
     _history: &[Value],
     models: &[ModelSpec],
-    conversation_id: &str,
+    _conversation_id: &str,
     assignments: &Value,
     prepared_messages: &[Value],
     context_stats: &Value,
     is_complex: bool,
     planned_tasks: &[crate::orchestrator::SubTask],
     waves: &[Vec<usize>],
-) -> Result<Vec<SseEvent>> {
+) -> Result<Pin<Box<dyn Stream<Item = SseEvent> + Send>>> {
     use std::collections::{HashMap, HashSet};
     use std::time::Instant;
 
@@ -373,62 +386,95 @@ pub async fn orchestrate_native(
             .and_then(|name| models.iter().find(|m| m.name == name))
             .or_else(|| models.first())
     };
-    let mut events = vec![event("context", context_stats.clone())];
+    let (tx, rx) = tokio::sync::mpsc::channel::<SseEvent>(64);
+    if tx
+        .send(event("context", context_stats.clone()))
+        .await
+        .is_err()
+    {
+        return Err(AppError::Internal("orchestration receiver closed".into()));
+    }
     if !is_complex {
         let spec = assigned("general").ok_or_else(|| AppError::AiService("无可用模型".into()))?;
-        events.push(event("decompose", json!({
+        if tx.send(event("decompose", json!({
             "sub_tasks": [{"id":1,"description":query,"task_type":"general","selected_model":spec.name,"cost":0.0}],
             "total_cost": 0.0
-        })));
-        events.push(event(
-            "task_start",
-            json!({"id":1,"description":query,"model":spec.name}),
-        ));
-        let started = Instant::now();
-        let cache_dir = crate::config::data_dir()
-            .join("chroma")
-            .to_string_lossy()
-            .to_string();
-        let cache = ChatCacheCtx {
-            conversation_id,
-            cache_dir: &cache_dir,
-        };
-        let result = chat(spec, prepared_messages, 2000, 0.3, Some(&cache)).await?;
-        for part in result.content.as_bytes().chunks(96) {
-            events.push(event(
-                "token",
-                json!({"id":1,"model":spec.name,"delta":String::from_utf8_lossy(part)}),
-            ));
+        }))).await.is_err() { return Err(AppError::Internal("orchestration receiver closed".into())); }
+        if tx
+            .send(event(
+                "task_start",
+                json!({"id":1,"description":query,"model":spec.name}),
+            ))
+            .await
+            .is_err()
+        {
+            return Err(AppError::Internal("orchestration receiver closed".into()));
         }
-        let duration = started.elapsed().as_secs_f64();
-        events.push(event("task_done", json!({
-            "id":1,"model":spec.name,"task_type":"general","duration":duration,"cost":0.0,
-            "input_tokens":result.usage.prompt_tokens,"output_tokens":result.usage.completion_tokens,
-            "saved_cost":0.0,"cache_hit":result.cache_hit
+        let mut provider_stream = chat_stream(spec, prepared_messages, 2000, 0.3).await?;
+        let spec_name = spec.name.clone();
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let started = Instant::now();
+            let mut content = String::new();
+            let mut reasoning = String::new();
+            let mut usage = crate::pricing::UsageDetail::default();
+            while let Some(item) = provider_stream.next().await {
+                match item {
+                    Ok(crate::providers::StreamEvent::Content(delta)) => {
+                        content.push_str(&delta);
+                        if tx
+                            .send(event(
+                                "token",
+                                json!({"id":1,"model":spec_name,"delta":delta}),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Ok(crate::providers::StreamEvent::Reasoning(delta)) => {
+                        reasoning.push_str(&delta)
+                    }
+                    Ok(crate::providers::StreamEvent::Usage(value)) => usage = value,
+                    Ok(crate::providers::StreamEvent::Done) => break,
+                    Err(error) => {
+                        tx.send(event("error", json!({"message":error.to_string()})))
+                            .await
+                            .ok();
+                        return;
+                    }
+                }
+            }
+            let duration = started.elapsed().as_secs_f64();
+            if tx.send(event("task_done",json!({"id":1,"model":spec_name,"task_type":"general","duration":duration,"cost":0.0,"input_tokens":usage.prompt_tokens,"output_tokens":usage.completion_tokens,"saved_cost":0.0,"cache_hit":false}))).await.is_err(){return;}
+            tx.send(event("result",json!({"response":content,"model":spec_name,"cost":0.0,"input_tokens":usage.prompt_tokens,"output_tokens":usage.completion_tokens,"saved_cost":0.0,"total_duration":duration,"models_used":[spec_name],"cache_hit":false,"reasoning":if reasoning.is_empty(){None}else{Some(reasoning)}}))).await.ok();
+        });
+        return Ok(Box::pin(futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|e| (e, rx))
         })));
-        events.push(event("result", json!({
-            "response":result.content,"model":spec.name,"cost":0.0,
-            "input_tokens":result.usage.prompt_tokens,"output_tokens":result.usage.completion_tokens,
-            "saved_cost":0.0,"total_duration":duration,"models_used":[spec.name],
-            "cache_hit":result.cache_hit,"reasoning":result.reasoning
-        })));
-        return Ok(events);
     }
 
     let general =
         assigned("general").ok_or_else(|| AppError::AiService("无可用执行模型".into()))?;
     let aggregate =
         assigned("aggregate").ok_or_else(|| AppError::AiService("无可用汇总模型".into()))?;
-    events.push(event(
-        "decompose",
-        json!({
-            "sub_tasks": planned_tasks.iter().map(|t| json!({
-                "id":t.id,"description":t.description,"task_type":t.task_type,
-                "depends_on":t.depends_on,"estimated_output_tokens":t.estimated_output_tokens,
-                "selected_model":general.name,"cost":0.0
-            })).collect::<Vec<_>>(), "total_cost":0.0
-        }),
-    ));
+    if tx
+        .send(event(
+            "decompose",
+            json!({
+                "sub_tasks": planned_tasks.iter().map(|t| json!({
+                    "id":t.id,"description":t.description,"task_type":t.task_type,
+                    "depends_on":t.depends_on,"estimated_output_tokens":t.estimated_output_tokens,
+                    "selected_model":general.name,"cost":0.0
+                })).collect::<Vec<_>>(), "total_cost":0.0
+            }),
+        ))
+        .await
+        .is_err()
+    {
+        return Err(AppError::Internal("orchestration receiver closed".into()));
+    }
 
     let tasks: HashMap<usize, &crate::orchestrator::SubTask> =
         planned_tasks.iter().map(|t| (t.id, t)).collect();
@@ -449,10 +495,16 @@ pub async fn orchestrate_native(
     for wave in waves {
         for id in wave {
             if let Some(task) = tasks.get(id) {
-                events.push(event(
-                    "task_start",
-                    json!({"id":task.id,"description":task.description,"model":general.name}),
-                ));
+                if tx
+                    .send(event(
+                        "task_start",
+                        json!({"id":task.id,"description":task.description,"model":general.name}),
+                    ))
+                    .await
+                    .is_err()
+                {
+                    return Err(AppError::Internal("orchestration receiver closed".into()));
+                }
             }
         }
         // Calls are kept deterministic here; provider concurrency is added once
@@ -506,15 +558,15 @@ pub async fn orchestrate_native(
                 total_out += result.usage.completion_tokens;
                 used.insert(used_spec.name.clone());
                 completed.insert(task.id, result.content);
-                events.push(event("task_done", json!({
+                if tx.send(event("task_done", json!({
                     "id":task.id,"model":used_spec.name,"task_type":task.task_type,"duration":duration,
                     "cost":0.0,"input_tokens":result.usage.prompt_tokens,"output_tokens":result.usage.completion_tokens,
                     "saved_cost":0.0,"cache_hit":result.cache_hit
-                })));
+                }))).await.is_err(){return Err(AppError::Internal("orchestration receiver closed".into()));}
             } else {
                 let detail = error.unwrap_or_else(|| "所有候选模型均失败".into());
                 completed.insert(task.id, format!("执行失败: {detail}"));
-                events.push(event("task_done", json!({"id":task.id,"model":general.name,"task_type":task.task_type,"duration":duration,"error":detail})));
+                if tx.send(event("task_done", json!({"id":task.id,"model":general.name,"task_type":task.task_type,"duration":duration,"error":detail}))).await.is_err(){return Err(AppError::Internal("orchestration receiver closed".into()));}
             }
         }
     }
@@ -533,34 +585,60 @@ pub async fn orchestrate_native(
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    events.push(event(
-        "task_start",
-        json!({"id":0,"description":"汇总最终回答","model":aggregate.name}),
-    ));
-    let aggregation = chat(aggregate, &[
-        json!({"role":"system","content":"将子任务结果汇总成连贯、完整的最终回答；如实保留失败信息，不得编造。"}),
-        json!({"role":"user","content":format!("原始任务：{query}\n\n子任务执行结果：\n{summary}")})
-    ], 4096, 0.3, None).await;
-    let (final_text, agg_usage, reasoning) = match aggregation {
-        Ok(result) => (result.content, result.usage, result.reasoning),
-        Err(_) => (summary, Default::default(), None),
-    };
-    for part in final_text.as_bytes().chunks(96) {
-        events.push(event(
-            "token",
-            json!({"id":0,"model":aggregate.name,"delta":String::from_utf8_lossy(part)}),
-        ));
+    if tx
+        .send(event(
+            "task_start",
+            json!({"id":0,"description":"汇总最终回答","model":aggregate.name}),
+        ))
+        .await
+        .is_err()
+    {
+        return Err(AppError::Internal("orchestration receiver closed".into()));
     }
-    total_in += agg_usage.prompt_tokens;
-    total_out += agg_usage.completion_tokens;
-    used.insert(aggregate.name.clone());
-    events.push(event("task_done", json!({"id":0,"model":aggregate.name,"task_type":"aggregate","duration":0.0,"cost":0.0,"input_tokens":agg_usage.prompt_tokens,"output_tokens":agg_usage.completion_tokens,"cache_hit":false})));
-    events.push(event("result", json!({
-        "response":final_text,"model":aggregate.name,"cost":0.0,"input_tokens":total_in,
-        "output_tokens":total_out,"saved_cost":0.0,"total_duration":total_duration,
-        "models_used":used.into_iter().collect::<Vec<_>>(),"cache_hit":false,"reasoning":reasoning
-    })));
-    Ok(events)
+    let aggregation_messages = vec![
+        json!({"role":"system","content":"将子任务结果汇总成连贯、完整的最终回答；如实保留失败信息，不得编造。"}),
+        json!({"role":"user","content":format!("原始任务：{query}\n\n子任务执行结果：\n{summary}")}),
+    ];
+    let mut aggregate_stream = chat_stream(aggregate, &aggregation_messages, 4096, 0.3).await?;
+    let aggregate_name = aggregate.name.clone();
+    tokio::spawn(async move {
+        use futures::StreamExt;
+        let mut final_text = String::new();
+        let mut reasoning = String::new();
+        let mut agg_usage = crate::pricing::UsageDetail::default();
+        while let Some(item) = aggregate_stream.next().await {
+            match item {
+                Ok(crate::providers::StreamEvent::Content(delta)) => {
+                    final_text.push_str(&delta);
+                    if tx
+                        .send(event(
+                            "token",
+                            json!({"id":0,"model":aggregate_name,"delta":delta}),
+                        ))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Ok(crate::providers::StreamEvent::Reasoning(delta)) => reasoning.push_str(&delta),
+                Ok(crate::providers::StreamEvent::Usage(v)) => agg_usage = v,
+                Ok(crate::providers::StreamEvent::Done) => break,
+                Err(_) => {
+                    final_text = summary.clone();
+                    break;
+                }
+            }
+        }
+        total_in += agg_usage.prompt_tokens;
+        total_out += agg_usage.completion_tokens;
+        used.insert(aggregate_name.clone());
+        if tx.send(event("task_done",json!({"id":0,"model":aggregate_name,"task_type":"aggregate","duration":0.0,"cost":0.0,"input_tokens":agg_usage.prompt_tokens,"output_tokens":agg_usage.completion_tokens,"cache_hit":false}))).await.is_err(){return;}
+        tx.send(event("result",json!({"response":final_text,"model":aggregate_name,"cost":0.0,"input_tokens":total_in,"output_tokens":total_out,"saved_cost":0.0,"total_duration":total_duration,"models_used":used.into_iter().collect::<Vec<_>>(),"cache_hit":false,"reasoning":if reasoning.is_empty(){None}else{Some(reasoning)}}))).await.ok();
+    });
+    Ok(Box::pin(futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|e| (e, rx))
+    })))
 }
 
 /// Parse an SSE body into a Vec of {event, data} events.

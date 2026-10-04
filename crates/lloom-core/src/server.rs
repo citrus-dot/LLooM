@@ -547,6 +547,10 @@ pub(crate) fn validate_messages(messages: &[Value]) -> std::result::Result<(), S
     Ok(())
 }
 
+async fn send_sse(tx: &tokio::sync::mpsc::Sender<String>, payload: Value) -> bool {
+    tx.send(format!("data: {payload}\n\n")).await.is_ok()
+}
+
 async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -> Response {
     // 边界校验（习惯③）：畸形 messages 此前穿透到 litellm 才报英文原生错误，
     // 非法组合止步于 HTTP/SSE 边界
@@ -604,8 +608,8 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
 
     // P0.d：路由结果必须落在注册表内；direct 未注册 / plan 无候选 → 明确报错，
     // 不再伪造空 spec 继续调用。
-    let primary_provider: &str = match models.iter().find(|m| m.name == routing.model) {
-        Some(m) => m.provider_name(),
+    match models.iter().find(|m| m.name == routing.model) {
+        Some(_) => {}
         None => {
             let detail = if let Some(d) = routing.method.strip_prefix("plan_error:") {
                 format!("路由失败：{d}")
@@ -663,132 +667,130 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
         })
     );
 
-    // P3：按 primary + fallback_chain 故障转移（失败自动打健康哨点并跳升重试）
-    let chat_start = std::time::Instant::now();
-    // CONTEXT-PLAN Phase 4：主聊天路径装配两层缓存（无会话也走全局精确缓存）
-    let chat_conv_id = req.conversation_id.clone().unwrap_or_default();
-    let chat_cache_dir = config::data_dir()
-        .join("chroma")
-        .to_string_lossy()
-        .to_string();
-    let chat_cache = ai_client::ChatCacheCtx {
-        conversation_id: &chat_conv_id,
-        cache_dir: &chat_cache_dir,
-    };
-    let tail = match chat_with_failover(
-        &state.db,
-        FailoverRequest {
-            models: &models,
-            task_type: &routing_task_type,
-            primary: &routing.model,
-            fallback_chain: &routing.fallback_chain,
-            messages: &processed_messages,
-            max_tokens: 500,
-            temperature: 0.3,
-            cache: Some(chat_cache),
-        },
-    )
-    .await
-    {
-        Ok((res, used_model)) => {
-            if decision_id > 0 {
-                let _ = state
-                    .db
-                    .update_routing_decision_outcome(decision_id, "success");
+    let mut names = vec![routing.model.clone()];
+    names.extend(routing.fallback_chain.clone());
+    names.dedup();
+    let mut selected = None;
+    let mut first_error = None;
+    for name in names {
+        let Some(model) = models.iter().find(|m| m.name == name) else {
+            continue;
+        };
+        let spec = ModelSpec::from(model);
+        match ai_client::chat_stream(&spec, &processed_messages, 500, 0.3).await {
+            Ok(stream) => {
+                selected = Some((model.clone(), stream));
+                break;
             }
-            // 实际响应模型的 provider 可能因 fallback 与主选不同（逐模型定位真源）
-            let provider = models
-                .iter()
-                .find(|m| m.name == used_model)
-                .map(|m| m.provider_name())
-                .unwrap_or(primary_provider);
-            // PRICING-PLAN §4.2/§6.1：Rust 单一计价真源，按真实 usage 分项计算并落库。
-            // （est_cost（总额估算）恒 0：总额对账已由 C2 输入侧分项取代）
-            // P1.a：只记成功路径；失败/重试走 routing_decisions.outcome。
-            let latency_ms = chat_start.elapsed().as_secs_f64() * 1000.0;
-            let (mut act_cost, act_input_cost, zm) =
-                priced_usage(&state.db, provider, &used_model, &res.usage);
-            // Phase 4 缓存命中记账（与 orchestrate 同约定）：供应商未被真正调用，
-            // 本应花费的金额保留进 cache_saved_cost（「缓存为您节省」账实来源），实际 cost 记 0。
-            let cache_saved_cost = if res.cache_hit { act_cost } else { 0.0 };
-            if res.cache_hit {
-                act_cost = 0.0;
+            Err(e) => {
+                crate::health::record_outcome(&state.db, &name, false);
+                if first_error.is_none() {
+                    first_error = Some(e.to_string());
+                }
             }
-            let _ = state.db.insert_usage(&db::UsageRecord {
-                model_name: &used_model,
-                user_id: "default",
-                input_tokens: res.usage.prompt_tokens,
-                output_tokens: res.usage.completion_tokens,
-                cost: act_cost,
-                task_type: Some(&routing_task_type),
-                cache_hit: false,
-                latency_ms: Some(latency_ms),
-                request_id: Some(&request_id),
-                extra: Some(db::UsageExtra {
-                    cached_tokens: res.usage.cached_tokens,
-                    reasoning_tokens: res.usage.reasoning_tokens,
-                    est_cost: 0.0,
-                    act_cost,
-                    zone_multiplier: zm,
-                    // B15/PR-5：chat 用量带会话 ID——会话亲和回查与缓存证据的数据源
-                    conversation_id: req.conversation_id.clone(),
-                    field_missing: res.usage.field_missing,
-                    cache_saved_cost,
-                    api_source: None,
-                    est_input_cost: routing_est_input_cost,
-                    act_input_cost,
-                }),
-            });
-            // P1.c：正常完成信号 → 该 模型×任务 的 ewma_quality 上修（+0.7）
-            state
-                .db
-                .upsert_model_task_score_signal(
-                    &used_model,
-                    &routing_task_type,
-                    QualitySignalKind::Success,
-                )
-                .ok();
-            // P1.d：按 shadow_ratio 概率后台采样双跑，积累 AIQ 成本—质量样本（不改返回）。
-            maybe_shadow_sample(
-                state.db.clone(),
-                models.clone(),
-                routing_task_type.clone(),
-                user_text.clone(),
-            );
-            format!(
-                "data: {}\n\n",
-                json!({
-                    "done": true,
-                    "content": res.content,
-                    "model": res.model,
-                    "cost": act_cost,
-                    "input_tokens": res.usage.prompt_tokens,
-                    "output_tokens": res.usage.completion_tokens,
-                    "cached_tokens": res.usage.cached_tokens,
-                    "cache_hit": res.cache_hit,
-                    "reasoning": res.reasoning,
-                })
-            )
         }
-        Err(e) => {
-            if decision_id > 0 {
-                let _ = state
-                    .db
-                    .update_routing_decision_outcome(decision_id, "failed");
-            }
-            format!(
-                "data: {}\n\n",
-                json!({ "error": true, "detail": e.to_string() })
-            )
-        }
+    }
+    let Some((selected_model, mut provider_stream)) = selected else {
+        return sse_error(&first_error.unwrap_or_else(|| "所有候选模型均调用失败".into()));
     };
-
+    let used_model = selected_model.name.clone();
+    let provider = selected_model.provider_name().to_string();
+    let db = state.db.clone();
+    let models_for_shadow = models.clone();
+    let conversation_id = req.conversation_id.clone();
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+    if tx.send(head).await.is_err() {
+        return sse_error("客户端已断开");
+    }
+    tokio::spawn(async move {
+        use futures::StreamExt;
+        let started = std::time::Instant::now();
+        let mut content = String::new();
+        let mut reasoning = String::new();
+        let mut usage = pricing::UsageDetail::default();
+        let mut stream_error = None;
+        while let Some(item) = provider_stream.next().await {
+            match item {
+                Ok(crate::providers::StreamEvent::Content(delta)) => {
+                    content.push_str(&delta);
+                    if !send_sse(&tx, json!({"chunk":delta})).await {
+                        return;
+                    }
+                }
+                Ok(crate::providers::StreamEvent::Reasoning(delta)) => reasoning.push_str(&delta),
+                Ok(crate::providers::StreamEvent::Usage(value)) => usage = value,
+                Ok(crate::providers::StreamEvent::Done) => break,
+                Err(e) => {
+                    stream_error = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+        if let Some(detail) = stream_error {
+            crate::health::record_outcome(&db, &used_model, false);
+            send_sse(&tx, json!({"error":true,"detail":detail})).await;
+            return;
+        }
+        crate::health::record_outcome(&db, &used_model, true);
+        if decision_id > 0 {
+            if let Err(error) = db.update_routing_decision_outcome(decision_id, "success") {
+                eprintln!("[stream] update decision failed: {error}");
+            }
+        }
+        let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let (act_cost, act_input_cost, zm) = priced_usage(&db, &provider, &used_model, &usage);
+        if let Err(error) = db.insert_usage(&db::UsageRecord {
+            model_name: &used_model,
+            user_id: "default",
+            input_tokens: usage.prompt_tokens,
+            output_tokens: usage.completion_tokens,
+            cost: act_cost,
+            task_type: Some(&routing_task_type),
+            cache_hit: false,
+            latency_ms: Some(latency_ms),
+            request_id: Some(&request_id),
+            extra: Some(db::UsageExtra {
+                cached_tokens: usage.cached_tokens,
+                reasoning_tokens: usage.reasoning_tokens,
+                est_cost: 0.0,
+                act_cost,
+                zone_multiplier: zm,
+                conversation_id,
+                field_missing: usage.field_missing,
+                cache_saved_cost: 0.0,
+                api_source: None,
+                est_input_cost: routing_est_input_cost,
+                act_input_cost,
+            }),
+        }) {
+            eprintln!("[stream] usage persistence failed: {error}");
+        }
+        if let Err(error) = db.upsert_model_task_score_signal(
+            &used_model,
+            &routing_task_type,
+            QualitySignalKind::Success,
+        ) {
+            eprintln!("[stream] quality signal failed: {error}");
+        }
+        maybe_shadow_sample(
+            db.clone(),
+            models_for_shadow,
+            routing_task_type.clone(),
+            user_text,
+        );
+        send_sse(&tx,json!({"done":true,"content":content,"model":used_model,"cost":act_cost,"input_tokens":usage.prompt_tokens,"output_tokens":usage.completion_tokens,"cached_tokens":usage.cached_tokens,"cache_hit":false,"reasoning":if reasoning.is_empty(){None}else{Some(reasoning)}})).await;
+    });
+    let body = Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv()
+            .await
+            .map(|s| (Ok::<_, std::io::Error>(bytes::Bytes::from(s)), rx))
+    }));
     Response::builder()
         .header(
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/event-stream"),
         )
-        .body(Body::from(format!("{head}{tail}")))
+        .body(body)
         .unwrap()
 }
 
@@ -940,7 +942,7 @@ async fn orchestrate_stream(
     }
     let dependency_waves = crate::orchestrator::dependency_waves(&planned_tasks);
 
-    let native_events = match ai_client::orchestrate_native(
+    let events = match ai_client::orchestrate_native(
         &state.db,
         &req.query,
         &history,
@@ -958,7 +960,6 @@ async fn orchestrate_stream(
         Ok(e) => e,
         Err(e) => return err_response(e),
     };
-    let events = futures::stream::iter(native_events);
 
     // Forward each event as it arrives (true SSE, not buffered). The Python
     // side streams `token` deltas; the browser renders them incrementally.
