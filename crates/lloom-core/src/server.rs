@@ -1,6 +1,6 @@
 //! Axum HTTP server — pure REST API.
 //!
-//! All LLM work is delegated to the Python AI micro-service (`ai_client`).
+//! LLM work is executed through native Rust provider adapters (`ai_client`).
 //! No RPC bridge, no stringly-typed dispatch — every endpoint is a typed
 //! handler on a real resource path.
 
@@ -83,7 +83,6 @@ pub(crate) fn priced_usage(
 pub struct Children {
     pub api: Option<std::process::Child>,
     pub ollama: Option<std::process::Child>,
-    pub ai: Option<std::process::Child>,
 }
 
 impl AppState {
@@ -126,7 +125,7 @@ struct OrchestrateBody {
     #[serde(default)]
     history: Vec<Value>,
     #[serde(default)]
-    sr_domain: Option<String>,
+    _sr_domain: Option<String>,
     /// Server-side context building: when present, history is loaded from the
     /// conversation store (SQLite) and the client-sent `history` is ignored.
     #[serde(default)]
@@ -534,7 +533,11 @@ pub(crate) fn validate_messages(messages: &[Value]) -> std::result::Result<(), S
         }
         if let Some(c) = m.get("content") {
             if !(c.is_string() || c.is_array() || c.is_null()) {
-                let kind = if c.is_object() { "object" } else { "number/bool" };
+                let kind = if c.is_object() {
+                    "object"
+                } else {
+                    "number/bool"
+                };
                 return Err(format!(
                     "messages[{i}] 的 content 类型非法（{kind}）：应为字符串或多模态分段数组"
                 ));
@@ -671,7 +674,6 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
     let chat_cache = ai_client::ChatCacheCtx {
         conversation_id: &chat_conv_id,
         cache_dir: &chat_cache_dir,
-        similarity_threshold: config::cache_threshold(&state.db),
     };
     let tail = match chat_with_failover(
         &state.db,
@@ -808,11 +810,6 @@ async fn orchestrate_stream(
     // _cache_ready flag (set only after /v1/cache/init succeeds), so passing a
     // non-empty path here is safe — it will NOT trigger a download unless the
     // user has explicitly pre-initialized the embedding model.
-    let cache_dir = config::data_dir()
-        .join("chroma")
-        .to_string_lossy()
-        .to_string();
-
     // Server-side context building: load history + rolling summary from the
     // conversation store. Client-sent `history` is the legacy fallback (CLI/TUI).
     let (history, conversation_id, summary, summary_upto) = match &req.conversation_id {
@@ -836,16 +833,24 @@ async fn orchestrate_stream(
         .as_deref()
         .filter(|m| models.iter().any(|mdl| mdl.name == *m))
         .map(|m| m.to_string());
+    let routable_models: Vec<Model> = models
+        .iter()
+        .filter(|m| {
+            !matches!(m.backend, Backend::Cloud { .. })
+                || !config::api_key_for(m.api_key_env()).is_empty()
+        })
+        .cloned()
+        .collect();
     let role_model = |role: &str| -> String {
         if role == "general" {
             if let Some(p) = pinned_general.as_deref() {
                 return p.to_string();
             }
         }
-        router::plan_decision(&state.db, role, &models)
+        router::plan_decision(&state.db, role, &routable_models)
             .ok()
             .map(|o| o.primary)
-            .or_else(|| specs.first().map(|s| s.name.clone()))
+            .or_else(|| routable_models.first().map(|m| m.name.clone()))
             .unwrap_or_default()
     };
     let assignments = json!({
@@ -854,23 +859,106 @@ async fn orchestrate_stream(
         "aggregate": role_model("aggregate"),
     });
 
-    let events = match ai_client::orchestrate_stream(
+    // Provider-independent preprocessing now belongs to Rust. Python receives
+    // the prepared window and decision only as execution inputs while LiteLLM
+    // remains the provider transport.
+    const LIGHT_SYSTEM: &str = "你是一个专业的AI助手。请认真完成以下任务。请结合对话上下文回答。";
+    let mut rust_context = crate::context::build_context(
+        &req.query,
+        &history,
+        summary.as_deref().unwrap_or(""),
+        summary_upto.max(0) as usize,
+        LIGHT_SYSTEM,
+        crate::context::context_budget(),
+    );
+    let rust_is_complex = crate::orchestrator::is_complex(&req.query);
+
+    // Rolling-summary policy and persistence now live in Rust. The assigned
+    // model call still crosses the temporary LiteLLM transport boundary.
+    if rust_context.stats.needs_summary {
+        let end = rust_context.stats.dropped.min(history.len());
+        let start = rust_context.summary_upto.min(end);
+        if start < end {
+            if let Some(summary_model) = assignments
+                .get("decompose")
+                .and_then(Value::as_str)
+                .and_then(|name| specs.iter().find(|spec| spec.name == name))
+            {
+                if let Ok(new_summary) =
+                    ai_client::summarize(summary_model, &rust_context.summary, &history[start..end])
+                        .await
+                {
+                    if !new_summary.is_empty() {
+                        rust_context = crate::context::build_context(
+                            &req.query,
+                            &history,
+                            &new_summary,
+                            end,
+                            LIGHT_SYSTEM,
+                            crate::context::context_budget(),
+                        );
+                        if let Some(cid) = conversation_id.as_deref() {
+                            let _ = conversations::set_summary(
+                                &state.db,
+                                cid,
+                                &new_summary,
+                                end as i64,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let context_stats = serde_json::to_value(&rust_context.stats).unwrap_or_default();
+
+    // Rust owns decomposition parsing, heuristic fallback and dependency waves.
+    let mut planned_tasks = Vec::new();
+    if rust_is_complex {
+        if let Some(decompose_model) = assignments
+            .get("decompose")
+            .and_then(Value::as_str)
+            .and_then(|name| specs.iter().find(|spec| spec.name == name))
+        {
+            planned_tasks = ai_client::decompose(decompose_model, &req.query)
+                .await
+                .unwrap_or_default();
+        }
+        if planned_tasks.is_empty() {
+            planned_tasks = crate::orchestrator::fallback_decompose(&req.query);
+        }
+        if planned_tasks.is_empty() {
+            planned_tasks.push(crate::orchestrator::SubTask {
+                id: 1,
+                description: req.query.clone(),
+                task_type: "complex_reasoning".into(),
+                depends_on: Vec::new(),
+                estimated_output_tokens: 500,
+            });
+        }
+    }
+    let dependency_waves = crate::orchestrator::dependency_waves(&planned_tasks);
+
+    let native_events = match ai_client::orchestrate_native(
         &state.db,
         &req.query,
         &history,
-        req.sr_domain.as_deref().unwrap_or(""),
         &specs,
-        &cache_dir,
-        conversation_id.as_deref(),
-        summary.as_deref(),
-        summary_upto,
+        conversation_id.as_deref().unwrap_or(""),
         &assignments,
+        &rust_context.messages,
+        &context_stats,
+        rust_is_complex,
+        &planned_tasks,
+        &dependency_waves,
     )
     .await
     {
         Ok(e) => e,
-        Err(e) => return err_response(AppError::AiService(e.to_string())),
+        Err(e) => return err_response(e),
     };
+    let events = futures::stream::iter(native_events);
 
     // Forward each event as it arrives (true SSE, not buffered). The Python
     // side streams `token` deltas; the browser renders them incrementally.
@@ -1065,26 +1153,15 @@ async fn orchestrate_stream(
 /// (a stale process holding the port) — reported as "conflict".
 async fn services_status(State(state): State<AppState>) -> Json<Value> {
     // Port probes (async HTTP).
-    let ai_health = crate::processes::check_ai_health().await;
-    let ai_responding = ai_health.status == "ok";
-    // API keys configured per-model live in the DB (Models page) and are
-    // invisible to the Python service's env-based readiness probe — OR them
-    // in so a model with a key counts as a usable backend.
-    let model_key_ready = state
+    let provider_ready = state
         .db
         .list_models(true)
-        .map(|models| {
-            models
-                .iter()
-                .any(|m| !config::api_key_for(m.api_key_env()).is_empty())
-        })
+        .map(|m| !m.is_empty())
         .unwrap_or(false);
-    let ai_ready = ai_health.ready || model_key_ready;
     let ollama_responding = crate::processes::check_ollama_health().await;
 
     // Child handles we manage. `None` means we reused an existing instance
     // (start_* returned Ok(None)); that's healthy, not a conflict.
-    let ai_owns = owns_child(&state, "ai");
     let ollama_owns = owns_child(&state, "ollama");
 
     let service = |name: &str, owns: bool, responding: bool| -> Value {
@@ -1105,21 +1182,6 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
         }
     };
 
-    let ai_status = if ai_responding {
-        if ai_ready {
-            json!({"name": "AI Service", "status": "Up (healthy)", "healthy": true, "detail": ""})
-        } else {
-            json!({
-                "name": "AI Service",
-                "status": "运行但未配置模型",
-                "healthy": false,
-                "detail": "模型未配置 API Key 且 Ollama 不可达（请在「模型管理」为模型设置 API Key）"
-            })
-        }
-    } else {
-        service("AI Service", ai_owns, ai_responding)
-    };
-
     let mut services = json!([
         {
             "name": "Core Server",
@@ -1130,7 +1192,7 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
             "detail": "HTTP 自检通过",
         },
         service("Ollama", ollama_owns, ollama_responding),
-        ai_status,
+        {"name":"Native Providers","status":if provider_ready {"Up (configured)"} else {"未配置模型"},"healthy":provider_ready,"detail":"Rust 原生 OpenAI-compatible / Anthropic"},
     ]);
     // Add an install hint to the Ollama entry when it's not installed at all.
     if let Some(ollama) = services
@@ -1167,7 +1229,6 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
 fn owns_child(state: &AppState, name: &str) -> bool {
     let mut guard = state.children.lock().unwrap();
     let child = match name {
-        "ai" => guard.ai.as_mut(),
         "ollama" => guard.ollama.as_mut(),
         _ => return false,
     };
@@ -1175,60 +1236,6 @@ fn owns_child(state: &AppState, name: &str) -> bool {
         Some(c) => c.try_wait().map(|st| st.is_none()).unwrap_or(false),
         None => false,
     }
-}
-
-async fn service_start(State(state): State<AppState>, Path(name): Path<String>) -> Json<Value> {
-    let result = match name.as_str() {
-        "ollama" => start_ollama_proc(&state).await,
-        "ai" => start_ai_proc(&state).await,
-        other => format!("unknown service: {other}"),
-    };
-    Json(json!({ "message": result }))
-}
-
-async fn service_stop(State(state): State<AppState>, Path(name): Path<String>) -> Json<Value> {
-    let result = match name.as_str() {
-        "ollama" => stop_ollama_proc(&state),
-        "ai" => stop_ai_proc(&state),
-        other => format!("unknown service: {other}"),
-    };
-    Json(json!({ "message": result }))
-}
-
-async fn service_restart(State(state): State<AppState>, Path(name): Path<String>) -> Json<Value> {
-    let result = match name.as_str() {
-        "ollama" => {
-            let _ = stop_ollama_proc(&state);
-            start_ollama_proc(&state).await
-        }
-        "ai" => {
-            let _ = stop_ai_proc(&state);
-            start_ai_proc(&state).await
-        }
-        other => format!("unknown service: {other}"),
-    };
-    Json(json!({ "message": result }))
-}
-
-async fn service_logs(Path(name): Path<String>) -> Json<Value> {
-    let file = match name.as_str() {
-        "ollama" => "ollama.log",
-        "ai" => "ai.log",
-        _ => "ai.log",
-    };
-    let path = config::log_dir().join(file);
-    let content =
-        tokio::task::spawn_blocking(move || std::fs::read_to_string(path).unwrap_or_default())
-            .await
-            .unwrap_or_default();
-    let tail: Vec<&str> = content.lines().rev().take(200).collect();
-    let logs: String = tail
-        .iter()
-        .rev()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    Json(json!({ "logs": logs }))
 }
 
 /// Full cleanup: kill owned child processes (AI service, Ollama) then pkill any
@@ -1239,10 +1246,6 @@ pub fn shutdown_all(state: &AppState) {
     // 1. Kill processes we spawned (we hold their Child handles).
     {
         let mut guard = state.children.lock().unwrap();
-        if let Some(child) = guard.ai.as_mut() {
-            let _ = child.kill();
-            guard.ai = None;
-        }
         if let Some(child) = guard.ollama.as_mut() {
             let _ = child.kill();
             guard.ollama = None;
@@ -1251,14 +1254,7 @@ pub fn shutdown_all(state: &AppState) {
     // 2. Kill any external instances we didn't spawn (e.g. started by a
     //    previous run, or a system-managed Ollama). Matches dev + bundled
     //    invocation patterns.
-    for pat in [
-        "uvicorn api.ai_service:app",
-        "ai_service.py --port",
-        "ai-service/ai-service",
-        "ollama serve",
-    ] {
-        let _ = Command::new("pkill").args(["-f", pat]).status();
-    }
+    let _ = Command::new("pkill").args(["-f", "ollama serve"]).status();
 }
 
 async fn shutdown_server(State(state): State<AppState>) -> Json<Value> {
@@ -1273,20 +1269,6 @@ async fn shutdown_server(State(state): State<AppState>) -> Json<Value> {
         std::process::exit(0);
     });
     Json(json!({ "shutting_down": true }))
-}
-
-// ── Semantic-cache management (proxied to the AI service) ──
-
-async fn cache_init() -> Result<Json<Value>> {
-    Ok(Json(ai_client::cache_init().await?))
-}
-
-async fn cache_status() -> Result<Json<Value>> {
-    Ok(Json(ai_client::cache_status().await?))
-}
-
-async fn cache_cleanup() -> Result<Json<Value>> {
-    Ok(Json(ai_client::cache_cleanup().await?))
 }
 
 // ── System ──
@@ -1836,6 +1818,10 @@ async fn probe_down_models(db: &db::Db) {
     for m in models
         .iter()
         .filter(|m| m.health_state == "down" || m.health_state == "degraded")
+        .filter(|m| {
+            !matches!(m.backend, crate::models::Backend::Cloud { .. })
+                || !config::api_key_for(m.api_key_env()).is_empty()
+        })
     {
         // 最小试探：1 token、低温度、仅确认可达（不产生有意义的答复）。
         let spec = ai_client::ModelSpec::from(m);
@@ -1843,7 +1829,9 @@ async fn probe_down_models(db: &db::Db) {
             "role": "user",
             "content": "ping"
         }]);
-        let ok = ai_client::chat(&spec, &[probe_msg], 1, 0.0, None).await.is_ok();
+        let ok = ai_client::chat(&spec, &[probe_msg], 1, 0.0, None)
+            .await
+            .is_ok();
         let state = crate::health::record_outcome(db, &m.name, ok);
         if ok {
             eprintln!("[health] probe recovered {} → {state}", m.name);
@@ -1898,8 +1886,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/probe/budget", put(probe_budget_update))
         // OpenAI 兼容代理接入配置（N1 向导）
         .route("/api/proxy/config", get(crate::openai_compat::proxy_config))
-        .route("/api/proxy/token", put(crate::openai_compat::proxy_token_update))
-        .route("/api/proxy/selftest", post(crate::openai_compat::proxy_selftest))
+        .route(
+            "/api/api-keys",
+            get(crate::openai_compat::api_keys_list).post(crate::openai_compat::api_key_create),
+        )
+        .route(
+            "/api/api-keys/{id}",
+            put(crate::openai_compat::api_key_update).delete(crate::openai_compat::api_key_delete),
+        )
+        .route(
+            "/api/proxy/selftest",
+            post(crate::openai_compat::proxy_selftest),
+        )
         // Stats
         .route("/api/stats", get(get_stats))
         // Conversations
@@ -1946,78 +1944,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/routing/review/adopt", post(routing_review_adopt))
         // Services (process management)
         .route("/api/services/status", get(services_status))
-        .route("/api/services/{name}/start", post(service_start))
-        .route("/api/services/{name}/stop", post(service_stop))
-        .route("/api/services/{name}/restart", post(service_restart))
-        .route("/api/services/{name}/logs", get(service_logs))
         // System
         .route("/api/system/open-folder", post(open_folder))
         .route("/api/system/open-web", post(open_web))
         .route("/api/shutdown", post(shutdown_server))
         // Semantic cache management
-        .route("/api/cache/init", post(cache_init))
-        .route("/api/cache/status", get(cache_status))
-        .route("/api/cache/cleanup", post(cache_cleanup))
-        .route("/api/cache/feedback", post(cache_feedback))
-        .route(
-            "/api/cache/threshold",
-            get(cache_threshold_get).post(cache_autotune_set),
-        )
         .with_state(state)
-}
-
-// ── Semantic-cache feedback + self-tuning ──
-
-#[derive(Deserialize)]
-struct CacheFeedbackBody {
-    sim: f64,
-    decision: String,
-    correct: bool,
-}
-
-async fn cache_feedback(
-    State(state): State<AppState>,
-    Json(req): Json<CacheFeedbackBody>,
-) -> Json<Value> {
-    let decision = if req.decision == "hit" { "hit" } else { "miss" };
-    // Record the inline-question answer as a labeled calibration sample.
-    let _ = state.db.insert_cache_calibration(
-        req.sim,
-        decision,
-        "default",
-        Some(req.correct),
-        "inline_question",
-    );
-
-    let auto = state
-        .db
-        .get_setting("cache_auto_tune")
-        .ok()
-        .flatten()
-        .map(|v| v != "0" && v != "false")
-        .unwrap_or(true);
-
-    let mut suggested: Option<f64> = None;
-    if auto {
-        if let Ok(samples) = state.db.calibration_labeled_samples() {
-            if let Some(t) = db::optimal_threshold(&samples, 0.01) {
-                let cur = config::cache_threshold(&state.db);
-                let next = cur + 0.5 * (t - cur); // gradual move, avoids abrupt shifts
-                if config::set_cache_threshold(&state.db, next).is_ok() {
-                    suggested = Some(next);
-                    let _ = state
-                        .db
-                        .set_setting("cache_threshold_suggested", &format!("{t:.4}"));
-                }
-            }
-        }
-    }
-    Json(json!({
-        "ok": true,
-        "threshold": config::cache_threshold(&state.db),
-        "suggested": suggested,
-        "auto_tune": auto,
-    }))
 }
 
 // ── P1.d 影子评测（shadow evaluation）──
@@ -2104,30 +2036,31 @@ async fn run_shadow_pair(
             );
             // 修复：priced_usage 第一参是 provider（此前误传模型名 → spec 永远查不到 →
             // 影子成本恒 0，三线对比/AIQ/权重建议全部失效）
-            let cost_of =
-                |res: &std::result::Result<ai_client::ChatResult, AppError>, spec_model: &str| -> f64 {
-                    match res {
-                        Ok(x) => {
-                            let provider = models
-                                .iter()
-                                .find(|m| m.name == spec_model)
-                                .map(|m| m.provider_name().to_string())
-                                .unwrap_or_default();
-                            let (c, _, _) = priced_usage(db, &provider, &x.model, &x.usage);
-                            if c == 0.0
-                                && x.usage.prompt_tokens + x.usage.completion_tokens > 0
-                                && !spec_model.is_empty()
-                            {
-                                // 护栏（历史 bug）：收费模型 tokens>0 却计价 0 → spec 查找失败，样本不可信
-                                eprintln!(
+            let cost_of = |res: &std::result::Result<ai_client::ChatResult, AppError>,
+                           spec_model: &str|
+             -> f64 {
+                match res {
+                    Ok(x) => {
+                        let provider = models
+                            .iter()
+                            .find(|m| m.name == spec_model)
+                            .map(|m| m.provider_name().to_string())
+                            .unwrap_or_default();
+                        let (c, _, _) = priced_usage(db, &provider, &x.model, &x.usage);
+                        if c == 0.0
+                            && x.usage.prompt_tokens + x.usage.completion_tokens > 0
+                            && !spec_model.is_empty()
+                        {
+                            // 护栏（历史 bug）：收费模型 tokens>0 却计价 0 → spec 查找失败，样本不可信
+                            eprintln!(
                                     "[shadow] ⚠ {spec_model} tokens>0 但计价为 0（PriceSpec 缺失或 provider 不匹配）"
                                 );
-                            }
-                            c
                         }
-                        Err(_) => 0.0,
+                        c
                     }
-                };
+                    Err(_) => 0.0,
+                }
+            };
             (cost_of(&rr, &routed_model), cost_of(&br, &baseline_model))
         }
         _ => return Err("路由/基线模型解析失败".to_string()),
@@ -2260,48 +2193,6 @@ async fn routing_review_adopt(
     Ok(Json(crate::review::adopt_suggestions(&state.db, tt)?))
 }
 
-async fn cache_threshold_get(State(state): State<AppState>) -> Json<Value> {
-    let samples = state
-        .db
-        .calibration_labeled_samples()
-        .map(|s| s.len())
-        .unwrap_or(0);
-    let suggested = state
-        .db
-        .get_setting("cache_threshold_suggested")
-        .ok()
-        .flatten();
-    let auto = state
-        .db
-        .get_setting("cache_auto_tune")
-        .ok()
-        .flatten()
-        .map(|v| v != "0" && v != "false")
-        .unwrap_or(true);
-    Json(json!({
-        "threshold": config::cache_threshold(&state.db),
-        "auto_tune": auto,
-        "labeled_samples": samples,
-        "suggested": suggested,
-    }))
-}
-
-async fn cache_autotune_set(State(state): State<AppState>, Json(req): Json<Value>) -> Json<Value> {
-    let on = req
-        .get("auto_tune")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let _ = state
-        .db
-        .set_setting("cache_auto_tune", if on { "1" } else { "0" });
-    // Manual override: an explicit threshold pins it (and implies auto-tune off).
-    if let Some(t) = req.get("threshold").and_then(|v| v.as_f64()) {
-        let _ = config::set_cache_threshold(&state.db, t);
-        let _ = state.db.set_setting("cache_auto_tune", "0");
-    }
-    Json(json!({ "ok": true, "auto_tune": on, "threshold": config::cache_threshold(&state.db) }))
-}
-
 // ── Private helpers ──
 
 /// 分类器选择：注册表驱动（P0.d，去名称硬编码）——
@@ -2351,66 +2242,6 @@ fn sse_error(detail: &str) -> Response {
 fn err_response(e: AppError) -> Response {
     let status = StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, Json(json!({ "error": e.to_string() }))).into_response()
-}
-
-async fn start_ollama_proc(state: &AppState) -> String {
-    // start_ollama does a port probe internally; do it before locking.
-    match crate::processes::start_ollama().await {
-        Ok(child) => {
-            let mut guard = state.children.lock().unwrap();
-            guard.ollama = child; // None → already running, keep handle
-            "Ollama started".to_string()
-        }
-        Err(e) => format!("Failed to start Ollama: {e}"),
-    }
-}
-
-fn stop_ollama_proc(state: &AppState) -> String {
-    let owned = {
-        let mut guard = state.children.lock().unwrap();
-        if let Some(child) = guard.ollama.as_mut() {
-            let _ = child.kill();
-            guard.ollama = None;
-            true
-        } else {
-            false
-        }
-    };
-    if owned {
-        return "Ollama stopped".to_string();
-    }
-    // Not spawned by us (external/system-managed instance): terminate it by name.
-    crate::processes::stop_ollama()
-}
-
-async fn start_ai_proc(state: &AppState) -> String {
-    // start_ai does a health probe internally; do it before locking.
-    match crate::processes::start_ai().await {
-        Ok(child) => {
-            let mut guard = state.children.lock().unwrap();
-            guard.ai = child; // None → already running, keep handle
-            "AI service started".to_string()
-        }
-        Err(e) => format!("Failed to start AI service: {e}"),
-    }
-}
-
-fn stop_ai_proc(state: &AppState) -> String {
-    let owned = {
-        let mut guard = state.children.lock().unwrap();
-        if let Some(child) = guard.ai.as_mut() {
-            let _ = child.kill();
-            guard.ai = None;
-            true
-        } else {
-            false
-        }
-    };
-    if owned {
-        return "AI service stopped".to_string();
-    }
-    // Not spawned by us (external/dev instance): terminate it by name.
-    crate::processes::stop_ai()
 }
 
 #[cfg(test)]
@@ -2517,10 +2348,10 @@ mod message_validation_tests {
         );
         // 合法形状放行：字符串 / 多模态分段数组 / content 缺省
         assert!(validate_messages(&[json!({"role": "user", "content": "hi"})]).is_ok());
-        assert!(
-            validate_messages(&[json!({"role": "user", "content": [{"type": "text", "text": "hi"}]})])
-                .is_ok()
-        );
+        assert!(validate_messages(&[
+            json!({"role": "user", "content": [{"type": "text", "text": "hi"}]})
+        ])
+        .is_ok());
         assert!(validate_messages(&[json!({"role": "assistant", "content": null})]).is_ok());
     }
 }

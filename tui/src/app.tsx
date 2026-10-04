@@ -14,12 +14,12 @@ import { startHealthPolling, serverConnected } from "./health"
 
 export type Route = "home" | "session" | "models" | "usage" | "settings"
 
-const TABS: { key: Route; label: string }[] = [
-  { key: "home", label: "Home" },
-  { key: "session", label: "Chat" },
-  { key: "models", label: "Models" },
-  { key: "usage", label: "Usage" },
-  { key: "settings", label: "Settings" },
+const TABS: { key: Route; label: string; keyHint: string }[] = [
+  { key: "home", label: "概览", keyHint: "1" },
+  { key: "session", label: "对话", keyHint: "2" },
+  { key: "models", label: "模型", keyHint: "3" },
+  { key: "usage", label: "用量", keyHint: "4" },
+  { key: "settings", label: "设置", keyHint: "5" },
 ]
 
 export const [route, setRoute] = createSignal<Route>("home")
@@ -67,6 +67,7 @@ export function App() {
         cmd: () => quit(),
         desc: "Quit",
       },
+      ...TABS.map((tab) => ({ key: tab.keyHint, cmd: () => { setRoute(tab.key); setStatus("") }, desc: `Go to ${tab.label}` })),
     ],
   }))
 
@@ -82,12 +83,12 @@ export function App() {
       <box
         flexDirection="row"
         paddingLeft={2}
-        paddingTop={1}
-        paddingBottom={1}
         gap={1}
         border={["bottom"]}
         borderColor={theme.border}
       >
+        <text fg={theme.primary} attributes={1}>LLooM</text>
+        <text fg={theme.border}>│</text>
         {TABS.map((t) => (
           <text
             fg={route() === t.key ? theme.primary : theme.textMuted}
@@ -97,7 +98,7 @@ export function App() {
               setStatus("")
             }}
           >
-            {t.key === route() ? `▶ ${t.label}` : `  ${t.label}`}
+            {t.key === route() ? `[${t.keyHint}] ${t.label}` : ` ${t.keyHint}  ${t.label}`}
           </text>
         ))}
       </box>
@@ -116,15 +117,13 @@ export function App() {
         flexShrink={0}
         paddingLeft={2}
         paddingRight={2}
-        paddingTop={1}
-        paddingBottom={1}
         border={["top"]}
         borderColor={theme.border}
         backgroundColor={theme.backgroundPanel}
       >
         <text fg={serverConnected() ? theme.textMuted : theme.error}>
           {serverConnected()
-            ? status() || "● LLooM · REST · 鼠标点击 · Tab 切换 · ↑↓/Enter 导航"
+            ? status() || `${pageLabel()}  Tab/1-5 切换 · ↑↓ 选择 · Enter 操作 · Ctrl+C 退出`
             : "● 服务器连接断开 — 请确认 lloom-server (:7861) 已启动"}
         </text>
       </box>

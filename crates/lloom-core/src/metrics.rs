@@ -73,9 +73,7 @@ pub fn render(db: &Db) -> std::result::Result<String, crate::error::AppError> {
     }
 
     // ── 用量：token / 成本 / 缓存（per model） ──
-    out.push_str(
-        "# HELP lloom_usage_tokens_total Tokens consumed by direction (input/output).\n",
-    );
+    out.push_str("# HELP lloom_usage_tokens_total Tokens consumed by direction (input/output).\n");
     out.push_str("# TYPE lloom_usage_tokens_total counter\n");
     out.push_str("# HELP lloom_usage_cost_total Accumulated actual cost in USD.\n");
     out.push_str("# TYPE lloom_usage_cost_total counter\n");
@@ -94,8 +92,16 @@ pub fn render(db: &Db) -> std::result::Result<String, crate::error::AppError> {
             &[("model", &s.model_name), ("direction", "output")],
             s.total_output_tokens as f64,
         ));
-        out.push_str(&metric("lloom_usage_cost_total", &[("model", &s.model_name)], s.total_cost));
-        out.push_str(&metric("lloom_cache_hits_total", &[("model", &s.model_name)], s.cache_hits as f64));
+        out.push_str(&metric(
+            "lloom_usage_cost_total",
+            &[("model", &s.model_name)],
+            s.total_cost,
+        ));
+        out.push_str(&metric(
+            "lloom_cache_hits_total",
+            &[("model", &s.model_name)],
+            s.cache_hits as f64,
+        ));
         out.push_str(&metric(
             "lloom_cache_saved_cost_total",
             &[("model", &s.model_name)],
@@ -104,12 +110,17 @@ pub fn render(db: &Db) -> std::result::Result<String, crate::error::AppError> {
     }
 
     // ── 路由：决策结果（task_type × outcome） ──
-    out.push_str("# HELP lloom_routing_decisions_total Routing decisions by task_type and outcome.\n");
+    out.push_str(
+        "# HELP lloom_routing_decisions_total Routing decisions by task_type and outcome.\n",
+    );
     out.push_str("# TYPE lloom_routing_decisions_total counter\n");
     for (task_type, outcome, n) in db.metrics_routing_by_outcome()? {
         out.push_str(&metric(
             "lloom_routing_decisions_total",
-            &[("task_type", task_type.as_str()), ("outcome", outcome.as_str())],
+            &[
+                ("task_type", task_type.as_str()),
+                ("outcome", outcome.as_str()),
+            ],
             n as f64,
         ));
     }
@@ -130,7 +141,9 @@ pub fn render(db: &Db) -> std::result::Result<String, crate::error::AppError> {
     out.push_str("# HELP lloom_routing_overhead_count Routing decisions measured.\n");
     out.push_str("# TYPE lloom_routing_overhead_count gauge\n");
     out.push_str(&metric("lloom_routing_overhead_count", &[], count as f64));
-    out.push_str("# HELP lloom_routing_overhead_ms Routing overhead in ms by stat (avg/p95/max).\n");
+    out.push_str(
+        "# HELP lloom_routing_overhead_ms Routing overhead in ms by stat (avg/p95/max).\n",
+    );
     out.push_str("# TYPE lloom_routing_overhead_ms gauge\n");
     for (stat, v) in [("avg", avg), ("p95", p95), ("max", max)] {
         out.push_str(&metric("lloom_routing_overhead_ms", &[("stat", stat)], v));
@@ -143,11 +156,17 @@ pub fn render(db: &Db) -> std::result::Result<String, crate::error::AppError> {
     out.push_str("# HELP lloom_budget_tier_total Routing decisions by budget tier.\n");
     out.push_str("# TYPE lloom_budget_tier_total counter\n");
     for (tier, n) in db.budget_tier_distribution(0)? {
-        out.push_str(&metric("lloom_budget_tier_total", &[("tier", &tier)], n as f64));
+        out.push_str(&metric(
+            "lloom_budget_tier_total",
+            &[("tier", &tier)],
+            n as f64,
+        ));
     }
 
     // ── 模型健康（3=up 2=degraded 1=down 0=unknown） ──
-    out.push_str("# HELP lloom_model_health Model health state (3=up 2=degraded 1=down 0=unknown).\n");
+    out.push_str(
+        "# HELP lloom_model_health Model health state (3=up 2=degraded 1=down 0=unknown).\n",
+    );
     out.push_str("# TYPE lloom_model_health gauge\n");
     for m in db.list_models(false)? {
         out.push_str(&metric(
@@ -182,10 +201,7 @@ mod tests {
     fn test_metric_format() {
         assert_eq!(metric("m", &[], 3.0), "m 3\n");
         assert_eq!(metric("m", &[("k", "v")], 1.5), "m{k=\"v\"} 1.5\n");
-        assert_eq!(
-            metric("m", &[("k", "a\"b")], 2.0),
-            "m{k=\"a\\\"b\"} 2\n"
-        );
+        assert_eq!(metric("m", &[("k", "a\"b")], 2.0), "m{k=\"a\\\"b\"} 2\n");
     }
 
     #[test]

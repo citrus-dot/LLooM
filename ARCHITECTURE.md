@@ -35,8 +35,8 @@
 └──────────────────┬─────────────────────────────────────┘
                    │ 只调 LLM 的部分（litellm 不可替代）
 ┌──────────────────▼─────────────────────────────────────┐
-│  Python AI 微服务（端口 7862，无状态）                  │
-│  ai_service.py — 仅封装 litellm 调用                    │
+│  Rust 原生 Provider 适配层                  │
+│  OpenAI-compatible / Anthropic 原生协议                    │
 │  /v1/chat /v1/classify /v1/orchestrate/stream          │
 └──────────────────┬─────────────────────────────────────┘
                    │
@@ -105,9 +105,6 @@
 | `/v1/models` | GET | OpenAI 兼容模型列表（auto 恒在首位）|
 | `/metrics` | GET | Prometheus 文本格式指标导出（N3.b，绑环回默认不鉴权）|
 | `/api/shutdown` | POST | 优雅关停（等价 SIGINT，清理子进程）|
-| `/api/cache/init` | POST | 语义缓存预初始化（触发 chroma 模型下载）|
-| `/api/cache/status` | GET | 缓存状态（就绪 / 下载进度）|
-| `/api/cache/cleanup` | POST | 清理缓存 |
 | `/api/cache/feedback` | POST | 命中反馈（灰区采样，调优用）|
 | `/api/cache/threshold` | GET/POST | 缓存阈值查询 / 自调 |
 
@@ -121,7 +118,7 @@
 - **metadata.rs** — 模型元数据五级自动打标（`resolve_and_fill`：overlay > 启发式，供 `insert_model` 自动回填，P0.e）
 - **health.rs** — 健康状态机（滑窗 degraded/连续失败 down/熔断/成功恢复，`set_model_health` 持久化，P3）
 - **security.rs** — PII 检测 / 越狱拦截 / 领域分类（正则零成本层，fancy-regex 支持 lookaround）
-- **ai_client.rs** — Python AI 微服务的 async HTTP 客户端
+- **ai_client.rs** — Rust 原生 Provider 客户端
 - **processes.rs** — 子进程管理（API 服务器 / Ollama / AI 服务）
 - **conversations.rs** — 对话文件 CRUD（`data/conversations/*.json`）
 - **models.rs** — 类型定义；M1 分层：`Backend` 枚举（`Cloud{provider,api_base,api_key}` / `Local{compat,api_base}`），模型显式 `kind: local|cloud`，废除 `is_local_endpoint` 启发式
@@ -131,9 +128,9 @@
 - **metrics.rs** — Prometheus 指标导出（纯函数 `render(db)` 输出 0.0.4 文本格式，N3.b）
 - **error.rs** — thiserror 统一错误 + HTTP 状态映射
 
-### Python AI 微服务（唯一保留的 Python）
+### Rust 原生 Provider 与缓存
 
-`api/ai_service.py` — **无状态**服务，只做一件事：封装 litellm 调用。
+`providers/` 原生实现 OpenAI-compatible 与 Anthropic Messages；`semantic_cache.rs` 使用 FastEmbed + SQLite。
 
 - `/v1/chat` — 单次 LLM 调用
 - `/v1/chat/stream` — 流式 LLM 调用
@@ -148,7 +145,6 @@
 | 端口 | 用途 |
 |---|---|
 | 7861 | **Rust axum 主服务器**（REST + WebUI，唯一对外端口） |
-| 7862 | Python AI 微服务 |
 | 11434 | Ollama |
 
 > 旧版 Python API（7860）已移除。Rust 服务器即主服务器，无遗留服务。
@@ -211,7 +207,7 @@ bash scripts/smoke_test.sh
   → Rust: security.rs 检查（PII/越狱）
   → Rust: router.rs 分类（正则优先，LLM 兜底调 /v1/classify）
   → Rust: db.rs 查模型配置 → 构造 ModelSpec
-  → Rust: ai_client.rs → Python /v1/chat → litellm → LLM
+  → Rust: ai_client.rs → 原生 Provider 适配器 → LLM
   → 返回 SSE 流：routing 信息 + 内容分块 + done
   → Rust: db.rs 记录用量/成本
 ```
@@ -289,9 +285,6 @@ bash scripts/smoke_test.sh
 | GET | `/v1/models` | OpenAI 兼容模型列表 |
 | GET | `/metrics` | Prometheus 指标导出（N3.b） |
 | POST | `/api/shutdown` | 优雅关停（等价 SIGINT） |
-| POST | `/api/cache/init` | 语义缓存预初始化（触发 chroma 模型下载） |
-| GET | `/api/cache/status` | 缓存状态（就绪 / 下载进度） |
-| POST | `/api/cache/cleanup` | 清理缓存 |
 | POST | `/api/cache/feedback` | 命中反馈（灰区采样） |
 | GET,POST | `/api/cache/threshold` | 缓存阈值查询 / 自调 |
 
@@ -338,7 +331,6 @@ LLooM/
 │       ├── store/                # chatStore（SSE 流状态）
 │       └── api.ts                # REST 客户端
 ├── api/
-│   └── ai_service.py             # Python AI 微服务（litellm 封装，唯一 Python）
 ├── scripts/
 │   ├── build.sh                  # 跨平台构建（含系统依赖检测）
 │   ├── package.sh / package.bat  # 三平台打包（CI release 用）
@@ -346,8 +338,6 @@ LLooM/
 │   ├── smoke_test.sh             # 19 项冒烟测试
 │   ├── aiq_replay.py             # 影子样本离线 AIQ 重放（--json 与报告同源）
 │   └── bill_reconcile.py         # 百炼账单 × usage_records 对账（N3.c）
-├── ai_service.spec               # PyInstaller spec（AI 微服务）
-├── pyproject.toml                # AI 服务 Python 依赖
 ├── ARCHITECTURE.md               # 本文件
 ├── README.md / README-ZH.md      # 用户文档
 └── .env.example                  # 环境变量模板

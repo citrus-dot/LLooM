@@ -13,20 +13,25 @@
 
 pub mod ai_client;
 pub mod config;
+pub mod context;
 pub mod conversations;
 pub mod db;
 pub mod error;
+pub mod exact_cache;
 pub mod health;
 pub mod metadata;
 pub mod metrics;
 pub mod model_dto;
 pub mod models;
 pub mod openai_compat;
+pub mod orchestrator;
 pub mod pricing;
 pub mod probe;
 pub mod processes;
+pub mod providers;
 pub mod review;
 pub mod router;
 pub mod security;
+pub mod semantic_cache;
 pub mod server;
 pub mod signals;

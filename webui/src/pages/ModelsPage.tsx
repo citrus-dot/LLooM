@@ -65,7 +65,7 @@ export default function ModelsPage() {
           input_cost_per_token: v.input_cost ?? 0,
           output_cost_per_token: v.output_cost ?? 0,
         };
-        if (v.litellm_model) patch.litellm_model = v.litellm_model;
+        if (v.provider_model) patch.provider_model = v.provider_model;
         if (v.kind === 'local') {
           patch.compat = v.compat ?? 'ollama';
           patch.api_base = v.api_base ?? '';
@@ -85,7 +85,7 @@ export default function ModelsPage() {
           output_cost_per_token: v.output_cost ?? 0,
           rpm: v.rpm ?? 60,
         };
-        if (v.litellm_model) body.litellm_model = v.litellm_model;
+        if (v.provider_model) body.provider_model = v.provider_model;
         if (v.kind === 'local') {
           body.compat = v.compat ?? 'ollama';
           body.api_base = v.api_base || undefined;
@@ -118,7 +118,7 @@ export default function ModelsPage() {
       kind: m.kind,
       compat: m.compat ?? 'ollama',
       provider: m.provider ?? 'dashscope',
-      litellm_model: m.litellm_model,
+      provider_model: m.provider_model,
       api_base: m.api_base ?? '',
       api_key: m.api_key ?? '',
       input_cost: m.input_cost_per_token,
@@ -150,7 +150,7 @@ export default function ModelsPage() {
           <Tag color="blue">云端 · {m.provider}</Tag>
         ),
     },
-    { title: 'LiteLLM 模型', dataIndex: 'litellm_model', key: 'litellm_model' },
+    { title: '供应商模型', dataIndex: 'provider_model', key: 'provider_model' },
     {
       title: '输入 ($/1K)',
       key: 'in',
@@ -259,7 +259,7 @@ export default function ModelsPage() {
               </Form.Item>
             </>
           )}
-          <Form.Item name="litellm_model" label="LiteLLM 模型字符串">
+          <Form.Item name="provider_model" label="供应商模型 ID">
             <Input placeholder="留空自动生成，如 openai/my-model" />
           </Form.Item>
           <Space size={12} style={{ display: 'flex' }}>

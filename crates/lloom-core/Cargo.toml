@@ -19,3 +19,6 @@ reqwest = { version = "0.13", features = ["json", "stream"] }
 futures = "0.3"
 bytes = "1"
 tower-http = { version = "0.6", features = ["fs"] }
+sha2 = "0.10"
+fastembed = "7.1"
+rand = "0.9"

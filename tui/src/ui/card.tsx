@@ -19,23 +19,21 @@ export function Card(props: {
       flexDirection="column"
       flexGrow={props.flexGrow ? 1 : 0}
       backgroundColor={theme.backgroundPanel}
-      border={["left", "right", "bottom"]}
-      borderStyle="rounded"
+      border={["left"]}
       borderColor={border}
       paddingLeft={props.paddingLeft ?? 1}
       paddingRight={props.paddingRight ?? 1}
     >
       {props.title !== undefined && (
         <>
-          <box flexDirection="row" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-            <text fg={theme.textMuted} attributes={1}>{props.title}</text>
+          <box flexDirection="row" paddingLeft={1} paddingRight={1} paddingTop={1}>
+            <text fg={theme.text} attributes={1}>{props.title}</text>
             <box flexGrow={1} />
             {props.actions}
           </box>
-          <box border={["bottom"]} borderStyle="rounded" borderColor={theme.border} />
         </>
       )}
-      <box paddingTop={1} paddingBottom={1}>
+      <box paddingTop={props.title ? 1 : 0} paddingBottom={1}>
         {props.children}
       </box>
     </box>

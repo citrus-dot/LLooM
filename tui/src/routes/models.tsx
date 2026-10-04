@@ -92,7 +92,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
       fields: [
         { key: "name", label: "名称", placeholder: "如 qwen2.5-local", required: true },
         ...KIND_FIELDS,
-        { key: "litellm_model", label: "LiteLLM 模型", placeholder: "留空自动拼前缀，如 ollama/qwen2.5" },
+        { key: "provider_model", label: "供应商模型", placeholder: "留空自动拼前缀，如 ollama/qwen2.5" },
         { key: "input_cost", label: "输入成本 ($/tok)", placeholder: "如 0.000001" },
         { key: "output_cost", label: "输出成本 ($/tok)", placeholder: "如 0.000002" },
         { key: "task_type", label: "任务路由", placeholder: TASK_TYPES.filter(Boolean).join("/") },
@@ -112,7 +112,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
         if (vals.provider.trim()) body.provider = vals.provider.trim()
         if (vals.api_base.trim()) body.api_base = vals.api_base.trim()
         if (vals.api_key.trim()) body.api_key = vals.api_key.trim()
-        if (vals.litellm_model.trim()) body.litellm_model = vals.litellm_model.trim()
+        if (vals.provider_model.trim()) body.provider_model = vals.provider_model.trim()
         try {
           await addModel(body)
           props.setStatus(`✓ 已添加 ${vals.name.trim()}`)
@@ -132,7 +132,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
         { key: "provider", label: "云端供应商", default: m.provider ?? "", placeholder: "dashscope/openai/anthropic/custom（kind=cloud）" },
         { key: "api_base", label: "API Base", placeholder: m.api_base ?? "", default: m.api_base ?? "" },
         { key: "api_key", label: "API Key", placeholder: "仅云端；原样提交掩码=保持原值，清空=移除", default: m.api_key ?? "" },
-        { key: "litellm_model", label: "LiteLLM 模型", placeholder: m.litellm_model, default: m.litellm_model },
+        { key: "provider_model", label: "供应商模型", placeholder: m.provider_model, default: m.provider_model },
         { key: "input_cost", label: "输入成本 ($/tok)", default: String(m.input_cost_per_token ?? 0) },
         { key: "output_cost", label: "输出成本 ($/tok)", default: String(m.output_cost_per_token ?? 0) },
         { key: "task_type", label: "任务路由", default: m.task_type },
@@ -153,7 +153,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
           patch.api_base = vals.api_base.trim()
           patch.api_key = vals.api_key.trim()
         }
-        if (vals.litellm_model.trim()) patch.litellm_model = vals.litellm_model.trim()
+        if (vals.provider_model.trim()) patch.provider_model = vals.provider_model.trim()
         try {
           await updateModel(m.name, patch)
           props.setStatus(`✓ 已更新 ${m.name}`)
@@ -176,18 +176,18 @@ export function Models(props: { setStatus: (s: string) => void }) {
 
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
-      <PageHeader title="模型管理">
-        <text fg={theme.textMuted}>·</text>
-        <text fg={theme.textMuted}>{models().length} 个</text>
+      <PageHeader title="模型" subtitle={`${models().length} 个已注册模型 · ↑↓ 选择 · 右键编辑`}>
         <Button variant="ghost" onClick={() => refresh()}>刷新</Button>
-        <Button variant="primary" onClick={() => add()}>添加模型</Button>
+        <Button variant="primary" onClick={() => add()}>+ 添加</Button>
       </PageHeader>
 
       <Table
         columns={[
-          { title: "名称", width: "30%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{m.name}</text> },
-          { title: "类型", width: "20%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{m.kind === "local" ? `本地:${m.compat ?? "ollama"}` : `云端:${m.provider ?? "?"}`}</text> },
-          { title: "LiteLLM 模型", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.litellm_model}</text> },
+          { title: "状态", width: "8%", render: (m, { selected }) => <text fg={selected?theme.background:m.health_state==="down"?theme.error:theme.success}>{m.health_state==="down"?"○":"●"}</text> },
+          { title: "名称", width: "24%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{m.name}</text> },
+          { title: "类型", width: "20%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.textMuted}>{m.kind === "local" ? `local/${m.compat ?? "ollama"}` : `cloud/${m.provider ?? "?"}`}</text> },
+          { title: "供应商模型", width:"30%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.provider_model}</text> },
+          { title: "任务", render:(m,{selected})=><text fg={selected?theme.background:theme.secondary}>{m.task_type||"general"}</text> },
         ]}
         rows={models()}
         selectedIndex={selIdx()}
@@ -198,9 +198,7 @@ export function Models(props: { setStatus: (s: string) => void }) {
         emptyText="暂无模型"
       />
 
-      <box paddingTop={1}>
-        <text fg={theme.textDim}>  点击选中 · 右键行弹出编辑/删除菜单 · [添加] 注册模型</text>
-      </box>
+      <text fg={theme.textDim}>Ctrl+D 删除选中项 · 右键编辑/删除</text>
     </box>
   )
 }

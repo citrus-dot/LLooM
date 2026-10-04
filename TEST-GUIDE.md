@@ -19,7 +19,7 @@ cargo build --workspace          # 确保二进制最新
 curl -s http://127.0.0.1:7861/api/services/status | python3 -m json.tool | head
 ```
 
-预期：services 列表中 litellm / ai-service / ollama 逐步变为 healthy。
+预期：Core Server 与 Native Providers 为 healthy；使用本地模型时 Ollama 为 healthy。
 
 ***
 
@@ -164,7 +164,7 @@ curl -s -X POST http://127.0.0.1:7861/api/routing/review/adopt \
 | -------- | ----------------------------------------------------------------------- | ------------------- |
 | 无样本冷启动   | 清空 routing\_calibration 后重启+立即体检                                        | 卡片显示「暂无体检报告」类提示，不崩溃 |
 | 体检期间并发聊天 | 立即体检 loading 时同时发对话                                                     | 互不阻塞（体检是后台 job）     |
-| 周期任务失败自愈 | 临时改坏 python3 路径不太现实——可观察日志中 `[review] aiq report job failed` 出现后下个周期能恢复 | 失败只打日志，服务不受影响       |
+| 周期任务失败自愈 | 制造无效影子样本并观察 `[review] aiq report job failed` 后下个周期恢复 | 失败只打日志，服务不受影响       |
 | 报告跨重启    | 重启服务后再看概览页                                                              | 显示的是库里最新一份报告（不是空白）  |
 
 ### 2.6 定价页红点透明化（问题2）

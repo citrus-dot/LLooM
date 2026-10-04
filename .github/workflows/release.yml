@@ -5,13 +5,12 @@
 #   push v2 分支        → 构建三平台安装包（仅产 artifacts 供检查，不发 Release）
 #   workflow_dispatch  → 手动构建（同上）
 #
-# 产物（v2 分支约定：Rust release 二进制 + PyInstaller onedir AI 微服务 + 静态 WebUI）：
+# 产物（Rust release 二进制 + 静态 WebUI）：
 #   dist/LLooM-<ver>-linux-<arch>.tar.gz
 #   dist/LLooM-<ver>-macos-<arch>.tar.gz
 #   dist/LLooM-<ver>-windows-<arch>.zip
 #
 # 说明：
-#   - PyInstaller 产物不可跨平台，必须在目标 OS runner 上构建。
 #   - Linux 用 ubuntu-22.04 保证 glibc 兼容底线。
 #   - Ollama 不捆绑；macOS 产物未签名（用户首次运行需 xattr -cr 绕 Gatekeeper）。
 
@@ -49,11 +48,6 @@ jobs:
         with:
           node-version: 20
 
-      # uv 锁定依赖（uv.lock 入库）：PyInstaller 产物跨次构建可复现
-      - uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.12"
-
       - name: Build WebUI
         run: |
           cd webui
@@ -62,11 +56,6 @@ jobs:
 
       - name: Build Rust (release)
         run: cargo build --workspace --release
-
-      - name: Build AI micro-service (PyInstaller)
-        run: |
-          uv sync --frozen --extra build
-          uv run --no-sync pyinstaller ai_service.spec --noconfirm --clean
 
       - name: Package
         run: ${{ matrix.pkg }}

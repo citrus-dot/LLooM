@@ -13,8 +13,7 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" />
   <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blue" alt="Platform" />
   <img src="https://img.shields.io/badge/Rust-axum-CE422B?logo=rust&logoColor=white" alt="Rust" />
-  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white" alt="Python" />
-  <img src="https://img.shields.io/badge/LiteLLM-100%2B%20providers-red" alt="LiteLLM" />
+  <img src="https://img.shields.io/badge/Providers-OpenAI%20%7C%20Anthropic-blue" alt="Providers" />
   <img src="https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
 </p>
 
@@ -54,14 +53,13 @@
 git clone -b v2 https://github.com/citrus-dot/LLooM.git
 cd LLooM
 
-uv sync --extra dev --extra build          # or: pip install -e ".[dev]"
 cp .env.example .env                       # API keys are set per-model in the UI; env keys are fallback
 cd webui && npm install && npm run build && cd ..
 
 cargo run -p lloom-server                  # Web UI on :7861
 ```
 
-The server (`:7861`) is the single entry point — it spawns the Python AI micro-service (`:7862`) and Ollama (`:11434`) automatically. Ollama itself is not bundled; install it with `curl -fsSL https://ollama.com/install.sh | sh`.
+The server (`:7861`) is the single entry point. Cloud providers are called natively from Rust; local models use Ollama (`:11434`).
 
 ## Try It
 
@@ -90,7 +88,7 @@ curl -N -X POST http://localhost:7861/api/chat/stream \
 - **Multi-source pricing** — priority chain `manual > overlay > litellm_remote > litellm_packaged > heuristic`; OpenRouter reference prices with ≥20% deviation flags
 - **Task orchestration** — complexity detection → LLM decomposition → sequential execution → aggregation, all over SSE
 - **Security** — PII masking (7 types), jailbreak interception (5 types), 14-domain MMLU classification
-- **Semantic cache** — ChromaDB cosine similarity (0.95 threshold, 24h TTL), hit feedback loop, threshold autotune, graceful degradation
+- **Two-level cache** — SQLite exact matching plus FastEmbed quantized MiniLM semantic retrieval (0.88 threshold, 24h TTL)
 - **Three frontends** — WebUI, CLI (`lloom-cli`), TUI (OpenTUI + SolidJS), all on one REST contract
 
 ## Architecture
@@ -100,15 +98,13 @@ UI layer (WebUI / CLI / TUI)            ← any frontend, UI-agnostic
         │  HTTP REST — typed JSON, the single contract
 Rust core + axum REST server (:7861)    ← all business logic + WebUI
         │
-Rust core modules (db / router / security / pricing / probe / …)
-        │  async HTTP
-Python AI micro-service (:7862)         ← stateless litellm wrapper
-        │
+Rust core modules (routing / orchestration / cache / providers / SQLite)
+        │  native async HTTP
 LLM providers (DashScope / OpenAI / Anthropic / Ollama)
 ```
 
-- **Rust owns everything**: SQLite (WAL), routing, security, process management — Python is reduced to the one thing Rust can't replace (litellm's 100+ provider coverage)
-- **Honest service status**: child process alive + port responding + AI readiness — never a fake "healthy"
+- **Pure Rust data plane**: SQLite, routing, orchestration, security, provider adapters and semantic cache run in one process
+- **Native protocols**: OpenAI-compatible providers and Anthropic Messages are supported directly
 
 Full layer breakdown, ports, and the [REST API reference](ARCHITECTURE.md#rest-api-参考) live in [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -124,7 +120,7 @@ All via `.env` (see [.env.example](.env.example)):
 | `OPENAI_BASE_URL` | (empty) | OpenAI base URL override |
 | `ANTHROPIC_API_KEY` | (empty) | Anthropic API key — env fallback; preferred: set per-model in the UI |
 | `LLOOM_WEB_PORT` | `7861` | Server + Web UI port |
-| `LLOOM_AI_SERVICE_URL` | `http://localhost:7862` | Python AI micro-service URL |
+| `LLOOM_SEMANTIC_THRESHOLD` | `0.88` | Semantic-cache cosine threshold |
 | `LLOOM_DATA_DIR` | `./data` | Data directory (SQLite, conversations) |
 | `LLOOM_PINNED_MODE` | `soft` | Pinned model: `soft` prior or `hard` appointment |
 
@@ -156,7 +152,6 @@ lloom-cli models list | add | update | remove
 lloom-cli budgets set user default 10 --duration 30d
 lloom-cli budgets list | check user default
 lloom-cli usage | status
-lloom-cli service status | start ollama | stop ai | restart ai | logs ollama
 lloom-cli conversation list | show <id> | delete <id> | new
 lloom-cli chat "hi"                         # one-shot
 lloom-cli chat "continue" --session <id>    # resume
@@ -195,8 +190,7 @@ LLooM/
 ├── crates/lloom-cli/             # CLI (clap, links lloom-core)
 ├── webui/                        # WebUI (React + Vite + Ant Design) → dist/
 ├── tui/                          # TUI (OpenTUI + SolidJS, bun)
-├── api/ai_service.py             # Python AI micro-service (litellm wrapper)
-├── scripts/                      # build.sh / smoke_test.sh / aiq_replay.py
+├── scripts/                      # build.sh / smoke_test.sh / package.sh
 └── ARCHITECTURE.md               # Layer breakdown + REST reference
 ```
 

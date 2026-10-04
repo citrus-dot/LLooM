@@ -1,5 +1,4 @@
-//! Sub-process management — start/stop/restart the Python API server, Ollama,
-//! and the Python AI service.
+//! Sub-process management for Ollama.
 
 use crate::config;
 use crate::error::{AppError, Result};
@@ -74,83 +73,6 @@ fn spawn(binary: &str, args: &[&str], log: &str, cwd: Option<&str>) -> Result<Ch
         .map_err(|e| AppError::Process(format!("failed to spawn {binary}: {e}")))
 }
 
-// ── Python AI micro-service ──
-
-/// Resolve the Python interpreter for the AI service: prefer a local venv
-/// (dev), then `python3` on PATH (production bundles Python).
-fn python_interp() -> String {
-    let install_dir = config::install_dir();
-    for cand in [
-        install_dir.join(".venv/bin/python"),
-        install_dir.join("venv/bin/python"),
-        std::path::PathBuf::from(".venv/bin/python"),
-        std::path::PathBuf::from("venv/bin/python"),
-    ] {
-        if cand.exists() && cand.is_file() {
-            return cand.to_string_lossy().to_string();
-        }
-    }
-    "python3".to_string()
-}
-
-/// The Python AI micro-service is the only required Python process.
-///
-/// Resolution order:
-///   1. PyInstaller bundle: `resources/ai-service/ai-service` (production)
-///   2. Source file: `resources/ai_service.py` (installed source)
-///   3. Dev: `api/ai_service.py` via `python3 -m uvicorn`
-///
-/// Returns `Ok(None)` if a healthy instance already answers on the port
-/// (prevents duplicate spawns and "address already in use" errors).
-pub async fn start_ai() -> Result<Option<Child>> {
-    // Fast path: reuse an already-healthy instance.
-    if check_ai_health().await.status == "ok" {
-        return Ok(None);
-    }
-    let install_dir = config::install_dir();
-    let port = config::ai_port().to_string();
-
-    // 1. PyInstaller bundle（onedir：入口二进制 + _internal/；Windows 入口名带 .exe）
-    let exe_name = if cfg!(windows) {
-        "ai-service.exe"
-    } else {
-        "ai-service"
-    };
-    let bundled = install_dir.join("resources/ai-service").join(exe_name);
-    if bundled.exists() && bundled.is_file() {
-        let child = spawn(
-            bundled.to_string_lossy().as_ref(),
-            &["--port", &port],
-            "ai.log",
-            Some(install_dir.to_string_lossy().as_ref()),
-        )?;
-        return Ok(Some(child));
-    }
-
-    // 2. Installed source file
-    let script = install_dir.join("resources/ai_service.py");
-    if script.exists() {
-        let interp = python_interp();
-        let child = spawn(
-            &interp,
-            &[script.to_string_lossy().as_ref(), "--port", &port],
-            "ai.log",
-            Some(install_dir.to_string_lossy().as_ref()),
-        )?;
-        return Ok(Some(child));
-    }
-
-    // 3. Dev mode
-    let interp = python_interp();
-    let child = spawn(
-        &interp,
-        &["-m", "uvicorn", "api.ai_service:app", "--port", &port],
-        "ai.log",
-        Some(install_dir.to_string_lossy().as_ref()),
-    )?;
-    Ok(Some(child))
-}
-
 pub async fn start_ollama() -> Result<Option<Child>> {
     // Fast path: reuse an already-running Ollama (its port is authoritative).
     let bin = config::ollama_binary_path();
@@ -172,29 +94,6 @@ pub fn stop_ollama() -> String {
     }
 }
 
-/// Stop a running AI service regardless of who started it. Matches the dev
-/// (`uvicorn api.ai_service`) and installed-script invocation patterns.
-pub fn stop_ai() -> String {
-    let pats = [
-        "uvicorn api.ai_service:app",
-        "ai_service.py --port",
-        "ai-service/ai-service",
-    ];
-    let mut stopped = false;
-    for pat in pats {
-        if let Ok(s) = Command::new("pkill").args(["-f", pat]).status() {
-            if s.success() {
-                stopped = true;
-            }
-        }
-    }
-    if stopped {
-        "AI service stopped".to_string()
-    } else {
-        "AI service not running".to_string()
-    }
-}
-
 // ── Health helpers ──
 
 /// Async HTTP GET, returning the body. Used for health probes.
@@ -209,10 +108,6 @@ async fn http_get(url: &str, timeout_secs: u64) -> String {
         return String::new();
     };
     resp.text().await.unwrap_or_default()
-}
-
-pub async fn check_ai_health() -> crate::ai_client::AiHealth {
-    crate::ai_client::health().await
 }
 
 pub async fn check_ollama_health() -> bool {

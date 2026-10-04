@@ -22,13 +22,6 @@ function destroyRenderer() {
   renderer.destroy()
 }
 
-// destroy() restores the terminal (show cursor / leave alternate screen) via
-// async stdout flush. process.exit immediately would truncate that restore,
-// leaving the shell with a hidden cursor. Give the restore time to flush.
-renderer.once("destroy", () => {
-  setTimeout(() => process.exit(0), 100)
-})
-
 // App's Ctrl+C binding calls this to quit cleanly.
 setQuitHandler(() => destroyRenderer())
 
@@ -55,6 +48,3 @@ await render(
   ),
   renderer,
 )
-
-process.on("SIGHUP", () => destroyRenderer())
-process.on("SIGINT", () => destroyRenderer())

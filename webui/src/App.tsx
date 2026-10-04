@@ -7,6 +7,7 @@ import {
   RobotOutlined,
   DollarOutlined,
   SettingOutlined,
+  KeyOutlined,
 } from '@ant-design/icons';
 import OverviewPage from './pages/OverviewPage';
 import UsagePage from './pages/UsagePage';
@@ -14,10 +15,11 @@ import ChatPage from './pages/ChatPage';
 import ModelsPage from './pages/ModelsPage';
 import PricingPage from './pages/PricingPage';
 import SettingsPage from './pages/SettingsPage';
+import ApiKeysPage from './pages/ApiKeysPage';
 
 const { Sider, Content } = Layout;
 
-type PageKey = 'overview' | 'usage' | 'chat' | 'models' | 'pricing' | 'settings';
+type PageKey = 'overview' | 'usage' | 'chat' | 'models' | 'pricing' | 'keys' | 'settings';
 
 const NAV_ITEMS = [
   { key: 'overview', icon: <DashboardOutlined />, label: '总览' },
@@ -25,6 +27,7 @@ const NAV_ITEMS = [
   { key: 'chat', icon: <MessageOutlined />, label: '对话' },
   { key: 'models', icon: <RobotOutlined />, label: '模型' },
   { key: 'pricing', icon: <DollarOutlined />, label: '定价' },
+  { key: 'keys', icon: <KeyOutlined />, label: 'API Keys' },
   { key: 'settings', icon: <SettingOutlined />, label: '设置' },
 ];
 
@@ -68,6 +71,7 @@ export default function App() {
           {page === 'chat' && <ChatPage />}
           {page === 'models' && <ModelsPage />}
           {page === 'pricing' && <PricingPage />}
+          {page === 'keys' && <ApiKeysPage />}
           {page === 'settings' && <SettingsPage />}
         </Content>
       </Layout>

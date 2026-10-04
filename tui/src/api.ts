@@ -24,7 +24,7 @@ export interface Model {
   compat?: string
   /** cloud only: dashscope / openai / anthropic / custom */
   provider?: string
-  litellm_model: string
+  provider_model: string
   api_base?: string
   /** 掩码输出（****tail）；未配置时为空串 */
   api_key?: string
@@ -34,6 +34,7 @@ export interface Model {
   rpm?: number
   is_active?: number
   is_local?: boolean
+  health_state?: string
 }
 
 /** POST /api/models 入参（kind: local|cloud）。*/
@@ -44,7 +45,7 @@ export interface ModelCreatePayload {
   provider?: string
   api_base?: string
   api_key?: string
-  litellm_model?: string
+  provider_model?: string
   task_type?: string
   input_cost_per_token?: number
   output_cost_per_token?: number
@@ -58,7 +59,7 @@ export interface ModelPatchPayload {
   provider?: string
   api_base?: string
   api_key?: string
-  litellm_model?: string
+  provider_model?: string
   task_type?: string
   input_cost_per_token?: number
   output_cost_per_token?: number
@@ -120,22 +121,6 @@ export async function getServicesStatus(): Promise<ServicesStatus> {
   return get("/api/services/status")
 }
 
-export async function startService(name: string): Promise<{ message: string }> {
-  return post(`/api/services/${name}/start`)
-}
-
-export async function stopService(name: string): Promise<{ message: string }> {
-  return post(`/api/services/${name}/stop`)
-}
-
-export async function restartService(name: string): Promise<{ message: string }> {
-  return post(`/api/services/${name}/restart`)
-}
-
-export async function getServiceLogs(name: string): Promise<{ logs: string }> {
-  return get(`/api/services/${name}/logs`)
-}
-
 export async function getModels(): Promise<{ models: Model[] }> {
   return get("/api/models")
 }
@@ -180,21 +165,13 @@ export interface ProxyConfig {
   /** 实际绑定地址（0.0.0.0 = 局域网可达） */
   bind: string
   web_port: number
-  /** true = 有 token，客户端必须带 Bearer */
+  /** true = 已创建 Key，客户端必须带 Bearer */
   auth_enabled: boolean
-  /** `****tail` 掩码；未配置时为 null */
-  token_masked: string | null
-  /** token 来源：ui=本端配置库 / env=环境变量 / none=未配置 */
-  token_source: "ui" | "env" | "none"
+  key_count: number
 }
 
 export async function getProxyConfig(): Promise<ProxyConfig> {
   return get("/api/proxy/config")
-}
-
-/** 设置/清除代理 token：null/空 = 清除（回落 env）；立即生效。 */
-export async function setProxyToken(token: string | null): Promise<ProxyConfig> {
-  return put("/api/proxy/token", { token })
 }
 
 export interface ProxySelftestResult {

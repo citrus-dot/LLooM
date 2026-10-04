@@ -1,17 +1,18 @@
-//! Async HTTP client for the Python AI micro-service.
-//! All LLM calls (litellm) are delegated to this stateless service.
+//! Unified LLM client. Native Rust provider adapters are the primary path;
+//! the legacy Python service remains only for protocols not migrated yet.
 
 use crate::config;
 use crate::error::{AppError, Result};
 use crate::models::Model;
-use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSpec {
     pub name: String,
-    pub litellm_model: String,
+    #[serde(default)]
+    pub provider: String,
+    pub provider_model: String,
     #[serde(default)]
     pub api_base: String,
     #[serde(default)]
@@ -33,7 +34,8 @@ impl From<&Model> for ModelSpec {
         };
         Self {
             name: m.name.clone(),
-            litellm_model: m.litellm_model.clone(),
+            provider: m.provider_name().to_string(),
+            provider_model: m.provider_model.clone(),
             api_base: config::resolve_env_or_literal(m.api_base()),
             api_key,
             input_cost_per_token: m.input_cost_per_token,
@@ -62,7 +64,38 @@ pub struct ChatResult {
 pub struct ChatCacheCtx<'a> {
     pub conversation_id: &'a str,
     pub cache_dir: &'a str,
-    pub similarity_threshold: f64,
+}
+
+fn cache_key(spec: &ModelSpec, messages: &[Value], conversation_id: &str) -> Option<String> {
+    let query = messages
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))?
+        .get("content")?
+        .as_str()?;
+    let history: Vec<Value> = messages
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.get("role").and_then(Value::as_str),
+                Some("user") | Some("assistant")
+            )
+        })
+        .cloned()
+        .collect();
+    let prior = history.len().saturating_sub(1);
+    let context_free = crate::context::is_context_free(query, &history[..prior]);
+    let fingerprint = if context_free {
+        String::new()
+    } else {
+        crate::context::fingerprint(conversation_id, &history)
+    };
+    Some(crate::context::exact_key(
+        &spec.name,
+        &crate::context::system_id(messages),
+        &fingerprint,
+        query,
+    ))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,48 +111,11 @@ pub struct SseEvent {
     pub data: Value,
 }
 
-fn base_url() -> String {
-    config::ai_service_url()
-}
-
-fn client() -> reqwest::Client {
-    // NOTE: no total `.timeout()` here — reqwest's client timeout covers the
-    // WHOLE request including streaming reads, which silently killed long
-    // SSE responses at 300s (task_done/result never reached the client).
-    // Instead: bounded connect + per-read idle timeout, so a healthy stream
-    // can run arbitrarily long but a stalled one is reaped.
-    reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .read_timeout(std::time::Duration::from_secs(120))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
-}
-
-/// AI service health: reachable + whether any LLM backend is ready.
-#[derive(Debug, Clone, Deserialize)]
-pub struct AiHealth {
-    pub status: String,
-    #[serde(default)]
-    pub ready: bool,
-}
-
-pub async fn health() -> AiHealth {
-    let url = format!("{}/v1/health", base_url());
-    let Ok(resp) = client()
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(3))
-        .send()
-        .await
-    else {
-        return AiHealth {
-            status: "down".to_string(),
-            ready: false,
-        };
-    };
-    resp.json::<AiHealth>().await.unwrap_or(AiHealth {
-        status: "down".to_string(),
-        ready: false,
-    })
+fn event(name: &str, data: Value) -> SseEvent {
+    SseEvent {
+        event: name.to_string(),
+        data,
+    }
 }
 
 /// Non-streaming chat completion.
@@ -130,146 +126,441 @@ pub async fn chat(
     temperature: f64,
     cache: Option<&ChatCacheCtx<'_>>,
 ) -> Result<ChatResult> {
-    let url = format!("{}/v1/chat", base_url());
-    let mut body = json!({
-        "model": spec,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    });
-    // CONTEXT-PLAN Phase 4：主聊天路径接两层缓存（与 orchestrate 同约定）；
-    // cache=None 时 Python 侧退化为裸调用（probe/shadow 校准路径）
-    if let Some(c) = cache {
-        body["conversation_id"] = json!(c.conversation_id);
-        body["cache_dir"] = json!(c.cache_dir);
-        body["similarity_threshold"] = json!(c.similarity_threshold);
+    if crate::providers::supports_native(spec) {
+        let exact = cache.and_then(|c| {
+            crate::exact_cache::ExactCache::open(
+                crate::config::data_dir().join("cache_exact.sqlite3"),
+                86_400,
+            )
+            .ok()
+            .map(|store| (store, c))
+        });
+        let key = exact
+            .as_ref()
+            .and_then(|(_, c)| cache_key(spec, messages, c.conversation_id));
+        if let (Some((store, _)), Some(key)) = (&exact, &key) {
+            if let Ok(Some(content)) = store.lookup(key) {
+                let prompt_tokens = messages
+                    .iter()
+                    .map(|m| {
+                        crate::context::count_tokens(
+                            m.get("content").and_then(Value::as_str).unwrap_or(""),
+                        ) as i64
+                    })
+                    .sum();
+                return Ok(ChatResult {
+                    content,
+                    usage: crate::pricing::UsageDetail {
+                        prompt_tokens,
+                        completion_tokens: 0,
+                        field_missing: true,
+                        ..Default::default()
+                    },
+                    model: spec.name.clone(),
+                    reasoning: None,
+                    cache_hit: true,
+                });
+            }
+        }
+        let query = messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                (m.get("role").and_then(Value::as_str) == Some("user"))
+                    .then(|| m.get("content").and_then(Value::as_str))
+                    .flatten()
+            })
+            .unwrap_or("");
+        let history: Vec<Value> = messages
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m.get("role").and_then(Value::as_str),
+                    Some("user") | Some("assistant")
+                )
+            })
+            .cloned()
+            .collect();
+        let context_free =
+            crate::context::is_context_free(query, &history[..history.len().saturating_sub(1)]);
+        let semantic = if exact.is_some() && context_free && !query.is_empty() {
+            let threshold = std::env::var("LLOOM_SEMANTIC_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.88);
+            crate::semantic_cache::SemanticCache::open(
+                crate::config::data_dir().join("cache_semantic.sqlite3"),
+                86_400,
+                threshold,
+            )
+            .ok()
+            .and_then(|cache| {
+                crate::semantic_cache::SemanticCache::embed(query)
+                    .ok()
+                    .map(|vector| (cache, vector))
+            })
+        } else {
+            None
+        };
+        if let Some((cache, vector)) = &semantic {
+            if let Ok(Some((content, _similarity))) = cache.lookup(&spec.name, vector) {
+                return Ok(ChatResult {
+                    content,
+                    usage: crate::pricing::UsageDetail {
+                        field_missing: true,
+                        ..Default::default()
+                    },
+                    model: spec.name.clone(),
+                    reasoning: None,
+                    cache_hit: true,
+                });
+            }
+        }
+        let result = crate::providers::chat(spec, messages, max_tokens, temperature).await?;
+        if let (Some((store, c)), Some(key)) = (&exact, &key) {
+            let query = messages
+                .iter()
+                .rev()
+                .find_map(|m| {
+                    (m.get("role").and_then(Value::as_str) == Some("user"))
+                        .then(|| m.get("content").and_then(Value::as_str))
+                        .flatten()
+                })
+                .unwrap_or("");
+            if crate::context::cacheable(query, temperature) {
+                let _ = store.store(
+                    key,
+                    &spec.name,
+                    &result.content,
+                    (!c.conversation_id.is_empty()).then_some(c.conversation_id),
+                );
+                let max = std::env::var("LLOOM_CACHE_MAX_ENTRIES")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(5000);
+                let _ = store.sweep(max);
+            }
+        }
+        if crate::context::cacheable(query, temperature) {
+            if let Some((cache, vector)) = &semantic {
+                let _ = cache.store(&spec.name, query, &result.content, vector);
+                let max = std::env::var("LLOOM_CACHE_MAX_ENTRIES")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(5000);
+                let _ = cache.sweep(max);
+            }
+        }
+        return Ok(result);
     }
-    let resp = client()
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service unreachable: {e}")))?;
-    resp.json::<ChatResult>()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service bad response: {e}")))
+    Err(AppError::AiService(format!(
+        "不支持的 Provider '{}'；当前原生支持 openai/dashscope/ollama/custom/anthropic",
+        spec.provider
+    )))
 }
 
 /// LLM-based task classification (fallback layer). Never fails hard.
 pub async fn classify(text: &str, classifier: &ModelSpec, valid_types: &[&str]) -> String {
-    let url = format!("{}/v1/classify", base_url());
-    let body = json!({
-        "text": text,
-        "classifier": classifier,
-        "valid_types": valid_types,
-    });
-    match client().post(&url).json(&body).send().await {
-        Ok(resp) => resp
-            .json::<ClassifyResult>()
-            .await
-            .map(|r| r.task_type)
-            .unwrap_or_else(|_| "general".to_string()),
+    const PROMPT: &str = "将用户请求分类，只返回一个类别名称，不要解释。";
+    let valid = valid_types.join(" / ");
+    match chat(
+        classifier,
+        &[
+            json!({"role":"system","content":format!("{PROMPT} 可选类别：{valid}")}),
+            json!({"role":"user","content":text.chars().take(500).collect::<String>()}),
+        ],
+        20,
+        0.0,
+        None,
+    )
+    .await
+    {
+        Ok(result) => {
+            let lower = result.content.to_lowercase();
+            valid_types
+                .iter()
+                .find(|t| lower.contains(**t))
+                .copied()
+                .unwrap_or("general")
+                .to_string()
+        }
         Err(_) => "general".to_string(),
     }
 }
 
-/// Full orchestration stream. Returns a live `Stream` of SSE events forwarded
-/// from the Python AI service — NOT buffered. The Rust core proxies each event
-/// as it arrives (see `server::orchestrate_stream`), so the browser receives
-/// incremental `token` events and can render the answer word-by-word.
-///
-/// `conversation_id` (optional) enables cache namespacing + context
-/// fingerprinting on the Python side; `summary`/`summary_upto` carry the
-/// persisted rolling summary so it is not recomputed on every request.
+/// Generate/extend a rolling conversation summary. The policy and persistence
+/// live in Rust; Python is used only as the temporary LiteLLM transport.
+pub async fn summarize(spec: &ModelSpec, previous: &str, uncovered: &[Value]) -> Result<String> {
+    let transcript = uncovered
+        .iter()
+        .map(|message| {
+            let role = if message.get("role").and_then(Value::as_str) == Some("user") {
+                "用户"
+            } else {
+                "助手"
+            };
+            let content: String = message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(400)
+                .collect();
+            format!("{role}: {content}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prefix = if previous.is_empty() {
+        String::new()
+    } else {
+        format!("已有摘要：\n{previous}\n\n")
+    };
+    let prompt = format!(
+        "{prefix}请把以下对话片段压缩成一段简洁的事实摘要（≤300字），保留关键事实、用户意图与已做决定，忽略寒暄：\n{transcript}"
+    );
+    let result = chat(
+        spec,
+        &[json!({"role": "user", "content": prompt})],
+        400,
+        0.0,
+        None,
+    )
+    .await?;
+    Ok(result.content.trim().to_string())
+}
+
+/// Ask the assigned model for a structured decomposition. Parsing and fallback
+/// are Rust responsibilities; this call only transports the prompt to LiteLLM.
+pub async fn decompose(spec: &ModelSpec, query: &str) -> Result<Vec<crate::orchestrator::SubTask>> {
+    const PROMPT: &str = "你是一个任务分解专家。将用户的复杂任务分解为2-5个子任务。\n规则：\n1. 每个子任务应该是独立的、可执行的\n2. 标注子任务之间的依赖关系（depends_on）\n3. 类型只能是 simple_qa / general / coding / math_logic / complex_reasoning\n4. 估算每个子任务的输出 token 数\n只输出JSON数组，字段为 id, description, task_type, depends_on, estimated_output_tokens。";
+    let result = chat(
+        spec,
+        &[
+            json!({"role": "system", "content": PROMPT}),
+            json!({"role": "user", "content": query}),
+        ],
+        800,
+        0.0,
+        None,
+    )
+    .await?;
+    Ok(crate::orchestrator::parse_decomposition(&result.content))
+}
+
+/// Rust-owned orchestration executor. It preserves the existing SSE contract;
+/// provider calls use the native adapters through `chat`.
 #[allow(clippy::too_many_arguments)]
-pub async fn orchestrate_stream(
+pub async fn orchestrate_native(
     db: &crate::db::Db,
     query: &str,
-    history: &[Value],
-    sr_domain: &str,
+    _history: &[Value],
     models: &[ModelSpec],
-    cache_dir: &str,
-    conversation_id: Option<&str>,
-    summary: Option<&str>,
-    summary_upto: i64,
+    conversation_id: &str,
     assignments: &Value,
-) -> Result<impl Stream<Item = SseEvent> + Send> {
-    let url = format!("{}/v1/orchestrate/stream", base_url());
-    let mut body = json!({
-        "query": query,
-        "history": history,
-        "sr_domain": sr_domain,
-        "models": models,
-        "cache_dir": cache_dir,
-        "similarity_threshold": config::cache_threshold(db),
-        "summary_upto": summary_upto,
-        "assignments": assignments,
-    });
-    if let Some(cid) = conversation_id {
-        body["conversation_id"] = json!(cid);
-    }
-    if let Some(s) = summary {
-        body["summary"] = json!(s);
-    }
-    let resp = client()
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service unreachable: {e}")))?;
+    prepared_messages: &[Value],
+    context_stats: &Value,
+    is_complex: bool,
+    planned_tasks: &[crate::orchestrator::SubTask],
+    waves: &[Vec<usize>],
+) -> Result<Vec<SseEvent>> {
+    use std::collections::{HashMap, HashSet};
+    use std::time::Instant;
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<SseEvent>(64);
+    let assigned = |role: &str| -> Option<&ModelSpec> {
+        assignments
+            .get(role)
+            .and_then(Value::as_str)
+            .and_then(|name| models.iter().find(|m| m.name == name))
+            .or_else(|| models.first())
+    };
+    let mut events = vec![event("context", context_stats.clone())];
+    if !is_complex {
+        let spec = assigned("general").ok_or_else(|| AppError::AiService("无可用模型".into()))?;
+        events.push(event("decompose", json!({
+            "sub_tasks": [{"id":1,"description":query,"task_type":"general","selected_model":spec.name,"cost":0.0}],
+            "total_cost": 0.0
+        })));
+        events.push(event(
+            "task_start",
+            json!({"id":1,"description":query,"model":spec.name}),
+        ));
+        let started = Instant::now();
+        let cache_dir = crate::config::data_dir()
+            .join("chroma")
+            .to_string_lossy()
+            .to_string();
+        let cache = ChatCacheCtx {
+            conversation_id,
+            cache_dir: &cache_dir,
+        };
+        let result = chat(spec, prepared_messages, 2000, 0.3, Some(&cache)).await?;
+        for part in result.content.as_bytes().chunks(96) {
+            events.push(event(
+                "token",
+                json!({"id":1,"model":spec.name,"delta":String::from_utf8_lossy(part)}),
+            ));
+        }
+        let duration = started.elapsed().as_secs_f64();
+        events.push(event("task_done", json!({
+            "id":1,"model":spec.name,"task_type":"general","duration":duration,"cost":0.0,
+            "input_tokens":result.usage.prompt_tokens,"output_tokens":result.usage.completion_tokens,
+            "saved_cost":0.0,"cache_hit":result.cache_hit
+        })));
+        events.push(event("result", json!({
+            "response":result.content,"model":spec.name,"cost":0.0,
+            "input_tokens":result.usage.prompt_tokens,"output_tokens":result.usage.completion_tokens,
+            "saved_cost":0.0,"total_duration":duration,"models_used":[spec.name],
+            "cache_hit":result.cache_hit,"reasoning":result.reasoning
+        })));
+        return Ok(events);
+    }
 
-    // Read the Python SSE byte stream in a background task and parse it into
-    // discrete events, pushing each onto the channel as soon as it completes.
-    tokio::spawn(async move {
-        use futures::StreamExt;
-        let mut buf = String::new();
-        let mut event_name: Option<String> = None;
-        let mut data_buf = String::new();
-        let mut bs = resp.bytes_stream();
-        while let Some(chunk) = bs.next().await {
-            let chunk = match chunk {
-                Ok(c) => c,
-                Err(_) => break,
-            };
-            let text = match String::from_utf8(chunk.to_vec()) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            buf.push_str(&text);
-            while let Some(nl) = buf.find('\n') {
-                let line = buf[..nl].to_string();
-                buf.drain(..=nl);
-                let line = line.trim_end();
-                if line.is_empty() {
-                    // Blank line => event boundary: flush the buffered event.
-                    if let Some(name) = event_name.take() {
-                        if !data_buf.is_empty() {
-                            let _ = tx.send(mk_event(name, &data_buf)).await;
-                            data_buf.clear();
-                        }
-                    }
-                } else if let Some(ev) = line.strip_prefix("event:") {
-                    event_name = Some(ev.trim().to_string());
-                } else if let Some(d) = line.strip_prefix("data:") {
-                    let d = d.strip_prefix(' ').unwrap_or(d).to_string();
-                    data_buf.push_str(&d);
-                }
+    let general =
+        assigned("general").ok_or_else(|| AppError::AiService("无可用执行模型".into()))?;
+    let aggregate =
+        assigned("aggregate").ok_or_else(|| AppError::AiService("无可用汇总模型".into()))?;
+    events.push(event(
+        "decompose",
+        json!({
+            "sub_tasks": planned_tasks.iter().map(|t| json!({
+                "id":t.id,"description":t.description,"task_type":t.task_type,
+                "depends_on":t.depends_on,"estimated_output_tokens":t.estimated_output_tokens,
+                "selected_model":general.name,"cost":0.0
+            })).collect::<Vec<_>>(), "total_cost":0.0
+        }),
+    ));
+
+    let tasks: HashMap<usize, &crate::orchestrator::SubTask> =
+        planned_tasks.iter().map(|t| (t.id, t)).collect();
+    let routable_models: Vec<crate::models::Model> = db
+        .list_models(true)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            !matches!(m.backend, crate::models::Backend::Cloud { .. })
+                || !crate::config::api_key_for(m.api_key_env()).is_empty()
+        })
+        .collect();
+    let mut completed: HashMap<usize, String> = HashMap::new();
+    let mut used = HashSet::new();
+    let mut total_in = 0i64;
+    let mut total_out = 0i64;
+    let mut total_duration = 0.0;
+    for wave in waves {
+        for id in wave {
+            if let Some(task) = tasks.get(id) {
+                events.push(event(
+                    "task_start",
+                    json!({"id":task.id,"description":task.description,"model":general.name}),
+                ));
             }
         }
-        // Flush a trailing event if the stream ended without a final blank line.
-        if let Some(name) = event_name.take() {
-            if !data_buf.is_empty() {
-                let _ = tx.send(mk_event(name, &data_buf)).await;
+        // Calls are kept deterministic here; provider concurrency is added once
+        // native rate-limit coordination moves into this module.
+        for id in wave {
+            let Some(task) = tasks.get(id) else { continue };
+            let dependency_context = task
+                .depends_on
+                .iter()
+                .filter_map(|dep| {
+                    completed
+                        .get(dep)
+                        .map(|value| format!("[子任务{dep}] {value}"))
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let user = if dependency_context.is_empty() {
+                task.description.clone()
+            } else {
+                format!(
+                    "前置任务结果：\n{dependency_context}\n\n当前任务：{}",
+                    task.description
+                )
+            };
+            let route = crate::router::plan_decision(db, &task.task_type, &routable_models).ok();
+            let candidates = route
+                .as_ref()
+                .map(|p| {
+                    std::iter::once(p.primary.as_str())
+                        .chain(p.fallback_chain.iter().map(String::as_str))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| vec![general.name.as_str()]);
+            let started = Instant::now();
+            let mut outcome = None;
+            let mut error = None;
+            let mut used_spec = general;
+            for name in candidates {
+                let Some(spec) = models.iter().find(|m| m.name == name) else {
+                    continue;
+                };
+                match chat(spec, &[json!({"role":"system","content":"你是一个专业的AI助手。请认真完成以下任务。"}), json!({"role":"user","content":user})], task.estimated_output_tokens as i64, 0.3, None).await {
+                    Ok(result) => { used_spec = spec; outcome = Some(result); break; }
+                    Err(e) => error.get_or_insert_with(|| e.to_string()),
+                };
+            }
+            let duration = started.elapsed().as_secs_f64();
+            total_duration += duration;
+            if let Some(result) = outcome {
+                total_in += result.usage.prompt_tokens;
+                total_out += result.usage.completion_tokens;
+                used.insert(used_spec.name.clone());
+                completed.insert(task.id, result.content);
+                events.push(event("task_done", json!({
+                    "id":task.id,"model":used_spec.name,"task_type":task.task_type,"duration":duration,
+                    "cost":0.0,"input_tokens":result.usage.prompt_tokens,"output_tokens":result.usage.completion_tokens,
+                    "saved_cost":0.0,"cache_hit":result.cache_hit
+                })));
+            } else {
+                let detail = error.unwrap_or_else(|| "所有候选模型均失败".into());
+                completed.insert(task.id, format!("执行失败: {detail}"));
+                events.push(event("task_done", json!({"id":task.id,"model":general.name,"task_type":task.task_type,"duration":duration,"error":detail})));
             }
         }
-    });
-
-    // Convert the receiver into a Stream for the HTTP response body.
-    Ok(futures::stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|ev| (ev, rx))
-    }))
+    }
+    let summary = planned_tasks
+        .iter()
+        .map(|t| {
+            format!(
+                "## 子任务 {}: {}\n\n{}",
+                t.id,
+                t.description,
+                completed
+                    .get(&t.id)
+                    .map(String::as_str)
+                    .unwrap_or("执行失败")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    events.push(event(
+        "task_start",
+        json!({"id":0,"description":"汇总最终回答","model":aggregate.name}),
+    ));
+    let aggregation = chat(aggregate, &[
+        json!({"role":"system","content":"将子任务结果汇总成连贯、完整的最终回答；如实保留失败信息，不得编造。"}),
+        json!({"role":"user","content":format!("原始任务：{query}\n\n子任务执行结果：\n{summary}")})
+    ], 4096, 0.3, None).await;
+    let (final_text, agg_usage, reasoning) = match aggregation {
+        Ok(result) => (result.content, result.usage, result.reasoning),
+        Err(_) => (summary, Default::default(), None),
+    };
+    for part in final_text.as_bytes().chunks(96) {
+        events.push(event(
+            "token",
+            json!({"id":0,"model":aggregate.name,"delta":String::from_utf8_lossy(part)}),
+        ));
+    }
+    total_in += agg_usage.prompt_tokens;
+    total_out += agg_usage.completion_tokens;
+    used.insert(aggregate.name.clone());
+    events.push(event("task_done", json!({"id":0,"model":aggregate.name,"task_type":"aggregate","duration":0.0,"cost":0.0,"input_tokens":agg_usage.prompt_tokens,"output_tokens":agg_usage.completion_tokens,"cache_hit":false})));
+    events.push(event("result", json!({
+        "response":final_text,"model":aggregate.name,"cost":0.0,"input_tokens":total_in,
+        "output_tokens":total_out,"saved_cost":0.0,"total_duration":total_duration,
+        "models_used":used.into_iter().collect::<Vec<_>>(),"cache_hit":false,"reasoning":reasoning
+    })));
+    Ok(events)
 }
 
 /// Parse an SSE body into a Vec of {event, data} events.
@@ -300,48 +591,6 @@ pub fn parse_sse(text: &str) -> Vec<SseEvent> {
         events.push(mk_event(name, &data));
     }
     events
-}
-
-// ── Semantic-cache management (proxied to the AI service) ──
-
-/// Start the embedding-model pre-initialization on the AI service. Returns the
-/// AI service's JSON response.
-pub async fn cache_init() -> Result<Value> {
-    let url = format!("{}/v1/cache/init", base_url());
-    let resp = client()
-        .post(&url)
-        .send()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service unreachable: {e}")))?;
-    resp.json::<Value>()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service bad response: {e}")))
-}
-
-/// Poll the cache-init progress.
-pub async fn cache_status() -> Result<Value> {
-    let url = format!("{}/v1/cache/status", base_url());
-    let resp = client()
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service unreachable: {e}")))?;
-    resp.json::<Value>()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service bad response: {e}")))
-}
-
-/// Reset cache init state and remove partial chroma data.
-pub async fn cache_cleanup() -> Result<Value> {
-    let url = format!("{}/v1/cache/cleanup", base_url());
-    let resp = client()
-        .post(&url)
-        .send()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service unreachable: {e}")))?;
-    resp.json::<Value>()
-        .await
-        .map_err(|e| AppError::AiService(format!("AI service bad response: {e}")))
 }
 
 fn mk_event(name: String, data: &str) -> SseEvent {

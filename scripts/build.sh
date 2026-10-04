@@ -2,17 +2,15 @@
 # LLooM 构建脚本
 #
 # 架构：Rust workspace（lloom-core + lloom-server + lloom-cli），
-# TUI 为 SolidJS+OpenTUI (tui/)，Python 只剩 AI 微服务。
+# TUI 为 SolidJS+OpenTUI (tui/)，Provider 调用由 Rust 原生实现。
 # 构建产物：
 #   - target/release/lloom-server   — 主服务器（REST + WebUI）
 #   - target/release/lloom-cli      — 命令行界面
-#   - dist/ai-service/ai-service    — PyInstaller 打包的 AI 微服务可执行
 #
 # TUI 运行（需 bun）：cd tui && bun install && bun run src/index.tsx
 #
 # 用法:
 #   bash scripts/build.sh                   # 完整构建
-#   bash scripts/build.sh --skip-ai         # 跳过 AI 微服务打包
 #
 # Ollama 不捆绑。服务器复用系统 Ollama（PATH 或 localhost:11434）；
 # 缺失时 CLI / WebUI / TUI 会在用到本地模型时提示安装。
@@ -23,17 +21,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-# 依赖管理：优先 uv（按 uv.lock 冻结安装，构建可复现）；无 uv 时回落 pip。
-# uv 不读 pip.conf，受限网络下本地需 export UV_DEFAULT_INDEX=（清华镜像）。
-export PIP_CONFIG_FILE="$PROJECT_DIR/pip.conf"
-
-SKIP_AI=false
-
-for arg in "$@"; do
-    case $arg in
-        --skip-ai) SKIP_AI=true ;;
-    esac
-done
 
 echo "============================================"
 echo "LLooM 构建脚本"
@@ -60,56 +47,10 @@ check_common() {
     require_cmd npm || echo "    → npm 随 Node.js 安装"
 }
 
-check_python() {
-    echo "检查 Python 依赖..."
-    if command -v uv >/dev/null 2>&1; then
-        echo "  → 检测到 uv，按 uv.lock 冻结同步（--extra build,dev）..."
-        uv sync --frozen --extra build --extra dev || FAILED_DEPS=$((FAILED_DEPS+1))
-        PYTHON_BIN=".venv/bin/python"
-        [ -x "$PYTHON_BIN" ] || PYTHON_BIN="python3"
-        echo "  → 使用 Python: $PYTHON_BIN (uv 管理)"
-        return 0
-    fi
-    # 无 uv：回落传统 venv/pip 探测
-    local py="${PYTHON_BIN:-}"
-    if [ -z "$py" ]; then
-        for cand in ".venv/bin/python" "venv/bin/python"; do
-            if [ -x "$cand" ]; then
-                py="$cand"
-                break
-            fi
-        done
-    fi
-    if [ -z "$py" ]; then
-        py="python3"
-    fi
-    PYTHON_BIN="$py"
-    echo "  → 使用 Python: $py"
-    if ! command -v "$py" >/dev/null 2>&1; then
-        echo "  ✗ 缺少命令: $py"
-        FAILED_DEPS=$((FAILED_DEPS+1))
-        return 1
-    fi
-    # 检查 AI 服务所需模块
-    if ! "$py" -c "import litellm, fastapi, uvicorn, pydantic" 2>/dev/null; then
-        echo "  ✗ Python 缺少 AI 服务依赖 (litellm/fastapi/uvicorn/pydantic)"
-        echo "    → 运行: pip install -e '.[dev]'  （已启用 pip.conf 镜像源）"
-        FAILED_DEPS=$((FAILED_DEPS+1))
-    fi
-    if [ "$SKIP_AI" = false ]; then
-        if ! "$py" -c "import PyInstaller" 2>/dev/null; then
-            echo "  ✗ Python 缺少 PyInstaller"
-            echo "    → 运行: pip install pyinstaller  （已启用 pip.conf 镜像源）"
-            FAILED_DEPS=$((FAILED_DEPS+1))
-        fi
-    fi
-}
-
 echo ""
 echo "[0/3] 系统依赖检测..."
 echo "----------------------------------------"
 check_common
-check_python
 if [ "$FAILED_DEPS" -gt 0 ]; then
     echo ""
     echo "✗ 检测到 $FAILED_DEPS 项缺失依赖，请先安装后再构建。"
@@ -142,20 +83,6 @@ echo "✓ Rust 编译完成:"
 echo "    target/release/lloom-server"
 echo "    target/release/lloom-cli"
 
-# 3. 打包 Python AI 微服务 + Ollama
-echo "[3/3] AI 微服务 + Ollama..."
-echo "----------------------------------------"
-if [ "$SKIP_AI" = false ]; then
-    echo "打包 Python AI 微服务 (PyInstaller)..."
-    $PYTHON_BIN -m PyInstaller ai_service.spec --noconfirm --clean 2>&1 || {
-        echo "✗ AI 服务打包失败！"
-        exit 1
-    }
-    echo "✓ AI 服务打包完成: dist/ai-service/ai-service"
-else
-    echo "跳过 AI 服务打包"
-fi
-
 echo ""
 echo "============================================"
 echo "✓ 构建完成！"
@@ -164,7 +91,6 @@ echo ""
 echo "产物位置:"
 echo "  服务器:  target/release/lloom-server"
 echo "  CLI:     target/release/lloom-cli"
-echo "  AI 微服务: dist/ai-service/ai-service"
 echo ""
 echo "运行方式:"
 echo "  服务器:  target/release/lloom-server      (WebUI: http://localhost:7861)"

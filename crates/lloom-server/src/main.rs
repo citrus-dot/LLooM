@@ -1,6 +1,6 @@
 //! LLooM headless server.
 //!
-//! Starts the Python AI micro-service, Ollama, and the axum REST server
+//! Starts Ollama and the axum REST server with native Rust provider adapters
 //! (`:7861`). WebUI is served at `/`; all UIs (browser, CLI, TUI) share the
 //! same REST contract via `lloom-core`.
 //!
@@ -20,10 +20,6 @@ struct Args {
     /// WebUI/REST 监听端口（默认 7861；同 LLOOM_WEB_PORT）
     #[arg(long)]
     web_port: Option<u16>,
-
-    /// Python AI 微服务端口（默认 7862；同 LLOOM_AI_PORT）
-    #[arg(long)]
-    ai_port: Option<u16>,
 
     /// 绑定地址（默认 127.0.0.1；同 LLOOM_BIND）
     #[arg(long)]
@@ -45,7 +41,6 @@ fn main() {
     let args = Args::parse();
     config::init_cli_overrides(config::CliOverrides {
         web_port: args.web_port,
-        ai_port: args.ai_port,
         bind: args.bind,
     });
 
@@ -71,24 +66,12 @@ fn main() {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
         rt.block_on(async move {
-            println!("[core] starting Python AI service...");
-            match lloom_core::processes::start_ai().await {
-                Ok(child) => state_for_spawn.children.lock().unwrap().ai = child,
-                Err(e) => eprintln!("[core] ⚠ AI service start failed: {e}"),
-            }
             println!("[core] starting Ollama...");
             match lloom_core::processes::start_ollama().await {
                 Ok(child) => state_for_spawn.children.lock().unwrap().ollama = child,
                 Err(e) => eprintln!("[core] ⚠ Ollama start failed: {e}"),
             }
 
-            for _ in 0..30 {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if lloom_core::processes::check_ai_health().await.status == "ok" {
-                    println!("[core] AI service healthy on :{}", config::ai_port());
-                    break;
-                }
-            }
             let bind_addr = config::bind_addr();
             let listener = tokio::net::TcpListener::bind((bind_addr.as_str(), web_port))
                 .await

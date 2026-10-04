@@ -1,6 +1,6 @@
 // StatCard — a labeled metric card (value + caption), used in stat rows.
 
-import { theme, spacing } from "../theme"
+import { theme } from "../theme"
 
 export function StatCard(props: {
   value: string
@@ -21,17 +21,11 @@ export function StatCard(props: {
     <box
       flexDirection="column"
       flexGrow={props.flexGrow ? 1 : 0}
-      backgroundColor={theme.backgroundPanel}
-      border={["left"]}
-      borderStyle="rounded"
-      borderColor={theme.border}
-      paddingLeft={spacing.md}
-      paddingRight={spacing.md}
-      paddingTop={spacing.sm}
-      paddingBottom={spacing.sm}
+      paddingLeft={1}
+      paddingRight={2}
     >
+      <text fg={theme.textDim}>{props.label.toUpperCase()}</text>
       <text fg={valueColor()} attributes={1}>{props.value}</text>
-      <text fg={theme.textMuted}>{props.label}</text>
     </box>
   )
 }

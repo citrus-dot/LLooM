@@ -1,22 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Row, Col, Card, Statistic, Table, Button, Tag, Space, message, Descriptions, Modal, Collapse } from 'antd';
 import {
-  PlayCircleOutlined,
-  StopOutlined,
   ReloadOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  FileTextOutlined,
   PoweroffOutlined,
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import {
   getServicesStatus,
   getStats,
-  getServiceLogs,
-  startService,
-  stopService,
-  restartService,
   shutdownAll,
   getRoutingReview,
   refreshRoutingReview,
@@ -27,16 +20,10 @@ import {
   RoutingSuggestion,
 } from '../api';
 
-const SERVICE_KEY: Record<string, string> = {
-  Ollama: 'ollama',
-  'AI Service': 'ai',
-};
-
 export default function OverviewPage() {
   const [services, setServices] = useState<ServiceStatus[]>([]);
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(false);
-  const [logModal, setLogModal] = useState<{ name: string; content: string } | null>(null);
   const [review, setReview] = useState<RoutingReview | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
 
@@ -101,20 +88,6 @@ export default function OverviewPage() {
 
   const healthyCount = services.filter((s) => s.healthy).length;
 
-  const handleStart = async () => {
-    await startService('ai');
-    await startService('ollama');
-    message.success('服务启动中...');
-    setTimeout(refresh, 2000);
-  };
-
-  const handleStop = async () => {
-    await stopService('ai');
-    await stopService('ollama');
-    message.info('服务已停止');
-    setTimeout(refresh, 2000);
-  };
-
   // Shut down everything (AI service + Ollama + the core server itself) so no
   // stale processes hold the ports. Used when the user is done and wants a
   // clean state for the next launch.
@@ -135,27 +108,6 @@ export default function OverviewPage() {
         }
       },
     });
-  };
-
-  const handleRestart = async (name: string) => {
-    await restartService(name);
-    message.info(`${name} 重启中...`);
-    setTimeout(refresh, 2000);
-  };
-
-  const handleStopOne = async (name: string, displayName: string) => {
-    await stopService(name);
-    message.success(`${displayName} 已停止`);
-    setTimeout(refresh, 1000);
-  };
-
-  const handleLogs = async (name: string, displayName: string) => {
-    try {
-      const r = await getServiceLogs(name);
-      setLogModal({ name: displayName, content: r.logs || '(暂无日志)' });
-    } catch (e) {
-      message.error(`获取日志失败: ${e}`);
-    }
   };
 
   const columns = [
@@ -189,34 +141,6 @@ export default function OverviewPage() {
           {r.detail && <div style={{ color: '#faad14', fontSize: 12, maxWidth: 420 }}>{r.detail}</div>}
         </Space>
       ),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      render: (_: unknown, r: ServiceStatus) => {
-        if (r.name === 'Core Server') return null;
-        const key = SERVICE_KEY[r.name];
-        if (!key) return null;
-        return (
-          <Space>
-            <Button size="small" icon={<FileTextOutlined />} onClick={() => handleLogs(key, r.name)}>
-              日志
-            </Button>
-            <Button size="small" icon={<ReloadOutlined />} onClick={() => handleRestart(key)}>
-              重启
-            </Button>
-            {r.healthy ? (
-              <Button size="small" danger icon={<StopOutlined />} onClick={() => handleStopOne(key, r.name)}>
-                停止
-              </Button>
-            ) : (
-              <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={() => handleRestart(key)}>
-                启动
-              </Button>
-            )}
-          </Space>
-        );
-      },
     },
   ];
 
@@ -300,12 +224,6 @@ export default function OverviewPage() {
         title="服务列表"
         extra={
           <Space>
-            <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={handleStart}>
-              启动
-            </Button>
-            <Button size="small" danger icon={<StopOutlined />} onClick={handleStop}>
-              停止
-            </Button>
             <Button size="small" danger icon={<PoweroffOutlined />} onClick={handleShutdownAll}>
               关闭全部服务
             </Button>
@@ -430,38 +348,6 @@ export default function OverviewPage() {
         />
       </Card>
 
-      <Modal
-        title={`${logModal?.name ?? ''} 日志`}
-        open={logModal !== null}
-        onCancel={() => setLogModal(null)}
-        footer={
-          <Button
-            type="primary"
-            onClick={() => {
-              const key = SERVICE_KEY[logModal?.name ?? ''];
-              if (key) handleLogs(key, logModal!.name);
-            }}
-          >
-            刷新
-          </Button>
-        }
-        width={720}
-      >
-        <pre
-          style={{
-            maxHeight: 480,
-            overflow: 'auto',
-            background: '#1e2030',
-            color: '#c8d3f5',
-            padding: 12,
-            borderRadius: 6,
-            fontSize: 12,
-            whiteSpace: 'pre-wrap',
-          }}
-        >
-          {logModal?.content}
-        </pre>
-      </Modal>
     </Space>
   );
 }

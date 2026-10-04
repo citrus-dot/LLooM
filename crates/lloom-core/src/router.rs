@@ -371,7 +371,9 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
         .map(|c| c.name.clone())
         .collect();
     let winner = gated.iter().find(|m| m.name == primary);
-    let est_input = winner.map(|m| winner_est_input_cost(input, m)).unwrap_or(0.0);
+    let est_input = winner
+        .map(|m| winner_est_input_cost(input, m))
+        .unwrap_or(0.0);
     Ok(PlanOutcome {
         primary,
         fallback_chain: chain,
@@ -549,7 +551,15 @@ pub async fn route(
     last_model: Option<&str>,
     conversation_id: Option<&str>,
 ) -> RoutingDecision {
-    let models = db.list_models(true).unwrap_or_default();
+    let models: Vec<Model> = db
+        .list_models(true)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            !matches!(m.backend, crate::models::Backend::Cloud { .. })
+                || !crate::config::api_key_for(m.api_key_env()).is_empty()
+        })
+        .collect();
     if model != "auto" && model != "auto-route" {
         let stream = models
             .iter()
@@ -618,12 +628,13 @@ pub async fn route(
                 .ok()
                 .flatten()
                 .unwrap_or(0.0);
-            let delta = match models.iter().find(|m| m.name == lm).map(|m| m.provider_name()) {
+            let delta = match models
+                .iter()
+                .find(|m| m.name == lm)
+                .map(|m| m.provider_name())
+            {
                 Some(p) => spec_map.get(&(p.to_string(), lm.to_string())),
-                None => spec_map
-                    .iter()
-                    .find(|((_, n), _)| n == lm)
-                    .map(|(_, s)| s),
+                None => spec_map.iter().find(|((_, n), _)| n == lm).map(|(_, s)| s),
             }
             .map(|s| s.cache_price_delta(500))
             .unwrap_or(0.0);
@@ -780,9 +791,10 @@ pub fn enhance_with_domain(task_type: &str, sr_domain: &str) -> (String, bool) {
             }
         }
         "computer_science" | "engineering"
-            if task_type != "coding" && task_type != "complex_reasoning" => {
-                return ("coding".to_string(), true);
-            }
+            if task_type != "coding" && task_type != "complex_reasoning" =>
+        {
+            return ("coding".to_string(), true);
+        }
         _ => {}
     }
     (task_type.to_string(), false)
@@ -798,7 +810,7 @@ mod tests {
         } else {
             Model::fixture(name, provider)
         };
-        m.litellm_model = name.to_string();
+        m.provider_model = name.to_string();
         m.capability_tier = tier;
         m.quality_score = match tier {
             3 => 0.85,
@@ -964,7 +976,13 @@ mod tests {
         };
         let ctx = Ctx::new();
         let out = plan(&base_input(
-            &models, &specs, "simple_qa", "easy", &policy, 1000, &ctx,
+            &models,
+            &specs,
+            "simple_qa",
+            "easy",
+            &policy,
+            1000,
+            &ctx,
         ))
         .expect("plan");
         assert_eq!(out.primary, "qwen2.5-local");
@@ -1437,7 +1455,10 @@ mod tests {
             cache_price_delta: delta,
         });
         let long = sticky_bonus(&inp, m, med_ec);
-        assert!(short > 0.0 && short < long, "粘性应随会话缓存累积增大: {short} < {long}");
+        assert!(
+            short > 0.0 && short < long,
+            "粘性应随会话缓存累积增大: {short} < {long}"
+        );
 
         // 超长会话不超封顶
         inp.conv_sticky = Some(StickyEvidence {

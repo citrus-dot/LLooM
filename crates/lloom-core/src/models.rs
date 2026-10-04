@@ -77,13 +77,6 @@ impl LocalCompat {
             LocalCompat::OpenAiCompat => "openai",
         }
     }
-
-    pub fn litellm_prefix(&self) -> &'static str {
-        match self {
-            LocalCompat::Ollama => "ollama",
-            LocalCompat::OpenAiCompat => "openai",
-        }
-    }
 }
 
 /// 云端 API key 的两种来源：环境变量名或 `sk-` 开头的字面密钥。
@@ -151,20 +144,7 @@ pub enum Backend {
     },
 }
 
-impl Backend {
-    /// litellm 模型字符串前缀；`Custom` 供应商按 OpenAI 兼容协议调用。
-    pub fn litellm_prefix(&self) -> &str {
-        match self {
-            Backend::Cloud { provider, .. } => match provider {
-                Provider::DashScope => "dashscope",
-                Provider::OpenAI => "openai",
-                Provider::Anthropic => "anthropic",
-                Provider::Custom(_) => "openai",
-            },
-            Backend::Local { compat, .. } => compat.litellm_prefix(),
-        }
-    }
-}
+impl Backend {}
 
 impl Serialize for Backend {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -228,7 +208,7 @@ pub struct Model {
     #[serde(default)]
     pub id: i64,
     pub name: String,
-    pub litellm_model: String,
+    pub provider_model: String,
     pub backend: Backend,
     #[serde(default)]
     pub task_type: String,
@@ -311,7 +291,7 @@ impl Model {
     pub fn to_ai_spec(&self, api_key: &str) -> serde_json::Value {
         serde_json::json!({
             "name": self.name,
-            "litellm_model": self.litellm_model,
+            "provider_model": self.provider_model,
             "api_base": self.api_base(),
             "api_key": api_key,
             "input_cost_per_token": self.input_cost_per_token,
@@ -332,7 +312,7 @@ impl Model {
         Model {
             id: 0,
             name: name.to_string(),
-            litellm_model: format!("{provider}/{name}"),
+            provider_model: name.to_string(),
             backend: Backend::Cloud {
                 provider: Provider::parse(provider),
                 api_base: None,

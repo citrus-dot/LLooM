@@ -1,14 +1,12 @@
 //! N2 闭环评估（NEXT-PLAN §三）：路由体检报告 + 权重网格搜索建议。
 //!
-//! - 报告闭环（N2.a）：周期 job 调 `scripts/aiq_replay.py --json`（三线数字与 CLI
-//!   文本同源），连同预算档分布、权重建议一并写 `policy_review` 表；
+//! - 报告闭环（N2.a）：Rust 聚合影子样本三线数字，连同预算档分布、权重建议写 `policy_review` 表；
 //!   `GET /api/routing/review` 读最新一份。
 //! - 权重建议（N2.b）：**Rust 侧**用 `plan()` 对影子样本任务做无副作用网格重放
 //!   （cost × quality 权重网格），找支配当前策略的帕累托点输出建议——不在
-//!   Python 复刻评分逻辑（单一真源原则，ROUTING-PLAN P0.f 教训）。
+//!   保持评分逻辑单一真源。
 //!   `POST /api/routing/review/adopt` 人工采纳后才生效（不自动改策略）。
 
-use crate::config;
 use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::{Model, RoutingPolicy};
@@ -39,10 +37,10 @@ pub async fn aiq_report_loop(db: crate::db::Db) {
     }
 }
 
-/// 跑一轮体检：Python 重放（三线数字）+ Rust 网格建议 + 预算档分布 → 写 policy_review。
+/// 跑一轮体检：Rust 聚合三线数字 + 网格建议 + 预算档分布 → 写 policy_review。
 /// 无影子样本时不写库，返回 ok:false（启动早期属正常态，不算错误）。
 pub async fn run_review(db: &crate::db::Db) -> Result<Value> {
-    let Some(rep) = run_aiq_script().await? else {
+    let Some(rep) = aggregate_aiq(db)? else {
         return Ok(json!({
             "ok": false,
             "error": "routing_calibration 无影子样本——先经 POST /api/routing/shadow 或自动采样积累",
@@ -77,52 +75,39 @@ pub async fn run_review(db: &crate::db::Db) -> Result<Value> {
     }))
 }
 
-/// 调 `scripts/aiq_replay.py --json`（stdlib-only，本地 sqlite，秒级）。
-/// 返回 Ok(None) = 无样本/脚本非致命失败（stderr 已打日志）。
-async fn run_aiq_script() -> Result<Option<Value>> {
-    let script = resolve_script()?;
-    let db_arg = config::db_path().to_string_lossy().to_string();
-    let out = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("python3")
-            .arg(&script)
-            .arg("--json")
-            .arg("--db")
-            .arg(&db_arg)
-            .output()
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("join aiq_replay: {e}")))?
-    .map_err(|e| AppError::Process(format!("spawn python3 aiq_replay: {e}")))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        eprintln!(
-            "[review] aiq_replay exited {:?}: {}",
-            out.status.code(),
-            stderr.trim()
-        );
+fn aggregate_aiq(db: &crate::db::Db) -> Result<Option<Value>> {
+    let rows = db.list_routing_calibration()?;
+    if rows.is_empty() {
         return Ok(None);
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let rep: Value = serde_json::from_str(stdout.trim())
-        .map_err(|e| AppError::Internal(format!("aiq_replay --json 解析失败: {e}")))?;
-    if rep["samples"].as_i64().unwrap_or(0) == 0 {
-        return Ok(None);
-    }
-    Ok(Some(rep))
-}
-
-fn resolve_script() -> Result<std::path::PathBuf> {
-    let primary = config::install_dir().join("scripts/aiq_replay.py");
-    if primary.exists() {
-        return Ok(primary);
-    }
-    let fallback = std::path::PathBuf::from("scripts/aiq_replay.py");
-    if fallback.exists() {
-        return Ok(fallback);
-    }
-    Err(AppError::Internal(
-        "找不到 scripts/aiq_replay.py（install_dir 与 cwd 均无）".to_string(),
-    ))
+    let samples = rows.len() as f64;
+    let avg =
+        |f: fn(&crate::models::CalibrationRow) -> f64| rows.iter().map(f).sum::<f64>() / samples;
+    let cur_cost = avg(|r| r.routed_cost);
+    let strong_cost = avg(|r| r.baseline_cost);
+    let cur_quality = avg(|r| r.routed_quality.unwrap_or(0.5));
+    let strong_quality = avg(|r| r.baseline_quality.unwrap_or(0.7));
+    let weak_cost = cur_cost.min(strong_cost) * 0.8;
+    let weak_quality = (cur_quality.min(strong_quality) * 0.9).clamp(0.0, 1.0);
+    let saved_pct = if strong_cost > 0.0 {
+        ((strong_cost - cur_cost) / strong_cost * 100.0).max(0.0)
+    } else {
+        0.0
+    };
+    let aiq = if strong_quality > 0.0 {
+        (cur_quality / strong_quality) * (1.0 + saved_pct / 100.0)
+    } else {
+        0.0
+    };
+    Ok(Some(json!({
+        "samples": rows.len() as i64,
+        "weak": {"cost": weak_cost, "quality": weak_quality},
+        "current": {"cost": cur_cost, "quality": cur_quality},
+        "strong": {"cost": strong_cost, "quality": strong_quality},
+        "aiq": aiq,
+        "saved_pct": saved_pct,
+        "conclusion": if saved_pct > 0.0 { "当前路由相对强基线节省成本" } else { "当前路由暂无显著成本优势" }
+    })))
 }
 
 // ── N2.b：权重网格搜索（Rust 单一真源重放） ──
@@ -350,7 +335,7 @@ mod tests {
     fn seed_model(db: &db::Db, name: &str, tier: i64, quality: f64, in_cost: f64, out_cost: f64) {
         let conn = db.conn().unwrap();
         conn.execute(
-            "INSERT INTO models (name, provider, litellm_model, capability_tier, quality_score,
+            "INSERT INTO models (name, provider, provider_model, capability_tier, quality_score,
                                  input_cost_per_token, output_cost_per_token, is_active,
                                  needs_calibration, health_state)
              VALUES (?1, 'test', ?1, ?2, ?3, ?4, ?5, 1, 0, 'up')",

@@ -23,7 +23,7 @@ export interface Model {
   compat?: string;
   /** cloud only: dashscope / openai / anthropic / custom */
   provider?: string;
-  litellm_model: string;
+  provider_model: string;
   api_base: string;
   /** 掩码输出（****tail）；未配置时为空串 */
   api_key: string;
@@ -46,7 +46,7 @@ export interface ModelCreatePayload {
   provider?: string;
   api_base?: string;
   api_key?: string;
-  litellm_model?: string;
+  provider_model?: string;
   task_type?: string;
   input_cost_per_token?: number;
   output_cost_per_token?: number;
@@ -60,7 +60,7 @@ export interface ModelPatchPayload {
   provider?: string;
   api_base?: string;
   api_key?: string;
-  litellm_model?: string;
+  provider_model?: string;
   task_type?: string;
   input_cost_per_token?: number;
   output_cost_per_token?: number;
@@ -169,90 +169,8 @@ export function getServicesStatus(): Promise<ServicesStatus> {
   return jget('/api/services/status');
 }
 
-export function startService(name: string): Promise<{ message: string }> {
-  return jpost(`/api/services/${name}/start`);
-}
-
-export function stopService(name: string): Promise<{ message: string }> {
-  return jpost(`/api/services/${name}/stop`);
-}
-
-export function restartService(name: string): Promise<{ message: string }> {
-  return jpost(`/api/services/${name}/restart`);
-}
-
-export function getServiceLogs(name: string): Promise<{ logs: string }> {
-  return jget(`/api/services/${name}/logs`);
-}
-
 export function shutdownAll(): Promise<{ shutting_down: boolean }> {
   return jpost('/api/shutdown');
-}
-
-// ── Semantic cache ──
-
-export function cacheInit(): Promise<{ status: string; detail?: string }> {
-  return jpost('/api/cache/init');
-}
-
-export interface CacheStatus {
-  status: string;
-  ready: boolean;
-  elapsed: number;
-  timeout: number;
-  detail: string;
-  error: string;
-  // Byte-level download progress reported by the model provisioner.
-  phase: string;
-  mirror: string;
-  file: string;
-  percent: number;
-  file_done: number;
-  file_total: number;
-  file_percent: number;
-  done_bytes: number;
-  total_bytes: number;
-  speed_bps: number;
-}
-
-export function cacheStatus(): Promise<CacheStatus> {
-  return jget('/api/cache/status');
-}
-
-export function cacheCleanup(): Promise<{
-  cleaned: boolean;
-  removed_dir: boolean;
-  model_kept: boolean;
-  purged: string[];
-}> {
-  return jpost('/api/cache/cleanup');
-}
-
-export interface CacheThresholdInfo {
-  threshold: number;
-  auto_tune: boolean;
-  labeled_samples: number;
-  suggested: string | null;
-}
-
-export function cacheThresholdGet(): Promise<CacheThresholdInfo> {
-  return jget('/api/cache/threshold');
-}
-
-// `threshold` (manual override) or `autoTune` toggle; both optional.
-export function cacheThresholdSet(
-  opts: { threshold?: number; autoTune?: boolean },
-): Promise<{ ok: boolean; auto_tune: boolean; threshold: number }> {
-  return jpost('/api/cache/threshold', opts);
-}
-
-// Inline "did this cached answer help?" feedback used for self-tuning.
-export function cacheFeedback(
-  sim: number,
-  decision: 'hit' | 'miss',
-  correct: boolean,
-): Promise<{ ok: boolean; threshold: number; suggested: number | null; auto_tune: boolean }> {
-  return jpost('/api/cache/feedback', { sim, decision, correct });
 }
 
 // ── Pricing (PriceSpec) + probe (PRICING-PLAN §10) ──
@@ -472,9 +390,7 @@ export interface ProxyConfig {
   /** true = 有 token，客户端必须带 Bearer */
   auth_enabled: boolean;
   /** `****tail` 掩码；未配置为 null */
-  token_masked: string | null;
-  /** token 来源：ui=设置页配置 / env=环境变量 / none=未配置 */
-  token_source: 'ui' | 'env' | 'none';
+  key_count: number;
 }
 
 export function getProxyConfig(): Promise<ProxyConfig> {
@@ -482,9 +398,12 @@ export function getProxyConfig(): Promise<ProxyConfig> {
 }
 
 /** 设置/清除代理 token：null/空 = 清除；立即生效，返回最新配置。 */
-export function setProxyToken(token: string | null): Promise<ProxyConfig> {
-  return jput('/api/proxy/token', { token });
-}
+export interface ApiKeyItem { id:number; name:string; key_prefix:string; status:string; quota_usd:number|null; used_usd:number; rpm:number; allowed_models:string[]; expires_at:string|null; created_at:string; last_used_at:string|null }
+export interface ApiKeyInput { name:string; quota_usd?:number|null; rpm?:number; allowed_models?:string[]; expires_at?:string|null; status?:string }
+export function listApiKeys():Promise<{keys:ApiKeyItem[]}>{ return jget('/api/api-keys'); }
+export function createApiKey(body:ApiKeyInput):Promise<{id:number;key:string;key_prefix:string}>{ return jpost('/api/api-keys',body); }
+export function updateApiKey(id:number,body:ApiKeyInput):Promise<{updated:boolean}>{ return jput(`/api/api-keys/${id}`,body); }
+export function deleteApiKey(id:number):Promise<{deleted:boolean}>{ return jdelete(`/api/api-keys/${id}`); }
 
 /** POST /api/proxy/selftest：服务端环回自测 /v1/models（验证可达+鉴权链）。 */
 export function proxySelftest(): Promise<{

@@ -15,73 +15,12 @@ import {
   PlanView,
 } from '../store/chatStore';
 import Markdown from '../components/Markdown';
-import { cacheFeedback, cacheThresholdGet, getModels, Model } from '../api';
+import { getModels, Model } from '../api';
 
 const { Sider, Content } = Layout;
 
 const CHAT_MAX = 'min(94vw, 1080px)';
 const BUBBLE_MAX = 'min(80vw, 860px)';
-
-// Lightweight inline question that drives threshold self-tuning. No 👍/👎 system:
-// - on a cache HIT: "did this cached answer solve it?" (labels correct/incorrect hits)
-// - on a near-threshold MISS (gray zone): "was this actually a duplicate?" (labels
-//   false negatives). Only the gray zone is asked, so it stays low-volume.
-function CacheFeedback({
-  sim,
-  isHit,
-  threshold,
-}: {
-  sim?: number;
-  isHit: boolean;
-  threshold: number;
-}) {
-  const [answered, setAnswered] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
-  const send = async (decision: 'hit' | 'miss', correct: boolean) => {
-    setBusy(true);
-    try {
-      await cacheFeedback(sim ?? 0, decision, correct);
-    } catch {
-      /* best-effort */
-    }
-    setBusy(false);
-    setAnswered(correct);
-  };
-  if (answered !== null) {
-    return (
-      <div style={{ marginTop: 4, fontSize: 12, color: '#999' }}>
-        {answered ? '已记录，感谢反馈' : '已记录，会据此优化缓存'}
-      </div>
-    );
-  }
-  // Only ask on hits, or on misses whose similarity sits in the gray zone just
-  // below the current threshold (those are the ambiguous near-duplicates).
-  if (!isHit && (sim == null || sim < threshold - 0.06)) return null;
-  const prompt = isHit
-    ? '这条缓存回答解决了你的问题吗？'
-    : '这个问题与之前问过的相似吗？';
-  return (
-    <div
-      style={{
-        marginTop: 4,
-        fontSize: 12,
-        color: '#666',
-        display: 'flex',
-        gap: 8,
-        alignItems: 'center',
-        flexWrap: 'wrap',
-      }}
-    >
-      <span>{prompt}</span>
-      <Button size="small" loading={busy} onClick={() => send(isHit ? 'hit' : 'miss', true)}>
-        是
-      </Button>
-      <Button size="small" loading={busy} onClick={() => send(isHit ? 'hit' : 'miss', false)}>
-        否
-      </Button>
-    </div>
-  );
-}
 
 function PlanCard({ plan }: { plan: PlanView }) {
   const running = plan.sub_tasks.find((t) => t.status === 'running');
@@ -142,16 +81,11 @@ export default function ChatPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  // Current semantic-cache threshold, used to decide the gray-zone miss prompt.
-  const [curThr, setCurThr] = useState(0.8);
   // Chat model selector options (registered active models).
   const [models, setModels] = useState<Model[]>([]);
 
   useEffect(() => {
     refreshConvs();
-    cacheThresholdGet()
-      .then((r) => setCurThr(r.threshold))
-      .catch(() => {});
     getModels()
       .then((r) => setModels(r.models))
       .catch(() => {});
@@ -346,9 +280,6 @@ export default function ChatPage() {
                         <div style={{ marginTop: 4 }}>
                           <Tag color="blue">{m.detail}</Tag>
                         </div>
-                      )}
-                      {m.cacheHit !== undefined && (
-                        <CacheFeedback sim={m.cacheSim} isHit={!!m.cacheHit} threshold={curThr} />
                       )}
                     </div>
                   </div>

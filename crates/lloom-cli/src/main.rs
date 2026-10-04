@@ -24,9 +24,6 @@ struct Cli {
 enum Command {
     /// Show service status
     Status,
-    /// Service management
-    #[command(subcommand)]
-    Service(ServiceCmd),
     /// Model management
     #[command(subcommand)]
     Models(ModelsCmd),
@@ -64,14 +61,6 @@ enum Command {
 enum ProxyCmd {
     /// Show proxy Base URL, auth status and model-field notes
     Show,
-    /// Set or clear the proxy API key (immediate effect, no restart)
-    Token {
-        /// New token value (omit together with --clear to just show status)
-        value: Option<String>,
-        /// Clear the UI-managed token (falls back to LLOOM_PROXY_TOKEN env)
-        #[arg(long)]
-        clear: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -97,34 +86,6 @@ enum ConversationCmd {
     },
     /// Start a fresh conversation
     New,
-}
-
-#[derive(Subcommand)]
-enum ServiceCmd {
-    /// Show service status
-    Status,
-    /// Start a service (ai / ollama)
-    Start {
-        /// Service name: ai or ollama
-        name: String,
-    },
-    /// Stop a service (ai / ollama)
-    Stop {
-        /// Service name: ai or ollama
-        name: String,
-    },
-    /// Restart a service (ai / ollama)
-    Restart {
-        /// Service name: ai or ollama
-        name: String,
-    },
-    /// Show recent logs for a service (ai / ollama)
-    Logs {
-        /// Service name: ai or ollama
-        name: String,
-    },
-    /// Shut down all services (AI + Ollama + core server)
-    Shutdown,
 }
 
 #[derive(Subcommand)]
@@ -240,7 +201,6 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new();
     match cli.command {
         Command::Status => cmd_status(&client).await?,
-        Command::Service(c) => cmd_service(&client, c).await?,
         Command::Models(c) => cmd_models(&client, c).await?,
         Command::Budgets(c) => cmd_budgets(&client, c).await?,
         Command::Usage => cmd_usage(&client).await?,
@@ -290,19 +250,6 @@ async fn del(client: &Client, path: &str) -> Result<Value, Box<dyn std::error::E
     Ok(res.json().await?)
 }
 
-fn svc_id(name: &str) -> Result<&str, &'static str> {
-    let n = name.to_lowercase();
-    if n == "ai" || n.contains("ai service") {
-        Ok("ai")
-    } else if n.contains("ollama") {
-        Ok("ollama")
-    } else if n.contains("core") {
-        Err("Core Server 是宿主进程，不能通过 CLI 管理；请用 ai / ollama")
-    } else {
-        Ok("ai")
-    }
-}
-
 // ── Status / Service ──
 
 async fn cmd_status(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
@@ -318,49 +265,6 @@ async fn cmd_status(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
             if !d.is_empty() {
                 println!("        {d}");
             }
-        }
-    }
-    Ok(())
-}
-
-async fn cmd_service(client: &Client, cmd: ServiceCmd) -> Result<(), Box<dyn std::error::Error>> {
-    match cmd {
-        ServiceCmd::Status => cmd_status(client).await?,
-        ServiceCmd::Start { name } => {
-            let id = svc_id(&name)?;
-            let r = post(client, &format!("/api/services/{id}/start"), Value::Null).await?;
-            println!("{}", r["message"].as_str().unwrap_or("ok"));
-        }
-        ServiceCmd::Stop { name } => {
-            let id = svc_id(&name)?;
-            let r = post(client, &format!("/api/services/{id}/stop"), Value::Null).await?;
-            println!("{}", r["message"].as_str().unwrap_or("ok"));
-        }
-        ServiceCmd::Restart { name } => {
-            let id = svc_id(&name)?;
-            let r = post(client, &format!("/api/services/{id}/restart"), Value::Null).await?;
-            println!("{}", r["message"].as_str().unwrap_or("ok"));
-        }
-        ServiceCmd::Logs { name } => {
-            let id = svc_id(&name)?;
-            let r = get(client, &format!("/api/services/{id}/logs")).await?;
-            let logs = r["logs"].as_str().unwrap_or("");
-            if logs.is_empty() {
-                println!("(暂无日志)");
-            } else {
-                print!("{logs}");
-            }
-        }
-        ServiceCmd::Shutdown => {
-            let r = post(client, "/api/shutdown", Value::Null).await?;
-            println!(
-                "{}",
-                if r["shutting_down"].as_bool().unwrap_or(false) {
-                    "正在关闭全部服务..."
-                } else {
-                    "关闭请求已发送"
-                }
-            );
         }
     }
     Ok(())
@@ -387,7 +291,7 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
                         "  {:<18} {:<16} {:<40} in=${:.6}/tok out=${:.6}/tok {}",
                         m["name"].as_str().unwrap_or(""),
                         backend,
-                        m["litellm_model"].as_str().unwrap_or(""),
+                        m["provider_model"].as_str().unwrap_or(""),
                         m["input_cost_per_token"].as_f64().unwrap_or(0.0),
                         m["output_cost_per_token"].as_f64().unwrap_or(0.0),
                         if m["task_type"].as_str().unwrap_or("").is_empty() {
@@ -450,7 +354,7 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
                 }
             }
             if let Some(v) = model {
-                body["litellm_model"] = serde_json::json!(v);
+                body["provider_model"] = serde_json::json!(v);
             }
             let r = post(client, "/api/models", body).await?;
             println!("✓ 模型已注册 (id={}, name={})", r["id"], r["name"]);
@@ -817,58 +721,7 @@ async fn cmd_conversation(
 
 async fn cmd_proxy(client: &Client, cmd: ProxyCmd) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
-        ProxyCmd::Token { value, clear } => {
-            let token = if clear {
-                Some(Value::Null)
-            } else {
-                value.clone().map(|v| {
-                    if v.trim().is_empty() {
-                        Value::Null
-                    } else {
-                        Value::String(v.trim().to_string())
-                    }
-                })
-            };
-            if let Some(body_token) = token {
-                // PUT /api/proxy/token：null=清除；字符串=设置（立即生效）
-                let res = client
-                    .put(format!("{BASE}/api/proxy/token"))
-                    .json(&serde_json::json!({ "token": body_token }))
-                    .send()
-                    .await?;
-                if !res.status().is_success() {
-                    return Err(format!("设置失败: HTTP {}", res.status()).into());
-                }
-                let cfg: Value = res.json().await?;
-                let action = if clear
-                    || value
-                        .as_deref()
-                        .map(|v| v.trim().is_empty())
-                        .unwrap_or(false)
-                {
-                    "已清除"
-                } else {
-                    "已设置"
-                };
-                println!(
-                    "{action}（立即生效）  鉴权: {}",
-                    if cfg["auth_enabled"].as_bool().unwrap_or(false) {
-                        "启用"
-                    } else {
-                        "未鉴权"
-                    }
-                );
-                return Ok(());
-            }
-            // 无 value 无 --clear → 打印当前状态（落到 Show）
-            let cfg: Value = get(client, "/api/proxy/config").await?;
-            print_proxy_info(&cfg);
-            return Ok(());
-        }
-        ProxyCmd::Show => {
-            let cfg: Value = get(client, "/api/proxy/config").await?;
-            print_proxy_info(&cfg);
-        }
+        ProxyCmd::Show => print_proxy_info(&get(client, "/api/proxy/config").await?),
     }
     Ok(())
 }
@@ -877,7 +730,7 @@ fn print_proxy_info(cfg: &Value) {
     let base = cfg["base_url"].as_str().unwrap_or("");
     let bind = cfg["bind"].as_str().unwrap_or("");
     let auth = cfg["auth_enabled"].as_bool().unwrap_or(false);
-    let source = cfg["token_source"].as_str().unwrap_or("none");
+    let key_count = cfg["key_count"].as_i64().unwrap_or(0);
     println!("OpenAI 兼容代理接入");
     println!("  Base URL : {base}");
     if bind != "127.0.0.1" && bind != "localhost" {
@@ -886,11 +739,7 @@ fn print_proxy_info(cfg: &Value) {
     println!(
         "  鉴权     : {}",
         if auth {
-            match source {
-                "ui" => format!("启用（Key 来自本服务配置库，掩码 {}）", cfg["token_masked"].as_str().unwrap_or("****")),
-                "env" => "启用（Key 来自环境变量 LLOOM_PROXY_TOKEN）".to_string(),
-                _ => format!("启用（掩码 {}）", cfg["token_masked"].as_str().unwrap_or("****")),
-            }
+            format!("启用（{key_count} 个 API Key）")
         } else {
             "未鉴权（任何能访问该端口的程序都可调用；仅环回绑定时可接受）".to_string()
         }
@@ -906,7 +755,7 @@ fn print_proxy_info(cfg: &Value) {
     println!("    未知名      自动回落 auto，不报错");
     println!();
     println!("  限制: 流式为整段下发；不支持 tools/多模态；编排分解不在本通道。");
-    println!("  管理: lloom-cli proxy token <VALUE> 设置 / --clear 清除（立即生效）。");
+    println!("  管理: 打开 WebUI 的 API Keys 页面。");
 }
 
 async fn cmd_orchestrate(client: &Client, query: &str) -> Result<(), Box<dyn std::error::Error>> {

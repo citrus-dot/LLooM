@@ -13,8 +13,7 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" />
   <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blue" alt="Platform" />
   <img src="https://img.shields.io/badge/Rust-axum-CE422B?logo=rust&logoColor=white" alt="Rust" />
-  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white" alt="Python" />
-  <img src="https://img.shields.io/badge/LiteLLM-100%2B%20providers-red" alt="LiteLLM" />
+  <img src="https://img.shields.io/badge/Providers-OpenAI%20%7C%20Anthropic-blue" alt="Providers" />
   <img src="https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
 </p>
 
@@ -53,14 +52,13 @@
 git clone -b v2 https://github.com/citrus-dot/LLooM.git
 cd LLooM
 
-uv sync --extra dev --extra build          # 或: pip install -e ".[dev]"
 cp .env.example .env                       # 至少填入一个 API 密钥
 cd webui && npm install && npm run build && cd ..
 
 cargo run -p lloom-server                  # WebUI 在 :7861
 ```
 
-服务器（`:7861`）是唯一入口，会自动拉起 Python AI 微服务（`:7862`）和 Ollama（`:11434`）。Ollama 不随包分发，安装：`curl -fsSL https://ollama.com/install.sh | sh`。
+服务器（`:7861`）是唯一入口。云模型由 Rust 原生调用；本地模型使用 Ollama（`:11434`），安装：`curl -fsSL https://ollama.com/install.sh | sh`。
 
 ## 30 秒上手
 
@@ -86,10 +84,10 @@ curl -N -X POST http://localhost:7861/api/chat/stream \
 
 - **智能路由** — 两层分类（正则 → LLM 兜底）；注册表门槛 + 健康/预算/成本上限约束的评分选模；钉选软优先（`LLOOM_PINNED_MODE=hard` 恢复强制指定）；5 级回退链；影子评测 + AIQ 离线重放
 - **成本核算** — SQLite 按模型追踪 Token/费用；预算档注入路由；探针月度预算封顶 + 校准哨兵
-- **多源定价** — `manual > overlay > litellm_remote > litellm_packaged > heuristic` 优先级链；OpenRouter 参考价偏差 ≥20% 预警
+- **多源定价** — `manual > remote > packaged > heuristic` 优先级链；OpenRouter 参考价偏差 ≥20% 预警
 - **任务编排** — 复杂度检测 → LLM 拆解 → 按序执行 → 结果聚合，全程 SSE 流式
 - **安全层** — PII 脱敏（7 类）、越狱拦截（5 类）、MMLU 14 域分类
-- **语义缓存** — ChromaDB 余弦相似度（阈值 0.95、TTL 24h）、命中反馈闭环、阈值自调、优雅降级
+- **两级缓存** — SQLite 精确缓存 + FastEmbed 量化 MiniLM 语义缓存（默认阈值 0.88、TTL 24h）
 - **三种前端** — WebUI、CLI（`lloom-cli`）、TUI（OpenTUI + SolidJS），共用同一 REST 契约
 
 ## 架构
@@ -99,15 +97,13 @@ UI 层（WebUI / CLI / TUI）               ← 任意前端，与业务无关
         │  HTTP REST —— 类型化 JSON，唯一契约
 Rust 核心 + axum REST 服务器（:7861）    ← 全部业务逻辑 + WebUI
         │
-Rust 核心模块（db / router / security / pricing / probe / …）
-        │  异步 HTTP
-Python AI 微服务（:7862）                ← 无状态 litellm 封装
-        │
+Rust 核心模块（路由 / 编排 / 缓存 / Provider / SQLite）
+        │  原生异步 HTTP
 LLM 提供商（DashScope / OpenAI / Anthropic / Ollama）
 ```
 
-- **Rust 承担一切**：SQLite（WAL）、路由、安全、进程管理 —— Python 只留 Rust 替代不了的部分（litellm 的 100+ 提供商覆盖）
-- **诚实的服务状态**：子进程存活 + 端口响应 + AI 就绪，绝不伪装 "healthy"
+- **纯 Rust 数据面**：SQLite、路由、编排、安全、Provider 适配和语义缓存都在单一进程内
+- **原生协议**：支持 OpenAI-compatible（OpenAI、DashScope、DeepSeek、OpenRouter、Ollama、vLLM 等）与 Anthropic Messages
 
 分层详解、端口分配与 [REST API 完整参考](ARCHITECTURE.md#rest-api-参考)见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
@@ -152,7 +148,6 @@ lloom-cli models list | add | update | remove
 lloom-cli budgets set user default 10 --duration 30d
 lloom-cli budgets list | check user default
 lloom-cli usage | status
-lloom-cli service status | start ollama | stop ai | restart ai | logs ollama
 lloom-cli conversation list | show <id> | delete <id> | new
 lloom-cli chat "你好"                        # 单次
 lloom-cli chat "继续" --session <id>         # 续接会话
@@ -174,8 +169,7 @@ LLooM/
 ├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）
 ├── webui/                        # WebUI（React + Vite + Ant Design）→ dist/
 ├── tui/                          # TUI（OpenTUI + SolidJS，bun）
-├── api/ai_service.py             # Python AI 微服务（litellm 封装）
-├── scripts/                      # build.sh / smoke_test.sh / aiq_replay.py
+├── scripts/                      # build.sh / smoke_test.sh / package.sh
 └── ARCHITECTURE.md               # 分层详解 + REST 参考
 ```
 

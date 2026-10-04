@@ -7,7 +7,7 @@ import { getStats, getUsage, getBudgets, setBudget, checkBudget, deleteBudget, g
 import { dialogOpen } from "../app"
 import { useBindings } from "@opentui/keymap/solid"
 import { useDialog } from "../ui/dialog"
-import { Button, StatCard, Table } from "../ui"
+import { Button, PageHeader, StatCard, Table } from "../ui"
 
 export function Usage(props: { setStatus: (s: string) => void }) {
   const [rows, setRows] = createSignal<UsageRow[]>([])
@@ -166,17 +166,19 @@ export function Usage(props: { setStatus: (s: string) => void }) {
         paddingLeft={2}
         paddingRight={2}
         paddingTop={1}
-        paddingBottom={1}
       >
-      {/* Stat cards */}
-      <box flexDirection="row" gap={2} paddingBottom={1}>
+      <PageHeader title="用量与预算" subtitle="按模型查看 token、成本和预算执行情况">
+        <Button variant="primary" onClick={() => addBudget()}>+ 预算</Button>
+        <Button variant="ghost" onClick={() => loadBudgets()}>刷新</Button>
+      </PageHeader>
+      <box flexDirection="row" paddingBottom={1}>
         <StatCard flexGrow value={`$${spend().toFixed(4)}`} label="累计花费" tone="primary" />
         <StatCard flexGrow value={String(modelCount())} label="可用模型" tone="success" />
         <StatCard flexGrow value={String(budgets().length)} label="预算数" tone="secondary" />
       </box>
 
       {/* Usage */}
-      <text fg={theme.textMuted} attributes={1}>用量明细</text>
+      <text fg={theme.text} attributes={1}>用量明细</text>
       <Table
         columns={[
           { title: "模型", width: "30%", render: (r, { selected }) => <text fg={selected ? theme.background : theme.text} attributes={selected ? 1 : 0}>{r.model_name}</text> },
@@ -196,7 +198,7 @@ export function Usage(props: { setStatus: (s: string) => void }) {
       <box height={1} />
 
       {/* Model pricing */}
-      <text fg={theme.textMuted} attributes={1}>模型定价 ($/1K tokens)</text>
+      <box flexDirection="row"><text fg={theme.text} attributes={1}>模型定价</text><text fg={theme.textDim} paddingLeft={1}>$/1K tokens</text></box>
       <Table
         columns={[
           { title: "模型", width: "30%", render: (m, { selected }) => <text fg={selected ? theme.background : theme.text}>{m.name}</text> },
@@ -210,11 +212,7 @@ export function Usage(props: { setStatus: (s: string) => void }) {
       <box height={1} />
 
       {/* Budgets */}
-      <box flexDirection="row" gap={1} paddingBottom={1}>
-        <text fg={theme.textMuted} attributes={1}>预算</text>
-        <Button variant="primary" onClick={() => addBudget()}>设置</Button>
-        <Button variant="ghost" onClick={() => loadBudgets()}>刷新</Button>
-      </box>
+      <text fg={theme.text} attributes={1}>预算</text>
       <Table
         columns={[
           {

@@ -19,7 +19,7 @@ pub struct ModelRow {
     pub id: i64,
     pub name: String,
     pub provider: String,
-    pub litellm_model: String,
+    pub provider_model: String,
     pub api_base: String,
     pub api_key_env: String,
     pub task_type: String,
@@ -39,12 +39,36 @@ pub struct ModelRow {
     pub needs_calibration: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiKeyRow {
+    pub id: i64,
+    pub name: String,
+    pub key_prefix: String,
+    pub status: String,
+    pub quota_usd: Option<f64>,
+    pub used_usd: f64,
+    pub rpm: i64,
+    pub allowed_models: String,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+pub struct ApiKeyWrite<'a> {
+    pub name: &'a str,
+    pub status: &'a str,
+    pub quota_usd: Option<f64>,
+    pub rpm: i64,
+    pub allowed_models: &'a str,
+    pub expires_at: Option<&'a str>,
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS models (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     provider TEXT NOT NULL,
-    litellm_model TEXT NOT NULL,
+    provider_model TEXT NOT NULL,
     api_base TEXT,
     api_key_env TEXT,
     task_type TEXT,
@@ -113,6 +137,28 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    key_hash TEXT UNIQUE NOT NULL,
+    key_prefix TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    quota_usd REAL,
+    used_usd REAL NOT NULL DEFAULT 0,
+    rpm INTEGER NOT NULL DEFAULT 60,
+    allowed_models TEXT NOT NULL DEFAULT '[]',
+    expires_at TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status);
+CREATE TABLE IF NOT EXISTS api_key_requests (
+    key_id INTEGER NOT NULL,
+    requested_at INTEGER NOT NULL,
+    FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_api_key_requests ON api_key_requests(key_id, requested_at);
 
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
@@ -459,8 +505,14 @@ impl Db {
                 &conn,
                 "usage_records",
                 &[
-                    ("est_input_cost", "ALTER TABLE usage_records ADD COLUMN est_input_cost REAL DEFAULT 0"),
-                    ("act_input_cost", "ALTER TABLE usage_records ADD COLUMN act_input_cost REAL DEFAULT 0"),
+                    (
+                        "est_input_cost",
+                        "ALTER TABLE usage_records ADD COLUMN est_input_cost REAL DEFAULT 0",
+                    ),
+                    (
+                        "act_input_cost",
+                        "ALTER TABLE usage_records ADD COLUMN act_input_cost REAL DEFAULT 0",
+                    ),
                 ],
             )?;
         }
@@ -503,7 +555,7 @@ impl Db {
         validate_cost(filled.input_cost_per_token, filled.output_cost_per_token)?;
         let row = ModelRow::from(&filled);
         let res = conn.execute(
-            "INSERT INTO models (name, provider, litellm_model, api_base, api_key_env, task_type,
+            "INSERT INTO models (name, provider, provider_model, api_base, api_key_env, task_type,
                              input_cost_per_token, output_cost_per_token, rpm, is_active,
                              capability_tier, quality_score, context_window,
                              supports_tools, supports_vision, supports_stream,
@@ -513,7 +565,7 @@ impl Db {
             params![
                 row.name,
                 row.provider,
-                row.litellm_model,
+                row.provider_model,
                 row.api_base,
                 row.api_key_env,
                 row.task_type,
@@ -553,7 +605,7 @@ impl Db {
         validate_cost(filled.input_cost_per_token, filled.output_cost_per_token)?;
         let row = ModelRow::from(&filled);
         let res = conn.execute(
-            "INSERT INTO models (name, provider, litellm_model, api_base, api_key_env, task_type,
+            "INSERT INTO models (name, provider, provider_model, api_base, api_key_env, task_type,
                              input_cost_per_token, output_cost_per_token, rpm, is_active,
                              capability_tier, quality_score, context_window,
                              supports_tools, supports_vision, supports_stream,
@@ -562,7 +614,7 @@ impl Db {
                  ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
          ON CONFLICT(name) DO UPDATE SET
              provider = excluded.provider,
-             litellm_model = excluded.litellm_model,
+             provider_model = excluded.provider_model,
              api_base = excluded.api_base,
              api_key_env = excluded.api_key_env,
              task_type = excluded.task_type,
@@ -582,7 +634,7 @@ impl Db {
             params![
                 row.name,
                 row.provider,
-                row.litellm_model,
+                row.provider_model,
                 row.api_base,
                 row.api_key_env,
                 row.task_type,
@@ -843,6 +895,127 @@ impl Db {
     pub fn delete_setting(&self, key: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
+    pub fn list_api_keys(&self) -> Result<Vec<ApiKeyRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,name,key_prefix,status,quota_usd,used_usd,rpm,allowed_models,
+                    expires_at,created_at,last_used_at FROM api_keys ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ApiKeyRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                key_prefix: r.get(2)?,
+                status: r.get(3)?,
+                quota_usd: r.get(4)?,
+                used_usd: r.get(5)?,
+                rpm: r.get(6)?,
+                allowed_models: r.get(7)?,
+                expires_at: r.get(8)?,
+                created_at: r.get(9)?,
+                last_used_at: r.get(10)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn insert_api_key(&self, hash: &str, prefix: &str, key: &ApiKeyWrite<'_>) -> Result<i64> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO api_keys(name,key_hash,key_prefix,quota_usd,rpm,allowed_models,expires_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                key.name,
+                hash,
+                prefix,
+                key.quota_usd,
+                key.rpm,
+                key.allowed_models,
+                key.expires_at
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn update_api_key(&self, id: i64, key: &ApiKeyWrite<'_>) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE api_keys SET name=?2,status=?3,quota_usd=?4,rpm=?5,allowed_models=?6,expires_at=?7 WHERE id=?1",
+            params![id, key.name, key.status, key.quota_usd, key.rpm, key.allowed_models, key.expires_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_api_key(&self, id: i64) -> Result<()> {
+        self.conn()?
+            .execute("DELETE FROM api_keys WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn authenticate_api_key(&self, hash: &str, model: &str) -> Result<Option<i64>> {
+        let conn = self.conn()?;
+        type AuthRow = (i64, String, Option<f64>, f64, String, Option<String>, i64);
+        let row: Option<AuthRow> = conn
+            .query_row(
+                "SELECT id,status,quota_usd,used_usd,allowed_models,expires_at,rpm FROM api_keys WHERE key_hash=?1",
+                params![hash], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)),
+            ).optional()?;
+        let Some((id, status, quota, used, allowed, expires, rpm)) = row else {
+            return Ok(None);
+        };
+        if status != "active" || quota.is_some_and(|q| used >= q) {
+            return Ok(None);
+        }
+        let expired = expires.as_deref().is_some_and(|v| {
+            !v.is_empty()
+                && conn
+                    .query_row("SELECT date(?1) < date('now')", params![v], |r| {
+                        r.get::<_, bool>(0)
+                    })
+                    .unwrap_or(true)
+        });
+        if expired {
+            return Ok(None);
+        }
+        let models: Vec<String> = serde_json::from_str(&allowed).unwrap_or_default();
+        if !models.is_empty() && model != "auto" && !models.iter().any(|m| m == model) {
+            return Ok(None);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        conn.execute(
+            "DELETE FROM api_key_requests WHERE requested_at < ?1",
+            params![now - 60],
+        )?;
+        let recent: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM api_key_requests WHERE key_id=?1 AND requested_at>=?2",
+            params![id, now - 60],
+            |r| r.get(0),
+        )?;
+        if recent >= rpm {
+            return Ok(None);
+        }
+        conn.execute(
+            "INSERT INTO api_key_requests(key_id,requested_at) VALUES(?1,?2)",
+            params![id, now],
+        )?;
+        conn.execute(
+            "UPDATE api_keys SET last_used_at=CURRENT_TIMESTAMP WHERE id=?1",
+            params![id],
+        )?;
+        Ok(Some(id))
+    }
+
+    pub fn add_api_key_usage(&self, id: i64, cost: f64) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE api_keys SET used_usd=used_usd+?2 WHERE id=?1",
+            params![id, cost],
+        )?;
         Ok(())
     }
 
@@ -1410,9 +1583,7 @@ impl Db {
              GROUP BY model_name, task_type, api_source",
         )?;
         let rows = stmt
-            .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -1939,7 +2110,7 @@ fn model_from_row(row: &rusqlite::Row) -> rusqlite::Result<ModelRow> {
         id: row.get("id")?,
         name: row.get("name")?,
         provider: row.get("provider")?,
-        litellm_model: row.get("litellm_model")?,
+        provider_model: row.get("provider_model")?,
         api_base: row
             .get::<_, Option<String>>("api_base")?
             .unwrap_or_default(),
@@ -1992,7 +2163,7 @@ impl From<ModelRow> for Model {
         Model {
             id: r.id,
             name: r.name,
-            litellm_model: r.litellm_model,
+            provider_model: r.provider_model,
             backend,
             task_type: r.task_type,
             input_cost_per_token: r.input_cost_per_token,
@@ -2018,7 +2189,7 @@ impl From<&Model> for ModelRow {
             id: m.id,
             name: m.name.clone(),
             provider: m.provider_name().to_string(),
-            litellm_model: m.litellm_model.clone(),
+            provider_model: m.provider_model.clone(),
             api_base: m.api_base().to_string(),
             api_key_env: m.api_key_env().to_string(),
             task_type: m.task_type.clone(),
@@ -2156,7 +2327,7 @@ mod model_row_tests {
             id: 7,
             name: "m1".into(),
             provider: "dashscope".into(),
-            litellm_model: "dashscope/m1".into(),
+            provider_model: "dashscope/m1".into(),
             api_base: "https://api.example.com".into(),
             api_key_env: "DASHSCOPE_API_KEY".into(),
             task_type: "general".into(),
@@ -2186,7 +2357,7 @@ mod model_row_tests {
             id: 3,
             name: "l1".into(),
             provider: "custom".into(),
-            litellm_model: "openai/l1".into(),
+            provider_model: "openai/l1".into(),
             api_base: "http://localhost:1234/v1".into(),
             api_key_env: String::new(),
             task_type: String::new(),
@@ -2367,7 +2538,10 @@ mod b15_conversation_cache_tests {
                 action_on_exceed: None,
             })
             .unwrap_err();
-        assert!(err.to_string().contains("不能为负数"), "报错带修复提示: {err}");
+        assert!(
+            err.to_string().contains("不能为负数"),
+            "报错带修复提示: {err}"
+        );
         // 0 是合法边界（立即封顶语义），不拒
         db.upsert_budget(&BudgetInput {
             scope: "user",

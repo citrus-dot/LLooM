@@ -56,9 +56,9 @@ pub struct ModelCreate {
     /// env 名或 `sk-` 字面密钥；本地必须为空
     #[serde(default)]
     pub api_key: Option<String>,
-    /// LiteLLM 模型串；缺省自动按 `{前缀}/{name}` 拼接，错前缀拒收
+    /// 供应商真实模型 ID；缺省使用注册名。
     #[serde(default)]
-    pub litellm_model: Option<String>,
+    pub provider_model: Option<String>,
     #[serde(default)]
     pub task_type: Option<String>,
     #[serde(default)]
@@ -111,20 +111,14 @@ impl TryFrom<ModelCreate> for Model {
                 )))
             }
         };
-        let litellm_model = match c.litellm_model.as_deref().unwrap_or_default() {
-            "" => format!("{}/{}", backend.litellm_prefix(), c.name),
-            s if s.starts_with(&format!("{}/", backend.litellm_prefix())) => s.to_string(),
-            s => {
-                return Err(AppError::InvalidRequest(format!(
-                    "litellm_model '{s}' 前缀应为 '{}/'",
-                    backend.litellm_prefix()
-                )))
-            }
-        };
+        let provider_model = c
+            .provider_model
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| c.name.clone());
         Ok(Model {
             id: 0,
             name: c.name,
-            litellm_model,
+            provider_model,
             backend,
             task_type: c.task_type.unwrap_or_else(|| "general".into()),
             input_cost_per_token: c.input_cost_per_token.unwrap_or(0.0),
@@ -155,7 +149,7 @@ pub struct ModelPatch {
     pub provider: Option<String>,
     pub api_base: Option<String>,
     pub api_key: Option<String>,
-    pub litellm_model: Option<String>,
+    pub provider_model: Option<String>,
     pub task_type: Option<String>,
     pub input_cost_per_token: Option<f64>,
     pub output_cost_per_token: Option<f64>,
@@ -277,14 +271,12 @@ impl ModelPatch {
                 }
             }
         }
-        if let Some(lm) = self.litellm_model.as_deref().filter(|s| !s.is_empty()) {
-            let prefix = m.backend.litellm_prefix();
-            if !lm.starts_with(&format!("{prefix}/")) {
-                return Err(AppError::InvalidRequest(format!(
-                    "litellm_model '{lm}' 前缀应为 '{prefix}/'"
-                )));
-            }
-            m.litellm_model = lm.to_string();
+        if let Some(model) = self
+            .provider_model
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+        {
+            m.provider_model = model.to_string();
         }
         if let Some(v) = &self.task_type {
             m.task_type = v.clone();
@@ -337,9 +329,9 @@ impl ModelPatch {
         };
         put("provider", rb.provider != ra.provider, json!(ra.provider));
         put(
-            "litellm_model",
-            rb.litellm_model != ra.litellm_model,
-            json!(ra.litellm_model),
+            "provider_model",
+            rb.provider_model != ra.provider_model,
+            json!(ra.provider_model),
         );
         put("api_base", rb.api_base != ra.api_base, json!(ra.api_base));
         put(
@@ -416,7 +408,7 @@ pub struct ModelDto {
     pub compat: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
-    pub litellm_model: String,
+    pub provider_model: String,
     pub api_base: String,
     /// 掩码输出（`****tail`）；未配置时为空串
     pub api_key: String,
@@ -450,7 +442,7 @@ impl From<&Model> for ModelDto {
             kind: kind.to_string(),
             compat,
             provider,
-            litellm_model: m.litellm_model.clone(),
+            provider_model: m.provider_model.clone(),
             api_base: m.api_base().to_string(),
             api_key: if raw_key.is_empty() {
                 String::new()
@@ -486,7 +478,7 @@ mod tests {
         let m = Model::try_from(c).unwrap();
         assert!(m.is_local());
         assert_eq!(m.api_base(), "http://localhost:11434");
-        assert_eq!(m.litellm_model, "ollama/qwen3:8b");
+        assert_eq!(m.provider_model, "qwen3:8b");
         assert_eq!(m.api_key_env(), "");
 
         let bad: ModelCreate =
@@ -496,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn create_cloud_requires_provider_and_prefix() {
+    fn create_cloud_requires_provider_and_accepts_provider_model() {
         let c: ModelCreate =
             serde_json::from_str(r#"{"name":"qwen-plus","kind":"cloud"}"#).unwrap();
         assert!(Model::try_from(c).is_err(), "云端缺 provider 必须拒收");
@@ -507,14 +499,14 @@ mod tests {
         .unwrap();
         let m = Model::try_from(c).unwrap();
         assert!(!m.is_local());
-        assert_eq!(m.litellm_model, "dashscope/qwen-plus");
+        assert_eq!(m.provider_model, "qwen-plus");
         assert_eq!(m.api_key_env(), "DASHSCOPE_API_KEY");
 
         let c: ModelCreate = serde_json::from_str(
-            r#"{"name":"m1","kind":"cloud","provider":"dashscope","litellm_model":"openai/m1"}"#,
+            r#"{"name":"m1","kind":"cloud","provider":"dashscope","provider_model":"openai/m1"}"#,
         )
         .unwrap();
-        assert!(Model::try_from(c).is_err(), "错 litellm 前缀必须拒收");
+        assert_eq!(Model::try_from(c).unwrap().provider_model, "openai/m1");
     }
 
     #[test]
@@ -524,7 +516,7 @@ mod tests {
                 .unwrap();
         let m = Model::try_from(c).unwrap();
         assert_eq!(m.api_base(), "http://localhost:1234/v1");
-        assert_eq!(m.litellm_model, "openai/qwen2.5-7b");
+        assert_eq!(m.provider_model, "qwen2.5-7b");
         assert_eq!(m.provider_name(), "custom");
     }
 

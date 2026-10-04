@@ -30,9 +30,9 @@ export function Table<T = unknown>(props: {
   )
 
   return (
-    <box flexDirection="column" backgroundColor={theme.backgroundPanel} border={["left", "right"]} borderStyle="rounded" borderColor={theme.border} paddingTop={1} paddingBottom={1}>
+    <box flexDirection="column" backgroundColor={theme.backgroundPanel}>
       {/* Header */}
-      <box flexDirection="row" paddingLeft={3} paddingRight={3} paddingBottom={1}>
+      <box flexDirection="row" paddingLeft={1} paddingRight={1} paddingBottom={1} border={["bottom"]} borderColor={theme.border}>
         <For each={props.columns}>
           {(col) => (
             <text fg={theme.textMuted} attributes={1} width={col.width}>
@@ -43,7 +43,7 @@ export function Table<T = unknown>(props: {
       </box>
 
       {props.rows.length === 0 && (
-        <text fg={theme.textDim} paddingLeft={3}>  {props.emptyText ?? "暂无数据"}</text>
+        <text fg={theme.textDim} paddingLeft={1}>{props.emptyText ?? "暂无数据"}</text>
       )}
 
       <For each={rows()}>
@@ -51,8 +51,8 @@ export function Table<T = unknown>(props: {
           <box
             flexDirection="row"
             backgroundColor={entry.isSel ? theme.primary : entry.isHover ? theme.backgroundElement : theme.backgroundPanel}
-            paddingLeft={3}
-            paddingRight={3}
+            paddingLeft={1}
+            paddingRight={1}
             onMouseOver={() => props.onHover?.(i())}
             onMouseOut={() => props.onHover?.(null)}
             onMouseDown={() => props.onSelect?.(i())}
