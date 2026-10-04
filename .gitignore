@@ -62,3 +62,10 @@ CODE_GUIDE.md
 
 # 本地 agent 协作规则（不入库，含个人偏好）
 /AGENTS.md
+
+# RouterBench：原始数据与运行期数据不入库（99.6MB/1.28GB 下载件由 source_manifest 记录 sha256）
+benchmarks/**/raw/
+benchmarks/**/data/
+# normalized 大文件可由 raw + import_frozen.py 确定性重建；仅保留 source_manifest.json 入库
+benchmarks/**/normalized/*
+!benchmarks/**/normalized/source_manifest.json

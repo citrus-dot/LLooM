@@ -1,0 +1,279 @@
+{
+  "status": "provisional",
+  "created_at": "2026-10-04T17:29:10+00:00",
+  "schema_version": 1,
+  "source": {
+    "type": "routerbench",
+    "revision": "hf-mirror.com/datasets/withmartian/routerbench (0shot pkl, main)",
+    "source_url": "https://hf-mirror.com/datasets/withmartian/routerbench/resolve/main/routerbench_0shot.pkl",
+    "files": [
+      {
+        "path": "benchmarks/routerbench/raw/routerbench/routerbench_0shot.pkl",
+        "bytes": 99567659,
+        "sha256": "ba4f77f19517610a707c374e99322d7750c30fc4ae7ff5527888595a1e65d36d",
+        "integrity_gate": "load 前 --expect-sha256 校验 + 模块白名单受限 Unpickler"
+      },
+      {
+        "path": "benchmarks/routerbench/raw/llmrouterbench/bench-release.tar.gz",
+        "bytes": 1283503080,
+        "sha256": "b79f8cde1a6f029c2efa663a3a3b6f7748defb22341fe59f328cebef6648c8f1",
+        "integrity_gate": "Day 1 下载即记录；解析导入（import_llmrouterbench）在 Day 6+ 前置同样校验",
+        "recorded_out_of_band": true
+      }
+    ]
+  },
+  "scoring": {
+    "metric": "routerbench_performance",
+    "note": "源数据 quality 列；MMLU/ARC/HellaSwag/Winogrande/GSM8K/MBPP 为 0/1 正确性，mtbench 为 LLM-judge 分（量纲未归一，screening/replay 时按 family 分别解读）"
+  },
+  "prompt_profile": {
+    "mode": "zero_shot",
+    "note": "官方 0-shot 矩阵，sampling 参数沿用源数据"
+  },
+  "split": {
+    "calibration_ratio": 0.2,
+    "test_ratio": 0.8,
+    "seed": 3407,
+    "method": "哈希桶确定性切分：sha256('lloom-split:{seed}:{sample_id}') 前 128bit 归一后< calibration_ratio → calibration，否则 test。逐样本独立、与行序无关、跨机可复现；改 seed/ratio = 新 benchmark_id。"
+  },
+  "models": [
+    {
+      "id": "claude_instant_v1",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "claude_v1",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "claude_v2",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "gpt_3_5_turbo_1106",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "gpt_4_1106_preview",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "meta_code_llama_instruct_34b_chat",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "meta_llama_2_70b_chat",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "mistralai_mistral_7b_chat",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "mistralai_mixtral_8x7b_chat",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "wizardlm_wizardlm_13b_v1_2",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    },
+    {
+      "id": "zero_one_ai_yi_34b_chat",
+      "source_rows": 36497,
+      "cost_basis": "source"
+    }
+  ],
+  "row_counts": {
+    "instances": 36497,
+    "outcomes": 401467,
+    "dropped": {
+      "bad_score": 0,
+      "bad_cost": 0,
+      "dup_sample_id": 0,
+      "dup_outcome": 0
+    }
+  },
+  "per_dataset": {
+    "rb0shot_abstract2title_v1": {
+      "instances": 254,
+      "calibration": 41,
+      "test": 213
+    },
+    "rb0shot_accounting_audit_v1": {
+      "instances": 30,
+      "calibration": 5,
+      "test": 25
+    },
+    "rb0shot_arc_v1": {
+      "instances": 1470,
+      "calibration": 305,
+      "test": 1165
+    },
+    "rb0shot_bias_detection_v1": {
+      "instances": 285,
+      "calibration": 56,
+      "test": 229
+    },
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "instances": 16,
+      "calibration": 5,
+      "test": 11
+    },
+    "rb0shot_chinese_ancient_poetry_v1": {
+      "instances": 25,
+      "calibration": 6,
+      "test": 19
+    },
+    "rb0shot_chinese_character_riddles_v1": {
+      "instances": 100,
+      "calibration": 24,
+      "test": 76
+    },
+    "rb0shot_chinese_chu_ci_v1": {
+      "instances": 15,
+      "calibration": 1,
+      "test": 14
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "instances": 20,
+      "calibration": 2,
+      "test": 18
+    },
+    "rb0shot_chinese_hard_translations_v1": {
+      "instances": 21,
+      "calibration": 2,
+      "test": 19
+    },
+    "rb0shot_chinese_homonym_v1": {
+      "instances": 21,
+      "calibration": 5,
+      "test": 16
+    },
+    "rb0shot_chinese_idioms_v1": {
+      "instances": 15,
+      "calibration": 1,
+      "test": 14
+    },
+    "rb0shot_chinese_lantern_riddles_v1": {
+      "instances": 20,
+      "calibration": 4,
+      "test": 16
+    },
+    "rb0shot_chinese_modern_poem_identification_v1": {
+      "instances": 21,
+      "calibration": 1,
+      "test": 20
+    },
+    "rb0shot_chinese_poem_v1": {
+      "instances": 15,
+      "calibration": 3,
+      "test": 12
+    },
+    "rb0shot_chinese_remainder_theorem_v1": {
+      "instances": 15,
+      "calibration": 3,
+      "test": 12
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "instances": 34,
+      "calibration": 5,
+      "test": 29
+    },
+    "rb0shot_chinese_song_ci_v1": {
+      "instances": 16,
+      "calibration": 6,
+      "test": 10
+    },
+    "rb0shot_chinese_tang_poetries_v1": {
+      "instances": 37,
+      "calibration": 7,
+      "test": 30
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "instances": 394,
+      "calibration": 85,
+      "test": 309
+    },
+    "rb0shot_consensus_summary_v1": {
+      "instances": 362,
+      "calibration": 69,
+      "test": 293
+    },
+    "rb0shot_gsm8k_v1": {
+      "instances": 7450,
+      "calibration": 1535,
+      "test": 5915
+    },
+    "rb0shot_hellaswag_v1": {
+      "instances": 10042,
+      "calibration": 1967,
+      "test": 8075
+    },
+    "rb0shot_mbpp_v1": {
+      "instances": 427,
+      "calibration": 78,
+      "test": 349
+    },
+    "rb0shot_mmlu_v1": {
+      "instances": 14042,
+      "calibration": 2782,
+      "test": 11260
+    },
+    "rb0shot_mt_bench_v1": {
+      "instances": 80,
+      "calibration": 16,
+      "test": 64
+    },
+    "rb0shot_test_match_v1": {
+      "instances": 3,
+      "calibration": 2,
+      "test": 1
+    },
+    "rb0shot_winogrande_v1": {
+      "instances": 1267,
+      "calibration": 261,
+      "test": 1006
+    }
+  },
+  "column_mapping": {
+    "wide_format": true,
+    "quality": "<model> 裸列",
+    "cost": "<model>|total_cost",
+    "response": "<model>|model_response",
+    "models_detected": [
+      "WizardLM/WizardLM-13B-V1.2",
+      "claude-instant-v1",
+      "claude-v1",
+      "claude-v2",
+      "gpt-3.5-turbo-1106",
+      "gpt-4-1106-preview",
+      "meta/code-llama-instruct-34b-chat",
+      "meta/llama-2-70b-chat",
+      "mistralai/mistral-7b-chat",
+      "mistralai/mixtral-8x7b-chat",
+      "zero-one-ai/Yi-34B-Chat"
+    ],
+    "extra": {
+      "sample_id": "sample_id",
+      "eval_name": "eval_name",
+      "oracle": "oracle_model_to_route_to"
+    }
+  },
+  "notes": [
+    "response 原文未落盘（可选 audit artifact，10 号 §6.1）；outcomes 仅存 response_sha256",
+    "ground_truth 源数据缺失为 null，不影响 replay（replay 只查 score/cost）",
+    "oracle_model_to_route_to 仅存 instances.meta 作 provenance；replay 的 Oracle baseline 从冻结矩阵自算（10 号 §12.4），不消费源 oracle 列",
+    "eval_name 细粒度（MMLU 57 子题组）已归组到 family 级 dataset_id，源值保留在 meta.source_eval",
+    "llmrouterbench bench-release.tar.gz（1,283,503,080 B）sha256 于 Day 1 下载时补录；其 canonical 导入按 10 号 §16.2 在 Day 6+ 执行"
+  ]
+}
