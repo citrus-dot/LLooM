@@ -1,4 +1,4 @@
-> 📦 **已完结归档**（CONTEXT-PLAN.md）：本文档所载计划已全部落地并验证，仅作历史设计与验收依据留存。权威落点引用（`CONTEXT-PLAN.md:行号`）依然有效。最新待办见 [`LLooMprogress.md`](../../LLooMprogress.md) 第六节。
+> 📦 **历史架构归档**：本文描述迁移前的 Python/ChromaDB 实现，文件名、行号和调用链已过期，不可作为当前开发依据。当前缓存为 Rust ExactCache + FastEmbed SemanticCache，详见 [`ARCHITECTURE.md`](../../ARCHITECTURE.md)。
 
 # 模型上下文优化方案（CONTEXT-PLAN）
 

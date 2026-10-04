@@ -1,344 +1,159 @@
-# LLooM 架构文档
+# LLooM 当前架构
 
-本文档描述 LLooM 当前的分层架构。核心原则：**REST API 是唯一对外契约，UI 层与业务核心彻底解耦**。任何前端（WebUI、CLI、TUI）都通过同一套契约接入。
+> 更新时间：2026-10-04。历史 Python/LiteLLM 设计已归档到 `docs/archive/`，不代表当前实现。
 
-## 分层总览
+## 总览
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  UI 适配层（任意前端，与业务无关）                       │
-│                                                         │
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐           │
-│  │  WebUI    │  │  CLI      │  │  TUI      │           │
-│  │ index.html│  │ lloom-cli │  │  tui/     │           │
-│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘           │
-│        │              │              │                 │
-│        │ HTTP/REST    │ 直接函数调用  │ HTTP/REST       │
-└────────┼──────────────┼──────────────┼─────────────────┘
-         │              │              │
-┌────────▼──────────────▼──────────────▼─────────────────┐
-│  契约层：axum REST API（唯一对外契约，返回类型化 JSON） │
-│  /api/models /api/services /api/chat/stream ...        │
-└──────────────────────┬─────────────────────────────────┘
-                       │ 直接函数调用
-┌──────────────────────▼─────────────────────────────────┐
-│  业务核心 core（UI 无关）                              │
-│  ┌─────────┬──────────┬─────────┬───────────────┐      │
-│  │ db.rs   │ router.rs│security │ ai_client.rs │      │
-│  │ SQLite  │ 分类/选择 │ PII/越狱│ AI 微服务客户端│      │
-│  └────┬────┴────┬─────┴────┬────┴───────┬───────┘      │
-│       │         │          │            │              │
-│  ┌────▼────┬────▼─────┬────▼────┬───────▼──────┐      │
-│  │processes│convers-  │ models  │  error.rs    │      │
-│  │子进程管理│ations CRUD│ 类型定义 │ 统一错误      │      │
-│  └─────────┴──────────┴─────────┴──────────────┘      │
-└──────────────────┬─────────────────────────────────────┘
-                   │ 只调 LLM 的部分（litellm 不可替代）
-┌──────────────────▼─────────────────────────────────────┐
-│  Rust 原生 Provider 适配层                  │
-│  OpenAI-compatible / Anthropic 原生协议                    │
-│  /v1/chat /v1/classify /v1/orchestrate/stream          │
-└──────────────────┬─────────────────────────────────────┘
-                   │
-┌──────────────────▼─────────────────────────────────────┐
-│  LLM 提供商（DashScope / Ollama / OpenAI / Anthropic） │
-└────────────────────────────────────────────────────────┘
+```text
+WebUI / CLI / TUI
+        │ HTTP REST / SSE
+        ▼
+lloom-server（Rust + axum，:7861）
+        ├─ 路由与健康：router / signals / health
+        ├─ 编排与上下文：orchestrator / context / conversations
+        ├─ 计价与预算：pricing / probe / db
+        ├─ 安全：security
+        ├─ 缓存：ExactCache + FastEmbed SemanticCache
+        └─ Provider：OpenAI-compatible / Anthropic Messages
+                │ 原生 async HTTP
+                ▼
+OpenAI / DashScope / DeepSeek / OpenRouter / Ollama / LM Studio / vLLM / Anthropic
 ```
 
-## 各层职责
+运行时只有一个 LLooM Rust 进程；Ollama 是可选本地模型服务。没有 Python、FastAPI、LiteLLM、ChromaDB 或 PyInstaller 运行时。
 
-### UI 适配层
+## 核心原则
 
-| UI | 接入方式 | 说明 |
+1. **REST 是唯一 UI 契约**：WebUI、CLI 和 TUI 都连接 `:7861`。
+2. **Rust 是单一决策真源**：分类、模型选择、fallback、编排和成本全部在 Rust。
+3. **密钥按用途隔离**：上游 Provider Key 属于模型；下游访问 Key 属于 `/v1/*` API Key 管理。
+4. **缓存可降级**：L1 精确缓存优先，L2 语义缓存失败时直接访问 Provider。
+5. **本地优先**：SQLite、内置向量存储，无 Docker 和外部数据库。
+
+## 模块职责
+
+| 模块 | 职责 |
+|---|---|
+| `server.rs` | axum 路由、SSE、用量落库、服务状态 |
+| `db.rs` | SQLite schema、模型/预算/API Key/用量/路由数据 |
+| `router.rs` | 规则 + LLM 分类、能力门槛、成本/质量评分、fallback |
+| `ai_client.rs` | Provider 统一调用、L1/L2 缓存装配、Rust 编排执行 |
+| `providers/openai_compat.rs` | OpenAI-compatible 请求、响应与 SSE |
+| `providers/anthropic.rs` | Anthropic Messages 请求、响应与 SSE |
+| `context.rs` | token 估算、窗口裁剪、摘要策略、缓存作用域与键 |
+| `exact_cache.rs` | SQLite 精确缓存、TTL 与容量淘汰 |
+| `semantic_cache.rs` | FastEmbed 量化 MiniLM、SQLite 向量、余弦检索 |
+| `orchestrator.rs` | 复杂度判断、任务分解解析、依赖波次 |
+| `pricing.rs` | 分项价格、缓存价、时段价、实际/估算成本 |
+| `security.rs` | PII、越狱和领域规则 |
+| `conversations.rs` | SQLite 对话与滚动摘要 |
+| `openai_compat.rs` | 对外 `/v1` 代理、多 API Key 鉴权、额度与 RPM |
+
+## Provider 模型
+
+模型使用显式后端：
+
+- `Cloud { provider, api_base, api_key }`
+- `Local { compat, api_base }`
+
+`provider_model` 保存供应商真实模型 ID，例如 `qwen-plus`、`gpt-4o`、`qwen2.5:7b`，不带适配器前缀。
+
+当前协议：
+
+- **OpenAI-compatible**：OpenAI、DashScope、DeepSeek、OpenRouter、Groq、Ollama、LM Studio、vLLM、自定义兼容端点
+- **Anthropic Messages**：Anthropic 原生协议
+
+## 两级缓存
+
+### L1 精确缓存
+
+- 文件：`data/cache_exact.sqlite3`
+- 键：`model + system_id + context_fingerprint + normalized_query`
+- 默认 TTL：24 小时
+- 默认容量：5000
+
+### L2 语义缓存
+
+- 文件：`data/cache_semantic.sqlite3`
+- 模型：FastEmbed `all-MiniLM-L6-v2` 量化版
+- 模型目录：`data/models/fastembed`
+- 默认余弦阈值：`0.88`（`LLOOM_SEMANTIC_THRESHOLD`）
+- 仅上下文无关请求进入跨会话语义缓存
+- 模型下载或 ONNX 初始化失败时自动绕过
+
+## 对外 API Key
+
+WebUI 的 **API Keys** 页面管理 `/v1/*` 访问凭证：
+
+- 明文只在创建时显示
+- SQLite 仅保存 SHA-256 与掩码前缀
+- 支持启用/禁用、额度、RPM、模型白名单、有效期
+- 每次调用更新累计成本和最后使用时间
+- 尚未创建任何 Key 时，环回 `/v1/*` 保持免鉴权；创建首个 Key 后强制 Bearer
+
+## 主要端点
+
+| 方法 | 路径 | 说明 |
 |---|---|---|
-| WebUI | HTTP → `http://localhost:7861/api/*` | 浏览器访问，前端 `restCall()` 映射 REST |
-| CLI（lloom-cli） | 直接函数调用 `lloom_core::db/ai_client` | 本地操作离线可用，chat 调 AI 服务 |
-| TUI（tui/） | HTTP → `http://localhost:7861/api/*` | OpenTUI + SolidJS 终端仪表盘，走 REST |
+| GET | `/api/health` | 核心健康检查 |
+| GET | `/api/services/status` | Core / Ollama / Native Providers 状态 |
+| GET,POST | `/api/models` | 模型列表与注册 |
+| GET,PUT,DELETE | `/api/models/{name}` | 模型 CRUD |
+| POST | `/api/chat/stream` | 内部聊天 SSE |
+| POST | `/api/orchestrate/stream` | Rust 编排 SSE |
+| GET,POST | `/api/conversations` | 对话列表与保存 |
+| GET,PUT,DELETE | `/api/conversations/{id}` | 对话读取、改名、删除 |
+| GET | `/api/usage` | 用量与成本 |
+| GET,POST,DELETE | `/api/budgets` | 预算管理 |
+| GET | `/api/pricing/specs` | 价格规格 |
+| POST | `/api/pricing/refresh` | 远端价格刷新 |
+| GET,POST | `/api/api-keys` | 下游 API Key 列表与创建 |
+| PUT,DELETE | `/api/api-keys/{id}` | 更新与删除 Key |
+| GET | `/api/proxy/config` | OpenAI 接入信息 |
+| POST | `/api/proxy/selftest` | 本机代理自测 |
+| POST | `/v1/chat/completions` | OpenAI-compatible 代理 |
+| GET | `/v1/models` | OpenAI-compatible 模型列表 |
+| GET | `/metrics` | Prometheus 指标 |
+| POST | `/api/shutdown` | 优雅关停 |
 
-**关键约定**：
-- **REST 是唯一对外契约**。WebUI 与 TUI 走 HTTP；CLI 是 Rust 二进制，直接链接 `lloom-core` lib（无需服务器运行）。
-- 所有 UI 拿到的是类型化 JSON **对象**，不是字符串。前端不做任何 `JSON.parse` 包装。
-- CLI/TUI 的本地操作（模型/预算/用量）完全离线；只有 `chat` 需要 AI 服务运行。
+## 数据流
 
-### 契约层（server.rs）
+```text
+请求
+ → security 检查
+ → router 分类与评分
+ → L1 精确缓存
+ → L2 语义缓存
+ → Provider 原生适配器
+ → usage 归一化与 pricing 计价
+ → SQLite 落库
+ → SSE / OpenAI JSON 返回
+```
 
-唯一对外暴露的 axum REST 服务器。返回类型化 JSON 对象，支持 SSE 流式。
+复杂任务额外经过：
 
-| 端点 | 方法 | 说明 |
-|---|---|---|
-| `/api/health` | GET | 健康检查 |
-| `/api/models` | GET/POST | 模型列表/注册 |
-| `/api/models/:name` | GET/PUT/DELETE | 模型 CRUD（`:name` 为 axum 0.8 动态段） |
-| `/api/usage` | GET | 用量统计 |
-| `/api/usage/reconcile` | GET | 账单对账徽标（读 `reconcile_last.json`，N3.c/B2）|
-| `/api/budgets` | GET/POST | 预算列表/设置 |
-| `/api/budgets/check` | GET | 预算检查 |
-| `/api/stats` | GET | 仪表盘统计 |
-| `/api/conversations` | GET/POST | 对话列表/保存 |
-| `/api/conversations/:id` | GET/DELETE | 对话加载/删除 |
-| `/api/conversations/:id/messages` | POST | 追加单条消息（原子写，修复并发覆盖）|
-| `/api/conversations/:id/messages/:seq` | PATCH | 回填某条消息内容与元数据（两阶段落盘）|
-| `/api/chat/stream` | POST | 聊天（SSE） |
-| `/api/orchestrate/stream` | POST | 任务编排（SSE） |
-| `/api/services/status` | GET | 服务健康状态 |
-| `/api/services/:name/start` | POST | 启动服务 |
-| `/api/services/:name/stop` | POST | 停止服务 |
-| `/api/services/:name/restart` | POST | 重启服务 |
-| `/api/services/:name/logs` | GET | 服务日志 |
-| `/api/system/open-folder` | POST | 打开目录 |
-| `/api/system/open-web` | POST | 打开网页 |
-| `/api/system/cli` | POST | 运行 CLI |
-| `/api/pricing/specs` | GET | 列出所有 PriceSpec（定价分项规格，含 stale 标记）|
-| `/api/pricing/specs/:provider/:model` | PUT | 手工改价（强制转正 manual）|
-| `/api/pricing/specs/:provider/:model/accept` | POST | 采纳刷新价（转正 manual，此后不被覆盖）|
-| `/api/pricing/refresh` | POST | 触发远端定价刷新 job（jsdelivr 主源 + ghproxy 回退）|
-| `/api/pricing/calibration` | GET | 校准曲线（对账偏差、缓存命中率）|
-| `/api/probe/stats` | GET | 探针月消耗/预算/命中验证 |
-| `/api/probe/budget` | PUT | 调整探针月预算 |
-| `/api/routing/plan-subtask` | POST | 子任务级路由规划（primary + fallback 链 + escalation）|
-| `/api/routing/shadow` | POST/GET | 影子评测采样（AIQ 重放用；GET 查状态）|
-| `/api/routing/overhead` | GET | 路由开销报告（count/avg/P95/max/slow）|
-| `/api/routing/review` | GET | 路由体检报告（N2 闭环评估最新结果）|
-| `/api/routing/review/refresh` | POST | 手动立即体检（重放影子样本出报告）|
-| `/api/routing/review/adopt` | POST | 采纳建议权重（upsert routing_policy，不自动生效）|
-| `/v1/chat/completions` | POST | OpenAI 兼容代理（流/非流，`model:"auto"` 走评分路由，N1）|
-| `/v1/models` | GET | OpenAI 兼容模型列表（auto 恒在首位）|
-| `/metrics` | GET | Prometheus 文本格式指标导出（N3.b，绑环回默认不鉴权）|
-| `/api/shutdown` | POST | 优雅关停（等价 SIGINT，清理子进程）|
-| `/api/cache/feedback` | POST | 命中反馈（灰区采样，调优用）|
-| `/api/cache/threshold` | GET/POST | 缓存阈值查询 / 自调 |
+```text
+context 窗口与摘要
+ → decompose
+ → dependency waves
+ → 每个子任务重新 plan + fallback
+ → aggregate
+```
 
-### 业务核心（core）
-
-- **db.rs** — rusqlite SQLite 层，强类型（`Model`/`Budget`/`UsageStats`）
-- **router.rs** — 任务分类（正则层）+ **`plan()` 评分路由**（注册表门槛 + 成本/质量加权，已落地，见 docs/archive/ROUTING-PLAN.md P0.d）
-- **pricing.rs** — 定价引擎（`PriceSpec`/`TierBand`/`ZoneRule`/`UsageDetail`/`ZoneResolver` + actual_cost/est_cost/effective_input_cost）
-- **probe.rs** — 常开探针（预算状态机 `ProbeBudget` + 探测循环，监控响应性与校准燃料）
-- **signals.rs** — 信号层（`prefix_stability` 等启发式信号，为路由评分提供特征）
-- **metadata.rs** — 模型元数据五级自动打标（`resolve_and_fill`：overlay > 启发式，供 `insert_model` 自动回填，P0.e）
-- **health.rs** — 健康状态机（滑窗 degraded/连续失败 down/熔断/成功恢复，`set_model_health` 持久化，P3）
-- **security.rs** — PII 检测 / 越狱拦截 / 领域分类（正则零成本层，fancy-regex 支持 lookaround）
-- **ai_client.rs** — Rust 原生 Provider 客户端
-- **processes.rs** — 子进程管理（API 服务器 / Ollama / AI 服务）
-- **conversations.rs** — 对话文件 CRUD（`data/conversations/*.json`）
-- **models.rs** — 类型定义；M1 分层：`Backend` 枚举（`Cloud{provider,api_base,api_key}` / `Local{compat,api_base}`），模型显式 `kind: local|cloud`，废除 `is_local_endpoint` 启发式
-- **model_dto.rs** — API DTO 三件套（`ModelCreate`/`ModelPatch`/`ModelDto`，TryFrom 显式转换 + api_key 掩码，M1）
-- **openai_compat.rs** — OpenAI 兼容代理（`/v1/chat/completions` 流/非流 + `/v1/models`，Bearer 鉴权，路由/容灾/计价全复用，N1）
-- **review.rs** — 路由体检（影子样本网格搜索出帕累托权重建议，写入 policy_review，N2）
-- **metrics.rs** — Prometheus 指标导出（纯函数 `render(db)` 输出 0.0.4 文本格式，N3.b）
-- **error.rs** — thiserror 统一错误 + HTTP 状态映射
-
-### Rust 原生 Provider 与缓存
-
-`providers/` 原生实现 OpenAI-compatible 与 Anthropic Messages；`semantic_cache.rs` 使用 FastEmbed + SQLite。
-
-- `/v1/chat` — 单次 LLM 调用
-- `/v1/chat/stream` — 流式 LLM 调用
-- `/v1/classify` — LLM 兜底任务分类
-- `/v1/domain` — LLM 兜底领域分类
-- `/v1/orchestrate/stream` — 完整编排（分解→执行→聚合）
-
-**为什么保留 Python**：litellm 封装了 100+ LLM 提供商的统一接口，Rust 生态暂无等价物。Rust 通过 `ai_client.rs` 把模型参数（litellm_model/api_base/api_key）显式传入，Python 不碰数据库/配置/业务逻辑。
-
-## 端口分配
+## 端口
 
 | 端口 | 用途 |
 |---|---|
-| 7861 | **Rust axum 主服务器**（REST + WebUI，唯一对外端口） |
-| 11434 | Ollama |
+| `7861` | LLooM REST、OpenAI API 与 WebUI |
+| `11434` | 可选 Ollama |
 
-> 旧版 Python API（7860）已移除。Rust 服务器即主服务器，无遗留服务。
-
-## 服务状态（诚实报告）
-
-`/api/services/status` 报告真实状态，不做"假 healthy"。每个服务同时检查三件事：
-
-1. **我们 spawn 的子进程是否存活**（child handle `try_wait`）
-2. **端口是否响应**（async HTTP 探测）
-3. **AI 服务自检**（`/v1/health` 的 `ready` 字段）
-
-由此区分四种状态：
-
-| 状态 | 含义 |
-|---|---|
-| Up (healthy) | 子进程存活 + 端口响应 |
-| Down | 子进程未运行 + 端口无响应 |
-| 端口被残留进程占用 | 子进程未运行但端口有响应（旧进程占用） |
-| 进程存活但无响应 | 子进程在跑但健康检查失败 |
-| 运行但未配置模型 | AI 服务活着但无云 Key 且 Ollama 不可达 |
-
-**AI 服务自检**（`/v1/health`）：
-```json
-{
-  "status": "ok",
-  "ready": true,
-  "backends": { "cloud_key_configured": false, "ollama_reachable": true }
-}
-```
-`ready=false` 表示没有任何可用 LLM 后端（无云 Key 且 Ollama 挂了），Rust 端据此显示"运行但未配置模型"而非 healthy。
-
-## 进程管理（防重复启动）
-
-`processes::start_ai` / `start_ollama` 在 spawn 前先做异步探测：
-- 端口已有健康实例 → 返回 `Ok(None)`，**复用**不重复启动
-- 否则才 spawn 新进程
-
-这消除了 "address already in use" 和孤儿进程问题。开发模式下自动识别 `.venv/bin/python`（依赖装在 venv）。
-
-## 异步约定
-
-- 所有网络调用（健康探测、AI 服务、chat/编排）用 **async reqwest**，无 curl 子进程
-- 阻塞型操作（子进程等待、日志读取）用 `tokio::task::spawn_blocking`
-- 无 `block_on` 嵌套（不用 `runtime::Builder` 在 async 上下文里建 runtime）
-- SQLite（rusqlite）保持同步——本地微秒级操作，Rust 生态标准做法
-
-## 冒烟测试
-
-`scripts/smoke_test.sh` 覆盖 19 项：健康检查、服务状态、AI 自检、模型注册、聊天、编排、用量、对话 CRUD、预算、服务重启。运行：
+## 构建与质量门
 
 ```bash
-bash scripts/smoke_test.sh
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+npm run build --prefix webui
+cd tui && npx tsc --noEmit
 ```
 
-## 数据流示例：一次聊天
-
-```
-用户输入 → WebUI/窗口 → POST /api/chat/stream
-  → Rust: security.rs 检查（PII/越狱）
-  → Rust: router.rs 分类（正则优先，LLM 兜底调 /v1/classify）
-  → Rust: db.rs 查模型配置 → 构造 ModelSpec
-  → Rust: ai_client.rs → 原生 Provider 适配器 → LLM
-  → 返回 SSE 流：routing 信息 + 内容分块 + done
-  → Rust: db.rs 记录用量/成本
-```
-
-## 与旧架构的差异
-
-| | 旧架构 | 当前 |
-|---|---|---|
-| 主服务器 | Python FastAPI（7860） | **Rust axum（7861）** |
-| Rust 角色 | 壳 + curl 代理 | 完整服务器 + 业务核心 |
-| Python 角色 | 全部业务 | 仅 litellm 调用（瘦身 ~75%） |
-| 前端 | Tauri GUI + WebUI | **WebUI + CLI + TUI**（多个前端共享核心） |
-| 前端数据 | JSON 字符串 + 手动 parse | 类型化对象 |
-| 健康探测 | curl 子进程（同步） | async reqwest |
-| 服务状态 | 仅端口探测（假 healthy） | **子进程 + 端口 + AI 自检（诚实）** |
-| 重复启动 | 可能 address already in use | **端口已健康则复用** |
-| 通信 | Rust↔Python 双端口转发 | Rust 为主，按需调 AI 服务 |
-
-## 技术栈版本
-
-| crate | 版本 | 用途 |
-|---|---|---|
-| axum | 0.8 | HTTP 服务器（`{param}` 动态路由） |
-| tokio | 1.x | 异步运行时 |
-| rusqlite | 0.40 | SQLite（bundled） |
-| reqwest | 0.13 | async HTTP 客户端 |
-| fancy-regex | 0.19 | lookaround 支持的正则 |
-| thiserror | 2.x | 错误类型 |
-
-## REST API 参考
-
-完整端点列表（与 `crates/lloom-core/src/server.rs` 路由注册一致）：
-
-| 方法 | 路径 | 说明 |
-|--------|------|------|
-| GET | `/api/health` | 健康检查 |
-| GET | `/api/models` | 列出所有模型 |
-| POST | `/api/models` | 注册新模型 |
-| GET/PUT/DELETE | `/api/models/{name}` | 查询/更新/删除模型 |
-| GET | `/api/usage` | 用量统计 |
-| GET | `/api/usage/reconcile` | 账单对账徽标（N3.c）|
-| GET | `/api/budgets` | 列出预算 |
-| POST | `/api/budgets` | 创建/更新预算 |
-| GET | `/api/budgets/check` | 检查预算状态 |
-| GET | `/api/stats` | 仪表盘统计 |
-| POST | `/api/chat/stream` | 聊天（SSE 流式） |
-| POST | `/api/orchestrate/stream` | 任务编排（SSE 流式） |
-| GET/POST/DELETE | `/api/conversations` | 对话 CRUD |
-| POST | `/api/conversations/{id}/messages` | 追加单条消息（原子写）|
-| PATCH | `/api/conversations/{id}/messages/{seq}` | 回填消息内容/元数据 |
-| GET | `/api/services/status` | 诚实的服务状态 |
-| POST | `/api/services/{name}/start` | 启动服务（ollama/ai） |
-| POST | `/api/services/{name}/stop` | 停止服务 |
-| POST | `/api/services/{name}/restart` | 重启服务 |
-| GET | `/api/services/{name}/logs` | 服务日志 |
-| POST | `/api/system/open-folder` | 打开目录 |
-| POST | `/api/system/open-web` | 打开网页 |
-| POST | `/api/system/cli` | 运行 CLI |
-| GET | `/api/pricing/specs` | 列出所有 PriceSpec |
-| PUT | `/api/pricing/specs/{provider}/{model}` | 手工改价 |
-| POST | `/api/pricing/specs/{provider}/{model}/accept` | 采纳刷新价（转正 manual） |
-| POST | `/api/pricing/refresh` | 触发远端定价刷新 job |
-| GET | `/api/pricing/reference` | OpenRouter 参考价 × 本地图价联表（含偏差 %） |
-| POST | `/api/pricing/reference/refresh` | 手动刷新参考价 |
-| GET | `/api/pricing/calibration` | 校准曲线 |
-| GET | `/api/probe/stats` | 探针消耗/预算 |
-| PUT | `/api/probe/budget` | 调整探针月预算 |
-| POST | `/api/routing/plan-subtask` | 子任务级路由规划（primary + fallback + escalation） |
-| POST,GET | `/api/routing/shadow` | 影子评测采样（AIQ 重放） |
-| GET | `/api/routing/overhead` | 路由开销报告（count/avg/P95/max/slow） |
-| GET | `/api/routing/review` | 路由体检报告（N2） |
-| POST | `/api/routing/review/refresh` | 手动立即体检 |
-| POST | `/api/routing/review/adopt` | 采纳建议权重（人工审查点） |
-| POST | `/v1/chat/completions` | OpenAI 兼容代理（流/非流，N1） |
-| GET | `/v1/models` | OpenAI 兼容模型列表 |
-| GET | `/metrics` | Prometheus 指标导出（N3.b） |
-| POST | `/api/shutdown` | 优雅关停（等价 SIGINT） |
-| POST | `/api/cache/feedback` | 命中反馈（灰区采样） |
-| GET,POST | `/api/cache/threshold` | 缓存阈值查询 / 自调 |
-
-## 目录结构
-
-```
-LLooM/
-├── Cargo.toml                    # Rust workspace 根
-├── crates/lloom-core/            # 业务核心 lib（UI 无关）
-│   └── src/                      # 20 个模块
-│       ├── lib.rs                # 模块声明
-│       ├── server.rs             # axum REST 服务器
-│       ├── db.rs                 # SQLite 层（ModelRow 行层 + 幂等迁移）
-│       ├── router.rs             # 任务分类 + `plan()` 评分路由（见 docs/archive/ROUTING-PLAN.md）
-│       ├── security.rs           # 正则安全层
-│       ├── ai_client.rs          # AI 微服务客户端
-│       ├── processes.rs          # 子进程管理
-│       ├── conversations.rs      # 对话 CRUD（原子写 + 追加端点）
-│       ├── pricing.rs            # 定价引擎（PriceSpec / 校准）
-│       ├── probe.rs              # 常开探针（预算状态机）
-│       ├── signals.rs            # 信号层（prefix_stability 等）
-│       ├── metadata.rs           # 模型元数据自动打标（P0.e）
-│       ├── health.rs             # 健康状态机（P3）
-│       ├── models.rs             # 领域类型（M1：Backend local/cloud）
-│       ├── model_dto.rs          # 模型 API DTO（M1：Create/Patch/Dto + 掩码）
-│       ├── openai_compat.rs      # OpenAI 兼容代理（N1）
-│       ├── review.rs             # 路由体检权重建议（N2）
-│       ├── metrics.rs            # Prometheus 指标导出（N3.b）
-│       ├── config.rs             # 路径/端口配置
-│       └── error.rs              # 统一错误
-├── crates/lloom-server/          # 主服务器（REST + WebUI）
-├── crates/lloom-cli/             # CLI（clap，链接 lloom-core）
-├── tui/                          # TUI（OpenTUI + SolidJS，bun，走 REST）
-│   ├── src/
-│   │   ├── app.tsx               # 顶层布局 + keymap 绑定
-│   │   ├── index.tsx             # 入口（renderer + keymap）
-│   │   ├── routes/               # home/session/models/usage/settings
-│   │   └── ui/                   # dialog（prompt/logs/menu 弹框）
-│   └── package.json
-├── webui/                        # WebUI（React + Vite + AntD，SPA）
-│   └── src/
-│       ├── pages/                # Overview/Chat/Models/Usage/Pricing/Settings
-│       ├── components/           # Markdown 等
-│       ├── store/                # chatStore（SSE 流状态）
-│       └── api.ts                # REST 客户端
-├── api/
-├── scripts/
-│   ├── build.sh                  # 跨平台构建（含系统依赖检测）
-│   ├── package.sh / package.bat  # 三平台打包（CI release 用）
-│   ├── download_ollama.sh        # 跨平台 Ollama 下载
-│   ├── smoke_test.sh             # 19 项冒烟测试
-│   ├── aiq_replay.py             # 影子样本离线 AIQ 重放（--json 与报告同源）
-│   └── bill_reconcile.py         # 百炼账单 × usage_records 对账（N3.c）
-├── ARCHITECTURE.md               # 本文件
-├── README.md / README-ZH.md      # 用户文档
-└── .env.example                  # 环境变量模板
-```
+发布包只包含 Rust 二进制和 WebUI 静态文件。

@@ -1,4 +1,4 @@
-> 📦 **已完结归档**（PRICING-PLAN.md）：本文档所载计划已全部落地并验证，仅作历史设计与验收依据留存。权威落点引用（`PRICING-PLAN.md:行号`）依然有效。最新待办见 [`LLooMprogress.md`](../../LLooMprogress.md) 第六节。
+> 📦 **历史架构归档**：本文含迁移前的 Python/LiteLLM 计价接线设计，文件名、行号和部分数据源已过期。当前计价真源仍为 Rust `pricing.rs`，当前架构见 [`ARCHITECTURE.md`](../../ARCHITECTURE.md)。
 
 # 模型定价表优化方案 v2
 
