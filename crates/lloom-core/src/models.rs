@@ -54,8 +54,7 @@ impl<'de> Deserialize<'de> for Provider {
     }
 }
 
-/// 本地服务的兼容协议：Ollama 原生（litellm 前缀 `ollama/`）或 OpenAI 兼容端点
-/// （LM Studio / vLLM 等，litellm 前缀 `openai/`）。
+/// 本地服务的兼容协议：Ollama 原生协议，或 OpenAI 兼容端点（LM Studio / vLLM 等）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum LocalCompat {
     Ollama,
@@ -285,18 +284,6 @@ impl Model {
             } => k.raw(),
             _ => "",
         }
-    }
-
-    /// The ModelSpec payload sent to the Python AI service.
-    pub fn to_ai_spec(&self, api_key: &str) -> serde_json::Value {
-        serde_json::json!({
-            "name": self.name,
-            "provider_model": self.provider_model,
-            "api_base": self.api_base(),
-            "api_key": api_key,
-            "input_cost_per_token": self.input_cost_per_token,
-            "output_cost_per_token": self.output_cost_per_token,
-        })
     }
 
     pub fn calculate_cost(&self, input_tokens: i64, output_tokens: i64) -> f64 {

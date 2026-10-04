@@ -3,7 +3,7 @@
 //! 分类层（正则 + LLM 兜底）保留；模型选择不再用任何硬编码映射表，
 //! 由 `plan()` 基于 models 注册表（capability_tier / context_window / …）、
 //! routing_policy 权重、price_specs 真源成本统一评分决策。
-//! Python 侧纯执行，Rust 单一决策。
+//! 决策与执行同在 Rust 进程内，无跨层下发。
 
 use crate::ai_client::ModelSpec;
 use crate::models::{Model, RoutingDecision, RoutingPolicy};
@@ -608,7 +608,7 @@ pub async fn route(
         hit_rate.insert(k, v);
     }
 
-    // est_in 粗估：中英混合 ~0.6 token/字符（编排路径已由 Python 侧 count_tokens 精确传 plan-subtask）。
+    // est_in 粗估：中英混合 ~0.6 token/字符（编排路径由 Rust count_tokens 精确传 plan-subtask）。
     // est_out：P5.c 用该 task_type 历史 avg_out_tokens（冷启动 750），替换固定 500。
     let est_in = (user_text.chars().count() as f64 * 0.6) as i64;
     let est_out = db.task_avg_out_tokens(&task_type).round() as i64;
@@ -699,9 +699,8 @@ pub async fn route(
 //
 // 与 `route()` 共用同一套 plan() 评分逻辑，但跳过「分类」步骤：
 // 编排角色（general/decompose/aggregate）的任务类型是固定的，
-// 只按注册表 + 策略直接评分选主模型。结果以 assignments 下发给 Python，
-// Python 侧删除了 TASK_MODEL_PREFERENCE/DECOMPOSER_PREFERENCE 等硬编码真源，
-// 优先用本决策，仅在全池兜底时回落 models[0]。
+// 只按注册表 + 策略直接评分选主模型。assignments 由本进程内编排直接消费，
+// 仅在全池兜底时回落 models[0]。
 
 /// 按固定编排角色做一次 plan() 决策，返回主模型名所在 PlanOutcome。
 /// 失败时由调用方兜底（回落 models 首模型），不抛业务中断。
@@ -714,7 +713,7 @@ pub fn plan_decision(
 }
 
 /// P4：子任务级/可变预算档 plan——按调用方给的预估 token 与预算档评分路由。
-/// 供 `POST /api/routing/plan-subtask` 使用（Python 每个子任务按其 task_type 独立 plan）；
+/// 供 `POST /api/routing/plan-subtask` 使用（编排器每个子任务按其 task_type 独立 plan）；
 /// 无状态，仅为 plan() 的参数化封装。`deferrable` 为 PR-8：true 时按谷价估成本（B 端批/评测接入）。
 pub fn plan_for_task(
     db: &crate::db::Db,

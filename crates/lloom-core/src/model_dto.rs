@@ -4,7 +4,7 @@
 //! - `ModelPatch`：PUT /api/models/{name} 的 typed 部分更新，`resolve_against` 整体校验
 //! - `ModelDto`：GET 响应，api_key 以 `****tail` 掩码输出
 //!
-//! 非法组合（本地带 key、云端缺 provider、错 litellm 前缀）在此层被拒收，
+//! 非法组合（本地带 key、云端缺 provider、kind 非法）在此层被拒收，
 //! 不再流向领域/持久层。
 
 use crate::error::{AppError, Result};

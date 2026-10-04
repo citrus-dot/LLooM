@@ -105,7 +105,7 @@ enum ModelsCmd {
         /// Cloud provider: dashscope / openai / anthropic / custom
         #[arg(long)]
         provider: Option<String>,
-        /// LiteLLM model string (default: {prefix}/{name}, e.g. ollama/qwen2.5:latest)
+        /// Provider 真实模型 ID（provider_model，如 qwen2.5:latest / gpt-4o）
         #[arg(long)]
         model: Option<String>,
         /// API base URL (default: local 11434 / 1234/v1; cloud optional)

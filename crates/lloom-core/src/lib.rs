@@ -4,12 +4,13 @@
 //! centralized error handling):
 //!   - `config`: paths, ports, env
 //!   - `db`: SQLite layer
-//!   - `ai_client`: Python AI micro-service HTTP client
+//!   - `ai_client`: provider 统一调用 + L1/L2 缓存装配 + 编排执行
+//!   - `providers`: 原生适配器（OpenAI-compatible / Anthropic Messages）
 //!   - `security`: regex security (PII / jailbreak / domain)
 //!   - `router`: task classification + model selection
-//!   - `processes`: child-process management
-//!   - `conversations`: conversation file CRUD
-//!   - `server`: axum HTTP server (REST + SSE + RPC bridge)
+//!   - `processes`: Ollama 子进程管理
+//!   - `conversations`: SQLite 对话与滚动摘要
+//!   - `server`: axum HTTP server (REST + SSE)
 
 pub mod ai_client;
 pub mod config;

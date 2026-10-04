@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
-// ── Usage detail (透传自 Python litellm 响应) ──
+// ── Usage detail（透传自 Provider 响应的 usage 字段）──
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageDetail {

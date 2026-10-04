@@ -1,5 +1,5 @@
-//! Native provider adapters. LiteLLM remains a compatibility fallback while
-//! these adapters replace its transport role protocol by protocol.
+//! Native provider adapters：OpenAI-compatible 与 Anthropic Messages 直连，
+//! 完全接替已移除的 Python/LiteLLM 传输层。
 
 pub mod anthropic;
 pub mod openai_compat;

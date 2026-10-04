@@ -258,7 +258,7 @@ mod env {
     }
 
     /// Load `.env` into the current process environment so that subprocesses
-    /// (Python AI service, Ollama) inherit the variables. Existing env vars take precedence.
+    /// (Ollama) inherit the variables. Existing env vars take precedence.
     pub fn load_env() {
         for (k, v) in read_env() {
             if std::env::var(&k).is_err() {

@@ -1,16 +1,16 @@
 //! 模型元数据自动打标（ROUTING-PLAN P0.e）。
 //!
-//! `resolve_and_fill` 按「五级兜底」给新增 `Model` 回填路由元数据
+//! `resolve_and_fill` 按「四级兜底」给新增 `Model` 回填路由元数据
 //! （capability_tier / context_window / needs_calibration / 成本）：
 //! 已由更高优先级来源（overlay / 用户显式给出）的字段不被 heuristic 覆盖，
 //! 保证「命即填，后级不覆盖高级」。本地/云端由用户显式选择，这里只消费。
 //!
-//! 五级来源（离线 box 只启用 4/5，前三级留接线点）：
-//!   1. litellm 打包表（运行时 import litellm.model_cost）——需 Python 运行时，暂不启用
-//!   2. litellm 远端刷新结果（P2 job 落库后读 price_source=='litellm_remote' 值）——P2 接线
-//!   3. models.dev api.json（镜像拉取；实测无 dashscope）——需网络，离线跳过
-//!   4. overlay：`data/model_catalog.json` 里的 `{provider}/{name}` 显式条目
-//!   5. 启发式（名字关键词 + 本地端点），最后兜底
+//! 来源优先级（当前实现只启用 3/4，前两级留接线点）：
+//!   1. litellm 远端刷新（HTTP 拉 model_prices 落库，price_source=='litellm_remote'）
+//!      ——原「运行时 import litellm.model_cost」打包表已随 Python 运行时移除
+//!   2. models.dev api.json（镜像拉取；实测无 dashscope）——需网络，离线跳过
+//!   3. overlay：`data/model_catalog.json` 里的 `{provider}/{name}` 显式条目
+//!   4. 启发式（名字关键词 + 本地端点），最后兜底
 
 use crate::config;
 use crate::models::Model;
@@ -75,13 +75,13 @@ fn overlay_key(m: &Model) -> String {
     format!("{}/{}", m.provider_name(), m.name)
 }
 
-/// 第 4 级：读 `model_catalog.json` 的 `{provider}/{name}` 条目回填。
+/// 第 3 级：读 `model_catalog.json` 的 `{provider}/{name}` 条目回填。
 /// 生产路径用 `config::data_dir()`；测试可注入任意目录以避开全局 env 竞态。
 fn fill_from_overlay(m: &mut Model) -> OverlayHits {
     fill_from_overlay_in(m, &config::data_dir())
 }
 
-/// 第 4 级：读 `model_catalog.json` 的 `{provider}/{name}` 条目回填。
+/// 第 3 级：读 `model_catalog.json` 的 `{provider}/{name}` 条目回填。
 /// 文件缺失/无此条目/无法解析 → 无贡献。
 fn fill_from_overlay_in(m: &mut Model, data_dir: &Path) -> OverlayHits {
     let mut hits = OverlayHits::default();
@@ -127,7 +127,7 @@ fn fill_from_overlay_in(m: &mut Model, data_dir: &Path) -> OverlayHits {
     hits
 }
 
-/// 第 5 级启发式兜底：只填未被 overlay/用户显式给出的字段。
+/// 第 4 级启发式兜底：只填未被 overlay/用户显式给出的字段。
 fn fill_heuristic(m: &mut Model, tier_filled: bool, ctx_filled: bool, cost_filled: bool) {
     // 仅当能力档仍是默认值 2（用户未显式设 1/3）时才启发式定档——最低优先级，
     // 不得覆盖用户显式给出的档位。

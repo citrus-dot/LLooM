@@ -1,5 +1,5 @@
-//! Unified LLM client. Native Rust provider adapters are the primary path;
-//! the legacy Python service remains only for protocols not migrated yet.
+//! Unified LLM client：原生 Rust provider 适配器为唯一调用路径
+//! （OpenAI-compatible / Anthropic Messages 直连，Python 传输层已移除）。
 
 use crate::config;
 use crate::error::{AppError, Result};
@@ -140,14 +140,15 @@ pub async fn chat(
     cache: Option<&ChatCacheCtx<'_>>,
 ) -> Result<ChatResult> {
     if crate::providers::supports_native(spec) {
-        let exact = cache.and_then(|c| {
-            crate::exact_cache::ExactCache::open(
+        let exact = match cache {
+            Some(c) => crate::exact_cache::ExactCache::open(
                 crate::config::data_dir().join("cache_exact.sqlite3"),
                 86_400,
             )
             .ok()
-            .map(|store| (store, c))
-        });
+            .map(|store| (store, c)),
+            None => None,
+        };
         let key = exact
             .as_ref()
             .and_then(|(_, c)| cache_key(spec, messages, c.conversation_id));
@@ -201,17 +202,18 @@ pub async fn chat(
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0.88);
-            crate::semantic_cache::SemanticCache::open(
+            match crate::semantic_cache::SemanticCache::open(
                 crate::config::data_dir().join("cache_semantic.sqlite3"),
                 86_400,
                 threshold,
             )
             .ok()
-            .and_then(|cache| {
-                crate::semantic_cache::SemanticCache::embed(query)
+            {
+                Some(cache) => crate::semantic_cache::SemanticCache::embed(query)
                     .ok()
-                    .map(|vector| (cache, vector))
-            })
+                    .map(|vector| (cache, vector)),
+                None => None,
+            }
         } else {
             None
         };
@@ -302,7 +304,7 @@ pub async fn classify(text: &str, classifier: &ModelSpec, valid_types: &[&str]) 
 }
 
 /// Generate/extend a rolling conversation summary. The policy and persistence
-/// live in Rust; Python is used only as the temporary LiteLLM transport.
+/// live in Rust; the assigned model is called through the native provider adapters.
 pub async fn summarize(spec: &ModelSpec, previous: &str, uncovered: &[Value]) -> Result<String> {
     let transcript = uncovered
         .iter()
@@ -343,7 +345,7 @@ pub async fn summarize(spec: &ModelSpec, previous: &str, uncovered: &[Value]) ->
 }
 
 /// Ask the assigned model for a structured decomposition. Parsing and fallback
-/// are Rust responsibilities; this call only transports the prompt to LiteLLM.
+/// are Rust responsibilities; the model call goes through the native provider adapters.
 pub async fn decompose(spec: &ModelSpec, query: &str) -> Result<Vec<crate::orchestrator::SubTask>> {
     const PROMPT: &str = "你是一个任务分解专家。将用户的复杂任务分解为2-5个子任务。\n规则：\n1. 每个子任务应该是独立的、可执行的\n2. 标注子任务之间的依赖关系（depends_on）\n3. 类型只能是 simple_qa / general / coding / math_logic / complex_reasoning\n4. 估算每个子任务的输出 token 数\n只输出JSON数组，字段为 id, description, task_type, depends_on, estimated_output_tokens。";
     let result = chat(

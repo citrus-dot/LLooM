@@ -808,10 +808,9 @@ async fn orchestrate_stream(
         Err(e) => return err_response(e),
     };
     let specs: Vec<ModelSpec> = models.iter().map(ModelSpec::from).collect();
-    // Semantic cache dir. The Python SemanticCache gates on an internal
-    // _cache_ready flag (set only after /v1/cache/init succeeds), so passing a
-    // non-empty path here is safe — it will NOT trigger a download unless the
-    // user has explicitly pre-initialized the embedding model.
+    // Semantic cache dir. The Rust SemanticCache (FastEmbed) downloads the
+    // quantized MiniLM model on first embed and bypasses on failure, so
+    // passing a path here never blocks the chat path.
     // Server-side context building: load history + rolling summary from the
     // conversation store. Client-sent `history` is the legacy fallback (CLI/TUI).
     let (history, conversation_id, summary, summary_upto) = match &req.conversation_id {
@@ -826,8 +825,8 @@ async fn orchestrate_stream(
         None => (req.history.clone(), None, None, 0),
     };
 
-    // P0.f: Rust 统一决策，Python 无模型真源。每个编排角色各做一次 plan()；
-    // 失败回落 models 首模型（无硬编码字面量），交由 Python 兜底。
+    // P0.f: Rust 统一决策。每个编排角色各做一次 plan()；
+    // 失败回落 models 首模型（无硬编码字面量）。
     // 若客户端显式 `model` 钉住某已启用模型，则 general（含子任务默认）直接用
     // 该模型（绕过评分，用于推理模型直连等场景）；decompose/aggregate 仍走 plan()。
     let pinned_general = req
@@ -861,9 +860,9 @@ async fn orchestrate_stream(
         "aggregate": role_model("aggregate"),
     });
 
-    // Provider-independent preprocessing now belongs to Rust. Python receives
-    // the prepared window and decision only as execution inputs while LiteLLM
-    // remains the provider transport.
+    // Provider-independent preprocessing (context window, complexity decision)
+    // now belongs to Rust; the assigned model is called through the native
+    // provider adapters.
     const LIGHT_SYSTEM: &str = "你是一个专业的AI助手。请认真完成以下任务。请结合对话上下文回答。";
     let mut rust_context = crate::context::build_context(
         &req.query,
@@ -875,8 +874,8 @@ async fn orchestrate_stream(
     );
     let rust_is_complex = crate::orchestrator::is_complex(&req.query);
 
-    // Rolling-summary policy and persistence now live in Rust. The assigned
-    // model call still crosses the temporary LiteLLM transport boundary.
+    // Rolling-summary policy and persistence live in Rust; the assigned model
+    // call goes through the native provider adapters.
     if rust_context.stats.needs_summary {
         let end = rust_context.stats.dropped.min(history.len());
         let start = rust_context.summary_upto.min(end);
@@ -961,8 +960,8 @@ async fn orchestrate_stream(
         Err(e) => return err_response(e),
     };
 
-    // Forward each event as it arrives (true SSE, not buffered). The Python
-    // side streams `token` deltas; the browser renders them incrementally.
+    // Forward each event as it arrives (true SSE, not buffered). The provider
+    // adapters stream `token` deltas; the browser renders them incrementally.
     let conv_for_events = conversation_id.clone();
     // P1.a：编排级别的聚合请求号——有会话 id 用它，否则自生成（供 usage 行串联同一次编排的多次 task_done）
     let orchestrate_rid = conversation_id.clone().unwrap_or_else(|| {
@@ -993,7 +992,7 @@ async fn orchestrate_stream(
                     let _ = conversations::set_summary(&db, cid, text, upto);
                 }
             }
-            // Semantic-cache calibration: log whenever the Python side reports a
+            // Semantic-cache calibration: log whenever the chat pipeline reports a
             // similarity (hit or miss). Pure side-effect; failures non-fatal.
             if let Some(sim) = obj.get("cache_sim").and_then(|v| v.as_f64()) {
                 let is_hit = obj
@@ -1043,7 +1042,7 @@ async fn orchestrate_stream(
                     .get("cache_hit")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                // duration 为秒（Python 计时），换算毫秒落库
+                // duration 为秒，换算毫秒落库
                 let latency_ms = obj
                     .get("duration")
                     .and_then(|v| v.as_f64())
@@ -1069,7 +1068,7 @@ async fn orchestrate_stream(
                 if is_hit {
                     act_cost = 0.0;
                 }
-                // C2：子任务级 est_input_cost 由 plan-subtask 响应经 Python task_done 透传
+                // C2：子任务级 est_input_cost 由 plan-subtask 响应经 task_done 事件透传
                 let est_input_cost = obj
                     .get("est_input_cost")
                     .and_then(|v| v.as_f64())
@@ -1668,9 +1667,9 @@ struct OverheadQuery {
     days: Option<i64>,
 }
 
-/// P4.a：子任务级 plan-subtask 回调（Python 每子任务按其 task_type 独立 plan）。
+/// P4.a：子任务级 plan-subtask 回调（编排器每子任务按其 task_type 独立 plan）。
 /// 无状态：入 task_type/预估 token/预算档 → 出 primary + fallback 链 + escalation_enabled。
-/// 返回模型名，Python 用自己的 models 池解析成 ModelSpec。
+/// 返回模型名，由本进程 models 池解析成 ModelSpec。
 #[derive(Deserialize)]
 struct PlanSubtaskRequest {
     task_type: String,
@@ -1741,7 +1740,7 @@ async fn rust_plan_subtask(
         "escalation_enabled": escalation_enabled,
         "tier_req": 0,
         "defer_until": defer_until,
-        // C2：输入侧事前估算，Python task_done 原样透传回编排落库
+        // C2：输入侧事前估算，task_done 事件原样透传回编排落库
         "est_input_cost": outcome.est_input_cost,
     })))
 }
@@ -1935,7 +1934,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/routing/shadow",
             post(routing_shadow).get(routing_shadow_status),
         )
-        .route("/api/routing/plan-subtask", post(rust_plan_subtask)) // P4.a Python 每子任务回调
+        .route("/api/routing/plan-subtask", post(rust_plan_subtask)) // P4.a 编排器每子任务回调
         .route("/api/routing/overhead", get(routing_overhead))
         // N3.b：Prometheus 指标导出（环回默认，不鉴权——与 /api/health 同级）
         .route("/metrics", get(metrics_export))

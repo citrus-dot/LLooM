@@ -1,8 +1,9 @@
 //! Provider-independent context budgeting and cache-scope helpers.
 //!
 //! This is the Rust owner of logic that used to live in `api/ai_service.py`.
-//! Token counting deliberately keeps the Python fallback's CJK-aware estimate;
-//! provider-native tokenizers can be plugged in later without changing callers.
+//! Token counting deliberately keeps the CJK-aware estimate that the former
+//! Python fallback used; provider-native tokenizers can be plugged in later
+//! without changing callers.
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
