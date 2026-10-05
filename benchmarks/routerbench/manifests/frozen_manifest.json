@@ -1,0 +1,119 @@
+{
+  "benchmark_id": "lloom-routerbench-v0.1",
+  "track_scope": "public_screening",
+  "frozen_at": "2026-10-05T06:45:55+00:00",
+  "schema_version": 1,
+  "hashes": {
+    "benchmark_hash": "324aa61dfdc35ec5072a0e7a40157a68c72c5ba1f4db1751378f97b14136c1ac",
+    "pool_hash": "cabd3ac9c0965e19a9ebc807f73fd475a9c447f8054d363bc12bad333164bfcc",
+    "prompt_profile_hash": "c98137e64721f9f4b0526a3f3476ce5a86632b8758bc65e34d434d590294b348",
+    "scorer_hash": "090f1a5a2e6e1a08df44fd8e808624cbb99091e30c97c6069436e45d88897b4c",
+    "split_hash": "a029c59b525ca1df95915595c83a2abc724ba881f5f38b2e34748ab1810aa416",
+    "cost_basis_hash": "51a075798d8550f8a614fa3fdcf7e7898d3140571bd291edc5472901f0205ef3"
+  },
+  "manifest_hash": "199fb962164bcda80f6d883d2741f570c4ce994ad9754ea04b9ec3d02be5e9fe",
+  "hash_notes": "六 hash 任一变化 = 新 benchmark_id（10 号 §6.2）；benchmark_hash 覆盖矩阵本体+Core 名单",
+  "inputs": {
+    "raw_sources": [
+      {
+        "path": "benchmarks/routerbench/raw/routerbench/routerbench_0shot.pkl",
+        "bytes": 99567659,
+        "sha256": "ba4f77f19517610a707c374e99322d7750c30fc4ae7ff5527888595a1e65d36d",
+        "integrity_gate": "load 前 --expect-sha256 校验 + 模块白名单受限 Unpickler"
+      },
+      {
+        "path": "benchmarks/routerbench/raw/llmrouterbench/bench-release.tar.gz",
+        "bytes": 1283503080,
+        "sha256": "b79f8cde1a6f029c2efa663a3a3b6f7748defb22341fe59f328cebef6648c8f1",
+        "integrity_gate": "Day 1 下载即记录；解析导入（import_llmrouterbench）在 Day 6+ 前置同样校验",
+        "recorded_out_of_band": true
+      }
+    ],
+    "normalized": {
+      "instances_sha256": "a895c462e25ab6722cb86c1a3a94711014338dbb8a27136d29b5ea0c47c5ef4e",
+      "outcomes_sha256": "d6ead3eb1a7d365c78d08f8a1e2d0555795f2dfb91e8a17e6e025c9a583d9852"
+    },
+    "manifests": {
+      "model_pool_public.yaml": "cabd3ac9c0965e19a9ebc807f73fd475a9c447f8054d363bc12bad333164bfcc",
+      "model_pool_native.yaml": "8946cda5f6aaeb3f65a012945fdd7c05328c79720b164aec68498c0ba132af62",
+      "datasets.yaml": "7afadf91a3a4f090128c8eff05a9677cd631d1d9fb77b00adae84f97ffda2fac",
+      "task_mapping.yaml": "828f34a1cbe740e1b8eb3c309a001e92a632037943aad3007a56d53d87cbe376"
+    },
+    "screening_reports": {
+      "screening.json": "b5c11ab4bf01a4862dccfd891445269f0048e4f1f2b0cbff4ce18e7218a5264f",
+      "screening_poolB.json": "e24aae86632b9a86b0134adef20cab9346f890afbe33f5498c77ab07b466da30"
+    }
+  },
+  "core": {
+    "per_dataset": 200,
+    "split": "test",
+    "seed": 3407,
+    "stats": {
+      "rb0shot_winogrande_v1": {
+        "available": 1006,
+        "selected": 200
+      },
+      "rb0shot_mmlu_v1": {
+        "available": 11260,
+        "selected": 200
+      },
+      "rb0shot_hellaswag_v1": {
+        "available": 8075,
+        "selected": 200
+      },
+      "rb0shot_gsm8k_v1": {
+        "available": 5915,
+        "selected": 200
+      },
+      "rb0shot_mbpp_v1": {
+        "available": 349,
+        "selected": 200
+      }
+    },
+    "total": 1000,
+    "selection_file": "benchmarks/routerbench/manifests/core_selection.jsonl"
+  },
+  "pool_sensitivity": {
+    "pool_a": {
+      "models": {
+        "weak": "mistralai_mistral_7b_chat",
+        "mid": "zero_one_ai_yi_34b_chat",
+        "strong": "gpt_4_1106_preview"
+      },
+      "rank": {
+        "rb0shot_winogrande_v1": 1,
+        "rb0shot_mmlu_v1": 2,
+        "rb0shot_hellaswag_v1": 3,
+        "rb0shot_gsm8k_v1": 4,
+        "rb0shot_mbpp_v1": 5,
+        "rb0shot_mt_bench_v1": 6,
+        "rb0shot_arc_v1": 7
+      }
+    },
+    "pool_b": {
+      "models": {
+        "weak": "mistralai_mistral_7b_chat",
+        "mid": "gpt_3_5_turbo_1106",
+        "strong": "gpt_4_1106_preview"
+      },
+      "rank": {
+        "rb0shot_winogrande_v1": 1,
+        "rb0shot_mbpp_v1": 2,
+        "rb0shot_mt_bench_v1": 3,
+        "rb0shot_hellaswag_v1": 4,
+        "rb0shot_mmlu_v1": 5,
+        "rb0shot_gsm8k_v1": 6,
+        "rb0shot_arc_v1": 7
+      }
+    },
+    "finding": "rank 对 mid 强度敏感（screening_score 的 oracle_gain 依赖池），两池 top4 仅两席重合；但 Core 5 名单在规格约束下唯一：mt_bench 被 10 号 §1.3 排除出 Core 排序、arc 两池垫底、gsm8k/mbpp 有 task_type 覆盖与 upgrade_opportunity 的独立入选理由。决策 4a 不被推翻。",
+    "conclusion": "按 pool_a（决策 3a）冻结；rank 敏感性记录在案，解读 headline 时不得跨池引用 screening rank"
+  },
+  "decisions": {
+    "P1_bench_db": "独立 benchmarks/routerbench/bench.db（生产库零污染；.gitignore *.db 兜底）",
+    "P2_price": "native 价格维持转述值冻结，Day 6 自采前从官方页重录 diff，变化即新 benchmark_version",
+    "P3_pool": "public 池 = mistral-7b / Yi-34B / GPT-4-1106（决策 3a）",
+    "P4_core": "Core 5 = winogrande/mmlu/hellaswag/gsm8k/mbpp × 200（决策 4a）"
+  },
+  "next": "Day 4 bench.rs（复用 production plan()/score_all()）+ Plan parity test"
+}

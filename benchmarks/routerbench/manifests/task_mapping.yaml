@@ -1,0 +1,58 @@
+# task_mapping.yaml — PlanInput metadata adapter（10 号 §八：只做映射，不造第二套路由规则）
+# lloom_task_type 与生产路由枚举对齐；band 不在此硬编码——B0 Plan Benchmark 的 band
+# 由 production band_for(task_type, query) 现算（确定性零 LLM，router.rs:86）。
+# 防泄漏三条（starter 沿用）：不从 test 分数推 band；不从 ground_truth/response 推 task_type；
+# 源数据 task metadata 与 LLooM 映射分开存放。
+version: 1
+frozen_at: "2026-10-05"
+
+public_mapping:   # RouterBench 0-shot family（import_frozen.py 的 FAMILY_META 与此同步）
+  winogrande:
+    task_family: commonsense
+    lloom_task_type: general
+  mmlu:
+    task_family: knowledge
+    lloom_task_type: general
+  hellaswag:
+    task_family: commonsense
+    lloom_task_type: general
+  gsm8k:
+    task_family: mathematics
+    lloom_task_type: math_logic
+  mbpp:
+    task_family: coding
+    lloom_task_type: coding
+  arc:            # 不在 Core（datasets.yaml excluded），映射保留供复现
+    task_family: knowledge
+    lloom_task_type: general
+  mt_bench:       # Showcase，judge 分连续值，score 语义与其他 family 不同
+    task_family: dialogue
+    lloom_task_type: general
+
+native_mapping:   # Day 6+ 自采用（starter 原样）
+  mmlu-pro:
+    task_family: knowledge_reasoning
+    lloom_task_type: general
+  math500:
+    task_family: mathematics
+    lloom_task_type: math_logic
+  gsm8k:
+    task_family: mathematics
+    lloom_task_type: math_logic
+  mbpp:
+    task_family: coding
+    lloom_task_type: coding
+  ifeval:
+    task_family: instruction_following
+    lloom_task_type: general
+  mt-bench:
+    task_family: dialogue
+    lloom_task_type: general
+  gpqa:
+    task_family: hard_reasoning
+    lloom_task_type: complex_reasoning
+
+safety:
+  - "Do not derive band from test-set model score."
+  - "Do not derive task_type from ground_truth or response."
+  - "Store original dataset task metadata separately from LLooM mapped task_type."

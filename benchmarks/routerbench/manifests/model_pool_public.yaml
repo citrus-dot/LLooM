@@ -1,0 +1,26 @@
+# model_pool_public.yaml — Public Track 虚拟模型池（决策 3a，2026-10-05 冻结）
+# 冻结规则（starter 沿用）：任何模型 id / tier 变更 = 新 pool_id = 新 benchmark_id；
+# 不写入 production models 表；cost 取源矩阵逐题实测（cost_basis: source），
+# 仅限 Public 矩阵内部比较，禁止与 Native headline 混算（10 号 §0.3）。
+pool_id: public_matrix_top3_v1
+version: 1
+track: public_screening
+cost_basis: source
+frozen_at: "2026-10-05"
+selection_basis: >-
+  Day 1-2 screening（calibration split）：11 模型全池均分排名 GPT-4 0.795 /
+  Yi-34B 0.663 / mistral-7b 0.308；按单调能力阶梯 + 最大成本梯度取三元。
+  敏感性对照（poolB = mistral-7b/gpt-3.5-turbo/GPT-4）已跑，见 frozen_manifest.json 敏感性段。
+models:
+  - role: weak
+    lloom_model_id: mistralai_mistral_7b_chat
+    source_name: "mistralai/mistral-7b-chat"
+    capability_tier: 1
+  - role: mid
+    lloom_model_id: zero_one_ai_yi_34b_chat
+    source_name: "zero-one-ai/Yi-34B-Chat"
+    capability_tier: 2
+  - role: strong
+    lloom_model_id: gpt_4_1106_preview
+    source_name: "gpt-4-1106-preview"
+    capability_tier: 3

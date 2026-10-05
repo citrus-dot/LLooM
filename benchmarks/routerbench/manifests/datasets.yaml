@@ -1,0 +1,56 @@
+# datasets.yaml — Public Track Core 名单（决策 4a，2026-10-05 冻结）
+# Core 5 datasets，每 dataset 从 test split 抽 200，合计 ~1000 实例。
+# 选择依据：Day 1-2 screening（calibration split，临时池 a）+ 规格约束，
+# 敏感性对照（poolB）结论见 frozen_manifest.json——rank 对 mid 强度敏感，但名单在规格约束下唯一：
+#   - mt_bench：10 号 §1.3 明确 Showcase 专属，不参与 Core 排序（b 池下其 rank#3 不构成入选理由）
+#   - arc：两池 rank 均 7/7（oracle_gain 0.016/0.007 垫底），出局
+#   - gsm8k：upgrade_opportunity 0.651 全场最高（weak-vs-strong 对测量，与 mid 无关），math 类型必选
+#   - mbpp：coding 类型唯一来源，test 侧 349 题充足（calibration 78 偏小只影响 screening 置信）
+benchmark_id: lloom-routerbench-v0.1
+track: public_screening
+frozen_at: "2026-10-05"
+split_source: "normalized/instances.jsonl 的 split 字段（哈希桶 20/80 seed=3407，导入时生成）"
+core:
+  per_dataset: 200
+  split: test
+  datasets:
+    - family: winogrande
+      dataset_id: rb0shot_winogrande_v1
+      task_type: general
+    - family: mmlu
+      dataset_id: rb0shot_mmlu_v1
+      task_type: general
+    - family: hellaswag
+      dataset_id: rb0shot_hellaswag_v1
+      task_type: general
+    - family: gsm8k
+      dataset_id: rb0shot_gsm8k_v1
+      task_type: math_logic
+    - family: mbpp
+      dataset_id: rb0shot_mbpp_v1
+      task_type: coding
+  selection_policy: >-
+    每 dataset 的 test 实例按 sha256("lloom-core-select:3407:"+sample_id) 升序取前 200：
+    确定性、与行序无关、跨机可复现；名单落盘 manifests/core_selection.jsonl，
+    任何名单/比例/policy 变更 = 新 benchmark_id。
+  excluded:
+    - dataset: arc
+      reason: "两池 screening rank 7/7，oracle_gain 0.016-0.007 垫底，routing headroom 不足"
+    - dataset: mt_bench
+      reason: "10 号 §1.3：MT-Bench 单独进 Showcase，不参与 Core 的唯一排序"
+# ── Native Track 计划（照 starter 草案，Day 6+ 执行，不在本 manifest 冻结范围）──
+native_plan:
+  calibration_ratio: 0.20
+  test_ratio: 0.80
+  seed: 3407
+  datasets:
+    - { id: mmlu-pro, sample_target: 300, task_type: general }
+    - { id: math500,  sample_target: 300, task_type: math_logic }
+    - { id: gsm8k,    sample_target: 300, task_type: math_logic }
+    - { id: mbpp,     sample_target: 300, task_type: coding }
+    - { id: ifeval,   sample_target: 200, task_type: general,
+        status: "verify lm-eval/chat compatibility before collection" }
+showcase:
+  datasets:
+    - { id: mt-bench, sample_target: 100, role: showcase,
+        scorer: "frozen judge outcomes; judge model/version must be recorded" }

@@ -1,0 +1,42 @@
+# model_pool_native.yaml — Native Track 三层同系池（决策 2a，2026-10-05 冻结池结构）
+# ⚠️ 价格为转述值（10 号 §3.2 引官方页），已拍板 Day 6 自采前从官方页面重录 diff（决策 P2）；
+#    重录后任何价格变化 = 新 cost_basis_hash = 新 benchmark_version，本文件随之修订。
+#    池结构（模型 id / tier / context_window）本轮冻结，变更 = 新 pool_id。
+pool_id: native_qwen36_3tier_v1
+version: 1
+track: native_core
+cost_basis: provider_official_usd_per_1m_tokens
+price_status: provisional_transcribed   # Day 6 前重录（P2 拍板 2026-10-05）
+frozen_at: "2026-10-05"
+models:
+  - role: weak
+    lloom_model_id: qwen3.6-flash
+    provider_model_id: qwen3.6-flash
+    capability_tier: 1
+    context_window: 1000000
+    price:
+      input_usd_per_million: 0.165
+      output_usd_per_million: 0.99
+  - role: mid
+    lloom_model_id: qwen3.6-plus
+    provider_model_id: qwen3.6-plus
+    capability_tier: 2
+    context_window: 1000000
+    price:
+      input_usd_per_million: 0.276
+      output_usd_per_million: 1.651
+  - role: strong
+    lloom_model_id: qwen3.6-max-preview
+    provider_model_id: qwen3.6-max-preview
+    capability_tier: 3
+    context_window: 262144
+    price:
+      input_usd_per_million: 1.30
+      output_usd_per_million: 7.80
+freeze_rules:
+  - "Any model id change creates a new model_pool_id."
+  - "Any capability_tier change creates a new model_pool_id."
+  - "Any context_window change creates a new model_pool_id."
+  - "Any price change creates a new cost_basis_hash and benchmark version."
+  - "Do not modify the production models table for public virtual models."
+  - "Price re-verification mandatory before native collection (P2, 2026-10-05)."
