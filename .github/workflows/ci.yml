@@ -15,9 +15,12 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Linux runner 用 24.04：ort 2.0.0-rc.13（fastembed 传递依赖）的预编译 ORT
+  # 静态库按 glibc≥2.38 / GCC 13 工具链构建，22.04 链接报
+  # __isoc23_strtoll / std::_M_replace_cold 未定义（pykeio/ort#523）。
   rust:
     name: Rust clippy + test
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -31,7 +34,7 @@ jobs:
 
   webui:
     name: WebUI typecheck + build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: webui

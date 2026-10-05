@@ -11,7 +11,8 @@
 #   dist/LLooM-<ver>-windows-<arch>.zip
 #
 # 说明：
-#   - Linux 用 ubuntu-22.04 保证 glibc 兼容底线。
+#   - Linux 用 ubuntu-24.04：ort 预编译静态库按 glibc≥2.38 / GCC 13 工具链构建（pykeio/ort#523），
+#     22.04 链接报 __isoc23_strtoll 未定义；产物 glibc 底线实际由该静态库决定，不因 runner 而变。
 #   - Ollama 不捆绑；macOS 产物未签名（用户首次运行需 xattr -cr 绕 Gatekeeper）。
 
 name: release
@@ -32,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             pkg: bash scripts/package.sh
           - os: macos-latest
             pkg: bash scripts/package.sh
