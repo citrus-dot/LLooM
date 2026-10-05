@@ -1732,6 +1732,7 @@ version = "2.1.0"
 dependencies = [
  "clap",
  "futures-util",
+ "lloom-core",
  "reqwest 0.13.4",
  "serde_json",
  "tokio",

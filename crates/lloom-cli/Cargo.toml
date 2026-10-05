@@ -14,3 +14,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde_json = "1"
 reqwest = { version = "0.13", features = ["json", "stream"] }
 futures-util = "0.3"
+# bench replay：本地离线命令直接复用 core 的冻结矩阵回放引擎（不走 REST）
+lloom-core = { path = "../lloom-core" }

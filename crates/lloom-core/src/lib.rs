@@ -13,6 +13,7 @@
 //!   - `server`: axum HTTP server (REST + SSE)
 
 pub mod ai_client;
+pub mod bench;
 pub mod config;
 pub mod context;
 pub mod conversations;

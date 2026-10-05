@@ -55,6 +55,37 @@ enum Command {
     /// OpenAI-compatible proxy: show access info / manage API key
     #[command(subcommand)]
     Proxy(ProxyCmd),
+    /// RouterBench 冻结矩阵回放（本地离线命令，不需要 lloom-server）
+    #[command(subcommand)]
+    Bench(BenchCmd),
+}
+
+#[derive(Subcommand)]
+enum BenchCmd {
+    /// 回放：Core 名单 test 实例 × 冻结矩阵 × 真实 plan()，零 LLM 成本（bench.rs）
+    Replay {
+        /// 策略：all | lloom | always_weak | always_mid | always_strong | cheapest | random | best_single | oracle
+        #[arg(long, default_value = "all")]
+        strategy: String,
+        /// 临时池三元 model_id（weak mid strong；冻结值见 manifests/model_pool_public.yaml）
+        #[arg(long, num_args = 3)]
+        models: Vec<String>,
+        /// 冻结矩阵目录（instances/outcomes jsonl）
+        #[arg(long, default_value = "benchmarks/routerbench/normalized")]
+        normalized: std::path::PathBuf,
+        /// Core 抽样名单（Day 3 冻结）
+        #[arg(long, default_value = "benchmarks/routerbench/manifests/core_selection.jsonl")]
+        selection: std::path::PathBuf,
+        /// frozen manifest（benchmark_id/manifest_hash 溯源）
+        #[arg(long, default_value = "benchmarks/routerbench/manifests/frozen_manifest.json")]
+        manifest: std::path::PathBuf,
+        /// bench.db 落点（决策 P1a：独立库，生产零接触）
+        #[arg(long, default_value = "benchmarks/routerbench/bench.db")]
+        bench_db: std::path::PathBuf,
+        /// E5 实验：LLooM 启用 calibration 质量先验（w/ 版；缺省 w/o）
+        #[arg(long, default_value_t = false)]
+        calibration: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -212,6 +243,137 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Orchestrate { query } => cmd_orchestrate(&client, &query).await?,
         Command::Conversation(c) => cmd_conversation(&client, c).await?,
         Command::Proxy(c) => cmd_proxy(&client, c).await?,
+        Command::Bench(c) => cmd_bench(c).await?,
+    }
+    Ok(())
+}
+
+// ── bench（本地离线命令：读冻结矩阵 + 独立 bench.db，不触碰 lloom-server 与生产库）──
+
+async fn cmd_bench(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        BenchCmd::Replay {
+            strategy,
+            models,
+            normalized,
+            selection,
+            manifest,
+            bench_db,
+            calibration,
+        } => {
+            use lloom_core::bench::{self, BenchPool, Strategy};
+            let frozen: Value = serde_json::from_str(&std::fs::read_to_string(&manifest)?)?;
+            let benchmark_id = frozen["benchmark_id"].as_str().unwrap_or_default().to_string();
+            let manifest_hash = frozen["manifest_hash"].as_str().unwrap_or_default().to_string();
+
+            if models.len() != 3 {
+                eprintln!("✗ --models 需恰好 3 个 model_id（weak mid strong），顺序敏感");
+                exit(1);
+            }
+            let pool = BenchPool {
+                weak: bench::slugify(&models[0]),
+                mid: bench::slugify(&models[1]),
+                strong: bench::slugify(&models[2]),
+            };
+
+            let (test, calib, matrix) = bench::load_frozen(&normalized, Some(&selection))?;
+            let declared = frozen["core"]["total"].as_u64().unwrap_or(0) as usize;
+            if declared > 0 && test.len() != declared {
+                eprintln!("✗ Core 数量不符：名单声明 {declared}，实载 {}（Gate 1 前置失败）", test.len());
+                exit(1);
+            }
+
+            let stats = bench::calibration_stats(&matrix, &pool, &calib);
+            let (pool_models, specs) = bench::build_pool_models(&pool, &stats);
+            let mut ctx = bench::ReplayCtx::new(pool.clone(), pool_models, specs, stats);
+            ctx.use_calibration = calibration;
+
+            let strategies: Vec<Strategy> = if strategy == "all" {
+                Strategy::ALL.to_vec()
+            } else {
+                vec![Strategy::parse(&strategy).unwrap_or_else(|| {
+                    eprintln!("✗ 未知策略 '{strategy}'（可选 all/lloom/always_*/cheapest/random/best_single/oracle）");
+                    exit(1);
+                })]
+            };
+
+            let conn = bench::open_bench_db(&bench_db)?;
+            println!(
+                "bench replay: {} ({}) | n={} test | pool={}/{}/{} | calibration={}",
+                benchmark_id,
+                &manifest_hash[..12.min(manifest_hash.len())],
+                test.len(),
+                pool.weak,
+                pool.mid,
+                pool.strong,
+                if calibration { "on" } else { "off" }
+            );
+
+            let mut per_strategy = serde_json::Map::new();
+            let mut strong_ref: Option<(f64, f64)> = None; // (Q, C) Always-Strong
+            let mut weak_ref: Option<f64> = None; // Q Always-Weak
+            for st in strategies {
+                let items = bench::replay(&ctx, &matrix, &test, st)?;
+                let summary = bench::summarize(&items);
+                if st == Strategy::AlwaysStrong {
+                    strong_ref = Some((summary["quality_mean"].as_f64().unwrap_or(0.0), summary["cost_mean"].as_f64().unwrap_or(0.0)));
+                }
+                if st == Strategy::AlwaysWeak {
+                    weak_ref = Some(summary["quality_mean"].as_f64().unwrap_or(0.0));
+                }
+                let parameter_json = serde_json::json!({
+                    "pool": { "weak": pool.weak, "mid": pool.mid, "strong": pool.strong },
+                    "est_profile": { "est_in": "chars*0.6", "est_out_cold_start": bench::EST_OUT_COLD_START },
+                    "hit_rate": "all-zero (红线)",
+                    "quality_override": calibration,
+                    "policy": { "min_capability_tier": 1, "weights": "cost .5 / quality .4 / latency .1 (default)" },
+                    "cost_basis": "source (等效单价由 calibration 导出，公式见 bench.rs)"
+                })
+                .to_string();
+                let run_id = bench::save_run(
+                    &conn,
+                    &bench::RunMeta {
+                        benchmark_id: &benchmark_id,
+                        manifest_hash: &manifest_hash,
+                        pool_id: "public_matrix_top3_v1",
+                        strategy: st.name(),
+                        parameter_json: &parameter_json,
+                        split: "test",
+                        summary_json: summary.to_string().as_str(),
+                    },
+                    &items,
+                )?;
+                per_strategy.insert(st.name().to_string(), summary);
+                let s = &per_strategy[st.name()];
+                let dist_str = format!("{:?}", s["selection_dist"]);
+                println!(
+                    "  {:<14} run={:<4} Q={:.4} C=${:.6}/q regret_p50={:.2} dist={}",
+                    st.name(),
+                    run_id,
+                    s["quality_mean"].as_f64().unwrap_or(0.0),
+                    s["cost_mean"].as_f64().unwrap_or(0.0),
+                    s["regret_p50"].as_f64().unwrap_or(0.0),
+                    dist_str,
+                );
+            }
+
+            // 对比指标（10 号 §13.3-13.5）：以 Always-Strong/Always-Weak 基准行计算 LLooM 三指标
+            if let (Some((qs, cs)), Some(qw)) = (strong_ref, weak_ref) {
+                if let Some(lloom) = per_strategy.get("lloom") {
+                    let ql = lloom["quality_mean"].as_f64().unwrap_or(0.0);
+                    let cl = lloom["cost_mean"].as_f64().unwrap_or(0.0);
+                    let saving = if cs > 0.0 { 1.0 - cl / cs } else { 0.0 };
+                    let retention = if qs > 0.0 { ql / qs } else { 0.0 };
+                    let gap = if qs - qw > 1e-12 { (ql - qw) / (qs - qw) } else { 0.0 };
+                    println!(
+                        "  ── LLooM vs 基准（w/o calibration）──\n  saving={:.1}% retention={:.1}% gap_recovery={:.1}%",
+                        saving * 100.0,
+                        retention * 100.0,
+                        gap * 100.0
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
