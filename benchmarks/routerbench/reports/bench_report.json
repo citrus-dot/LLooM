@@ -1,0 +1,446 @@
+{
+  "generated_at": "2026-10-05T07:12:41+00:00",
+  "strategies": {
+    "always_weak": {
+      "run_id": 1,
+      "cost_mean": 4.504759999999996e-05,
+      "n": 1000,
+      "quality_mean": 0.3475,
+      "regret_mean": 0.49175,
+      "regret_p50": 0.5,
+      "regret_p95": 1.0,
+      "selection_dist": {
+        "mistralai_mistral_7b_chat": 1000
+      }
+    },
+    "always_mid": {
+      "run_id": 2,
+      "cost_mean": 0.0001901247999999999,
+      "n": 1000,
+      "quality_mean": 0.62675,
+      "regret_mean": 0.2125,
+      "regret_p50": 0.0,
+      "regret_p95": 1.0,
+      "selection_dist": {
+        "zero_one_ai_yi_34b_chat": 1000
+      }
+    },
+    "always_strong": {
+      "run_id": 3,
+      "cost_mean": 0.004423070000000003,
+      "n": 1000,
+      "quality_mean": 0.76275,
+      "regret_mean": 0.0765,
+      "regret_p50": 0.0,
+      "regret_p95": 1.0,
+      "selection_dist": {
+        "gpt_4_1106_preview": 1000
+      }
+    },
+    "cheapest": {
+      "run_id": 4,
+      "cost_mean": 4.504759999999996e-05,
+      "n": 1000,
+      "quality_mean": 0.3475,
+      "regret_mean": 0.49175,
+      "regret_p50": 0.5,
+      "regret_p95": 1.0,
+      "selection_dist": {
+        "mistralai_mistral_7b_chat": 1000
+      }
+    },
+    "random": {
+      "run_id": 5,
+      "cost_mean": 0.0016140602000000006,
+      "n": 1000,
+      "quality_mean": 0.608,
+      "regret_mean": 0.23125,
+      "regret_p50": 0.0,
+      "regret_p95": 1.0,
+      "selection_dist": {
+        "gpt_4_1106_preview": 345,
+        "mistralai_mistral_7b_chat": 313,
+        "zero_one_ai_yi_34b_chat": 342
+      }
+    },
+    "best_single": {
+      "run_id": 6,
+      "cost_mean": 0.004423070000000003,
+      "n": 1000,
+      "quality_mean": 0.76275,
+      "regret_mean": 0.0765,
+      "regret_p50": 0.0,
+      "regret_p95": 1.0,
+      "selection_dist": {
+        "gpt_4_1106_preview": 1000
+      }
+    },
+    "oracle": {
+      "run_id": 7,
+      "cost_mean": 0.0012584686000000017,
+      "n": 1000,
+      "quality_mean": 0.83925,
+      "regret_mean": 0.0,
+      "regret_p50": 0.0,
+      "regret_p95": 0.0,
+      "selection_dist": {
+        "gpt_4_1106_preview": 183,
+        "mistralai_mistral_7b_chat": 434,
+        "zero_one_ai_yi_34b_chat": 383
+      }
+    },
+    "lloom": {
+      "run_id": 30,
+      "cost_mean": 0.002825724799999996,
+      "n": 1000,
+      "quality_mean": 0.70875,
+      "regret_mean": 0.1305,
+      "regret_p50": 0.0,
+      "regret_p95": 1.0,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    }
+  },
+  "lloom_lambda_curve": [
+    {
+      "run_id": 20,
+      "cost_weight": 0.0,
+      "cost": 0.004423070000000003,
+      "quality": 0.76275,
+      "selection_dist": {
+        "gpt_4_1106_preview": 1000
+      }
+    },
+    {
+      "run_id": 21,
+      "cost_weight": 0.1,
+      "cost": 0.004423070000000003,
+      "quality": 0.76275,
+      "selection_dist": {
+        "gpt_4_1106_preview": 1000
+      }
+    },
+    {
+      "run_id": 22,
+      "cost_weight": 0.2,
+      "cost": 0.004423070000000003,
+      "quality": 0.76275,
+      "selection_dist": {
+        "gpt_4_1106_preview": 1000
+      }
+    },
+    {
+      "run_id": 23,
+      "cost_weight": 0.3,
+      "cost": 0.002825724799999996,
+      "quality": 0.70875,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    },
+    {
+      "run_id": 24,
+      "cost_weight": 0.4,
+      "cost": 0.002825724799999996,
+      "quality": 0.70875,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    },
+    {
+      "run_id": 25,
+      "cost_weight": 0.5,
+      "cost": 0.002825724799999996,
+      "quality": 0.70875,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    },
+    {
+      "run_id": 26,
+      "cost_weight": 0.6,
+      "cost": 0.002825724799999996,
+      "quality": 0.70875,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    },
+    {
+      "run_id": 27,
+      "cost_weight": 0.7,
+      "cost": 0.002825724799999996,
+      "quality": 0.70875,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    },
+    {
+      "run_id": 28,
+      "cost_weight": 0.8,
+      "cost": 0.002825724799999996,
+      "quality": 0.70875,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    },
+    {
+      "run_id": 29,
+      "cost_weight": 0.9,
+      "cost": 0.002825724799999996,
+      "quality": 0.70875,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    }
+  ],
+  "pareto_front": [
+    {
+      "strategy": "always_weak",
+      "run_id": 1,
+      "cost": 4.504759999999996e-05,
+      "quality": 0.3475
+    },
+    {
+      "strategy": "always_mid",
+      "run_id": 2,
+      "cost": 0.0001901247999999999,
+      "quality": 0.62675
+    },
+    {
+      "strategy": "oracle",
+      "run_id": 7,
+      "cost": 0.0012584686000000017,
+      "quality": 0.83925
+    }
+  ],
+  "aiq": 0.7036,
+  "aiq_note": "前沿折线在共同成本区间的归一化质量积分（梯形）；点集稀疏仅作对照（10 号 §13.9）",
+  "lloom_compare": {
+    "lloom_run": 25,
+    "cost_weight": 0.5,
+    "saving_vs_strong": 0.3611,
+    "retention_vs_strong": 0.9292,
+    "gap_recovery": 0.87
+  },
+  "per_dataset": {
+    "rb0shot_gsm8k_v1": {
+      "always_weak": {
+        "quality": 0.4175,
+        "cost": 9.4e-05,
+        "n": 200
+      },
+      "always_mid": {
+        "quality": 0.5637,
+        "cost": 0.000388,
+        "n": 200
+      },
+      "always_strong": {
+        "quality": 0.6538,
+        "cost": 0.008447,
+        "n": 200
+      },
+      "cheapest": {
+        "quality": 0.4175,
+        "cost": 9.4e-05,
+        "n": 200
+      },
+      "random": {
+        "quality": 0.555,
+        "cost": 0.002883,
+        "n": 200
+      },
+      "best_single": {
+        "quality": 0.6538,
+        "cost": 0.008447,
+        "n": 200
+      },
+      "oracle": {
+        "quality": 0.6963,
+        "cost": 0.002543,
+        "n": 200
+      },
+      "lloom": {
+        "quality": 0.6538,
+        "cost": 0.008447,
+        "n": 200
+      }
+    },
+    "rb0shot_hellaswag_v1": {
+      "always_weak": {
+        "quality": 0.255,
+        "cost": 4.5e-05,
+        "n": 200
+      },
+      "always_mid": {
+        "quality": 0.785,
+        "cost": 0.000178,
+        "n": 200
+      },
+      "always_strong": {
+        "quality": 0.84,
+        "cost": 0.002257,
+        "n": 200
+      },
+      "cheapest": {
+        "quality": 0.255,
+        "cost": 4.5e-05,
+        "n": 200
+      },
+      "random": {
+        "quality": 0.66,
+        "cost": 0.000729,
+        "n": 200
+      },
+      "best_single": {
+        "quality": 0.84,
+        "cost": 0.002257,
+        "n": 200
+      },
+      "oracle": {
+        "quality": 0.94,
+        "cost": 0.000379,
+        "n": 200
+      },
+      "lloom": {
+        "quality": 0.84,
+        "cost": 0.002257,
+        "n": 200
+      }
+    },
+    "rb0shot_mbpp_v1": {
+      "always_weak": {
+        "quality": 0.305,
+        "cost": 4.8e-05,
+        "n": 200
+      },
+      "always_mid": {
+        "quality": 0.385,
+        "cost": 0.000232,
+        "n": 200
+      },
+      "always_strong": {
+        "quality": 0.695,
+        "cost": 0.009449,
+        "n": 200
+      },
+      "cheapest": {
+        "quality": 0.305,
+        "cost": 4.8e-05,
+        "n": 200
+      },
+      "random": {
+        "quality": 0.495,
+        "cost": 0.003712,
+        "n": 200
+      },
+      "best_single": {
+        "quality": 0.695,
+        "cost": 0.009449,
+        "n": 200
+      },
+      "oracle": {
+        "quality": 0.735,
+        "cost": 0.003026,
+        "n": 200
+      },
+      "lloom": {
+        "quality": 0.425,
+        "cost": 0.001463,
+        "n": 200
+      }
+    },
+    "rb0shot_mmlu_v1": {
+      "always_weak": {
+        "quality": 0.21,
+        "cost": 2.8e-05,
+        "n": 200
+      },
+      "always_mid": {
+        "quality": 0.69,
+        "cost": 0.000112,
+        "n": 200
+      },
+      "always_strong": {
+        "quality": 0.8,
+        "cost": 0.001421,
+        "n": 200
+      },
+      "cheapest": {
+        "quality": 0.21,
+        "cost": 2.8e-05,
+        "n": 200
+      },
+      "random": {
+        "quality": 0.605,
+        "cost": 0.000542,
+        "n": 200
+      },
+      "best_single": {
+        "quality": 0.8,
+        "cost": 0.001421,
+        "n": 200
+      },
+      "oracle": {
+        "quality": 0.89,
+        "cost": 0.000252,
+        "n": 200
+      },
+      "lloom": {
+        "quality": 0.8,
+        "cost": 0.001421,
+        "n": 200
+      }
+    },
+    "rb0shot_winogrande_v1": {
+      "always_weak": {
+        "quality": 0.55,
+        "cost": 1e-05,
+        "n": 200
+      },
+      "always_mid": {
+        "quality": 0.71,
+        "cost": 4e-05,
+        "n": 200
+      },
+      "always_strong": {
+        "quality": 0.825,
+        "cost": 0.00054,
+        "n": 200
+      },
+      "cheapest": {
+        "quality": 0.55,
+        "cost": 1e-05,
+        "n": 200
+      },
+      "random": {
+        "quality": 0.725,
+        "cost": 0.000204,
+        "n": 200
+      },
+      "best_single": {
+        "quality": 0.825,
+        "cost": 0.00054,
+        "n": 200
+      },
+      "oracle": {
+        "quality": 0.935,
+        "cost": 9.2e-05,
+        "n": 200
+      },
+      "lloom": {
+        "quality": 0.825,
+        "cost": 0.00054,
+        "n": 200
+      }
+    }
+  }
+}

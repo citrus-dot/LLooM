@@ -199,12 +199,21 @@ impl FrozenMatrix {
 // ── 池构造与 policy ──
 
 /// bench policy：显式 `min_capability_tier=1` 允许全池三层（RoutingPolicy::default 的 2 会把
-/// weak 永久挡掉，routing headroom 将不可见）；权重沿用生产 default（cost .5/quality .4/latency .1）。
-/// 此设定记入 bench_runs.parameter_json，是 B0 Plan Benchmark 的被测配置之一（Day 5 λ sweep 扫权重）。
+/// weak 永久挡掉，routing headroom 将不可见）；权重可参数化（λ sweep，10 号 §十四），
+/// 缺省沿用生产 default（cost .5/quality .4/latency .1）。
+/// 设定记入 bench_runs.parameter_json，是 B0 Plan Benchmark 的被测配置之一。
 pub fn bench_policy(task_type: &str) -> RoutingPolicy {
+    policy_with_weights(task_type, 0.5, 0.4)
+}
+
+/// 指定 cost/quality 权重的 bench policy（latency 恒 0.1 生产缺省；cost+quality 由调用方分配）。
+pub fn policy_with_weights(task_type: &str, cost_weight: f64, quality_weight: f64) -> RoutingPolicy {
     RoutingPolicy {
         task_type: task_type.to_string(),
         min_capability_tier: 1,
+        cost_weight,
+        quality_weight,
+        latency_weight: 0.1,
         ..RoutingPolicy::default()
     }
 }
@@ -217,6 +226,9 @@ pub struct CalibrationStats {
     pub dataset_mean: HashMap<(String, String), f64>,
     /// (model_id, task_type) → (ewma 均分, n)（quality_override 用，n≥5 才有效）
     pub task_quality: HashMap<(String, String), (f64, usize)>,
+    /// model_id → calibration 全局均分（注册冷启动 quality_score 先验；
+    /// 生产语义 = 注册时对模型能力的静态认知，E5 的 w/o 控制组靠它区分于 w/ 的细粒度 EWMA）
+    pub model_quality: HashMap<String, f64>,
 }
 
 /// 从 calibration split 统计导出（**只读 calibration 侧**，泄漏红线）。
@@ -260,14 +272,18 @@ pub fn calibration_stats(
 
     // 等效综合单价：p_m = mean_cost_m / mean(est_in_q + 750)，est_in = chars×0.6（固定 profile）。
     let mut unit_price = HashMap::new();
+    let mut quality_acc: HashMap<&str, (f64, usize)> = HashMap::new();
     for m in pool.model_ids() {
         let mut cost_sum = 0.0;
         let mut token_sum = 0.0;
         let mut n = 0;
         for inst in calib_instances {
-            if let Some((_, cost)) = matrix.lookup(&inst.sample_id, m) {
+            if let Some((score, cost)) = matrix.lookup(&inst.sample_id, m) {
                 cost_sum += cost;
                 token_sum += est_in_tokens(&inst.prompt) as f64 + EST_OUT_COLD_START as f64;
+                let e = quality_acc.entry(m).or_insert((0.0, 0));
+                e.0 += score;
+                e.1 += 1;
                 n += 1;
             }
         }
@@ -275,7 +291,11 @@ pub fn calibration_stats(
             unit_price.insert(m.to_string(), cost_sum / token_sum);
         }
     }
-    CalibrationStats { unit_price, dataset_mean, task_quality }
+    let model_quality: HashMap<String, f64> = quality_acc
+        .into_iter()
+        .map(|(m, (sum, n))| (m.to_string(), if n > 0 { sum / n as f64 } else { 0.5 }))
+        .collect();
+    CalibrationStats { unit_price, dataset_mean, task_quality, model_quality }
 }
 
 pub fn est_in_tokens(prompt: &str) -> i64 {
@@ -304,7 +324,8 @@ pub fn build_pool_models(pool: &BenchPool, stats: &CalibrationStats) -> (Vec<Mod
             rpm: 0,
             is_active: 1,
             capability_tier: tier,
-            quality_score: 0.5,
+            // 注册冷启动先验：calibration 全局均分（非 test 数据，泄漏合规）
+            quality_score: *stats.model_quality.get(id).unwrap_or(&0.5),
             context_window: 128_000,
             supports_tools: 0,
             supports_vision: 0,
@@ -339,11 +360,20 @@ pub struct ReplayCtx {
     pub stats: CalibrationStats,
     /// quality_override 开关（E5 实验：w/o=false；w/=true 时用 calibration 先验，n≥5）
     pub use_calibration: bool,
+    /// λ sweep：LLooM 策略的 cost/quality 权重（None = 生产 default 0.5/0.4）
+    pub weights: Option<(f64, f64)>,
 }
 
 impl ReplayCtx {
     pub fn new(pool: BenchPool, models: Vec<Model>, specs: HashMap<(String, String), PriceSpec>, stats: CalibrationStats) -> Self {
-        Self { pool, models, specs, zones: ZoneResolver::new(), stats, use_calibration: false }
+        Self { pool, models, specs, zones: ZoneResolver::new(), stats, use_calibration: false, weights: None }
+    }
+
+    fn policy_for(&self, task_type: &str) -> RoutingPolicy {
+        match self.weights {
+            Some((cw, qw)) => policy_with_weights(task_type, cw, qw),
+            None => bench_policy(task_type),
+        }
     }
 
     fn quality_override(&self, task_type: &str) -> HashMap<String, f64> {
@@ -528,7 +558,7 @@ pub fn replay(
                 )
             }
             Strategy::Lloom => {
-                let policy = bench_policy(&inst.task_type);
+                let policy = ctx.policy_for(&inst.task_type);
                 let q = ctx.quality_override(&inst.task_type);
                 let input = ctx.build_plan_input(inst, &policy, &q, &empty_hit);
                 let outcome = router::plan(&input).map_err(|e| {
@@ -541,6 +571,8 @@ pub fn replay(
                     "est_in_tokens": est_in_tokens(&inst.prompt),
                     "est_out_tokens": EST_OUT_COLD_START,
                     "quality_override": ctx.use_calibration,
+                    "cost_weight": ctx.weights.map(|w| w.0),
+                    "quality_weight": ctx.weights.map(|w| w.1),
                     "candidates": outcome.candidates.iter().map(|c| json!({
                         "model": c.name, "score": c.score, "est_cost": c.est_cost,
                         "quality": c.quality, "capability_tier": c.capability_tier,
