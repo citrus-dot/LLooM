@@ -206,3 +206,107 @@ mod tests {
         assert_eq!(tasks[1].estimated_output_tokens, 1024);
     }
 }
+
+/// OrchestrationBench parity 缝（O-Day 11，协议 §3：只加测试，零生产改动）。
+///
+/// 生产波次语义（`dependency_waves`）与 OrchestrationBench canonical fixture 的
+/// `waves` 划分必须一致——bench 侧 schedule.py 的 `lloom_waves` 策略消费的正是
+/// 这一语义的预存输出；节点 id 映射约定 = canonical 声明序 → 生产 SubTask.id 1..n
+/// （bridge 层同一约定，见 benchmarks/orchestration/router_bridge.py）。
+/// fixture 真源：benchmarks/orchestration/manifests/fixtures/（Rust 侧只读）。
+#[cfg(test)]
+mod orchbench_parity {
+    use super::*;
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../benchmarks/orchestration/manifests/fixtures")
+            .join(name);
+        serde_json::from_str(
+            &std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("orchbench fixture 不可读 {:?}: {e}", path)),
+        )
+        .expect("fixture JSON 合法")
+    }
+
+    /// canonical workflow → 生产 SubTask 列表（声明序 id=1..n，bridge 层同约定）。
+    fn to_subtasks(wf: &Value) -> Vec<SubTask> {
+        let ids: Vec<String> = wf["nodes"]
+            .as_array()
+            .expect("nodes 数组")
+            .iter()
+            .map(|n| n["id"].as_str().expect("node id 字符串").to_string())
+            .collect();
+        wf["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(i, n)| SubTask {
+                id: i + 1,
+                description: n["description"].as_str().unwrap_or_default().to_string(),
+                task_type: n["task_type"].as_str().unwrap_or("general").to_string(),
+                depends_on: n["depends_on"]
+                    .as_array()
+                    .map(|deps| {
+                        deps.iter()
+                            .filter_map(|d| d.as_str())
+                            .filter_map(|d| ids.iter().position(|x| x == d).map(|p| p + 1))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                estimated_output_tokens: 1,
+            })
+            .collect()
+    }
+
+    /// fixture.waves（字符串 id 波次）→ 声明序 usize 波次（null 返回 None）。
+    fn fixture_waves(wf: &Value) -> Option<Vec<Vec<usize>>> {
+        wf["waves"].as_array().map(|waves| {
+            let ids: Vec<String> = wf["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n["id"].as_str().unwrap().to_string())
+                .collect();
+            waves
+                .iter()
+                .map(|w| {
+                    w.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|nid| {
+                            let s = nid.as_str().unwrap();
+                            ids.iter().position(|x| x == s).unwrap() + 1
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+    }
+
+    #[test]
+    fn dependency_waves_matches_canonical_fixtures() {
+        for name in ["fixture_chain.json", "fixture_fanout.json"] {
+            let wf = fixture(name);
+            let tasks = to_subtasks(&wf);
+            let expected = fixture_waves(&wf).expect("该 fixture 带 waves");
+            assert_eq!(
+                dependency_waves(&tasks),
+                expected,
+                "{name}: 生产 dependency_waves 与 canonical waves 不一致"
+            );
+        }
+    }
+
+    #[test]
+    fn diamond_matches_reference_layering() {
+        // diamond fixture waves=null：生产分层结果应等于 bench 侧 reference_waves 的
+        // 固化预期（双侧同断言，语义真源单一）。
+        let wf = fixture("fixture_diamond.json");
+        let tasks = to_subtasks(&wf);
+        assert_eq!(dependency_waves(&tasks), vec![vec![1], vec![2, 3], vec![4]]);
+    }
+}
