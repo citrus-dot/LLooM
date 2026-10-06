@@ -381,9 +381,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     strict = "--strict" in argv
     paths = [a for a in argv if not a.startswith("--")]
+    # 路径收口（Mimosa 约束）：CLI 路径 resolve 后必须落在本工具目录内，仓外一律拒收，
+    # 消除任意路径读取面；fixture/adapter 产物校验均在本目录内，收口不影响用途
+    root = Path(__file__).resolve().parent
     all_ok = True
     for raw in paths:
-        p = Path(raw)
+        p = Path(raw).resolve()
+        try:
+            p.relative_to(root)
+        except ValueError:
+            print(f"✗ 拒收路径 {p}（validator CLI 只接受 benchmarks/orchestration/ 内的路径）")
+            all_ok = False
+            continue
         # 不用 glob 模式展开（命令行参数进 glob 有模式注入面）；iterdir + 后缀过滤等价且污点面为零
         files = sorted([p] if p.is_file() else (x for x in p.iterdir() if x.suffix == ".json" and x.is_file()))
         if not files:
