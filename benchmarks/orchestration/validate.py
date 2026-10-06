@@ -382,7 +382,8 @@ def main(argv: list[str] | None = None) -> int:
     all_ok = True
     for raw in paths:
         p = Path(raw)
-        files = sorted([p] if p.is_file() else sorted(p.glob("*.json")))
+        # 不用 glob 模式展开（命令行参数进 glob 有模式注入面）；iterdir + 后缀过滤等价且污点面为零
+        files = sorted([p] if p.is_file() else (x for x in p.iterdir() if x.suffix == ".json" and x.is_file()))
         if not files:
             print(f"✗ 未找到待校验文件: {p}")
             all_ok = False
