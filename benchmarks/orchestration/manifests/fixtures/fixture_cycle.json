@@ -1,0 +1,47 @@
+{
+  "workflow_id": "ob_fixture_cycle_v1",
+  "schema_version": 1,
+  "root_goal": "（非法样例）环形依赖：t1→t2→t3→t1",
+  "nodes": [
+    {
+      "id": "t1",
+      "description": "步骤一（依赖t3）",
+      "task_type": "general",
+      "depends_on": ["t3"],
+      "model": null,
+      "estimated_output_tokens": 100,
+      "duration_ms": 100
+    },
+    {
+      "id": "t2",
+      "description": "步骤二（依赖t1）",
+      "task_type": "general",
+      "depends_on": ["t1"],
+      "model": null,
+      "estimated_output_tokens": 100,
+      "duration_ms": 100
+    },
+    {
+      "id": "t3",
+      "description": "步骤三（依赖t2）",
+      "task_type": "general",
+      "depends_on": ["t2"],
+      "model": null,
+      "estimated_output_tokens": 100,
+      "duration_ms": 100
+    }
+  ],
+  "edges": [
+    { "from": "t1", "to": "t2", "type": "data" },
+    { "from": "t2", "to": "t3", "type": "data" },
+    { "from": "t3", "to": "t1", "type": "data" }
+  ],
+  "waves": null,
+  "aggregation": { "type": "final_synthesis" },
+  "meta": {
+    "source_benchmark": "fixture",
+    "source_id": "cycle",
+    "purpose": "非法样例（expected: CYCLE）——validator 必须拒收，simulator 不得消费",
+    "duration_basis": "手造 profile（模拟用，非实测）"
+  }
+}

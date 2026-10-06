@@ -1,0 +1,32 @@
+# datasets.yaml — OrchestrationBench 外部数据源清单与接入状态（O-Day 10 维护）
+
+# 原则（任务红线）：下载前先看 license 与文件形态，宁缺毋滥；
+# 拿不到/形态不符 → 降级 fixture-only，缺口如实记录 status，不硬造数据。
+# 状态枚举：pending / fetching / imported / fixture_only / deferred(reason)
+# hash 惯例：下载件 sha256 记录在 source_manifest.json（继承 RouterBench 治理）。
+
+benchmark_id: lloom-orchbench-v0.1
+track: offline_zero_cost
+
+sources:
+  planningbench:
+    org: Tencent-Hunyuan/PlanningBench
+    role: planning_core          # 方案 §4.1：零成本主力 Planning Track（467 实例+checklist）
+    license_check: pending
+    status: pending
+  tps_bench:
+    org: hanwenxu1/mcp-agent
+    role: scheduling_reference   # 方案 §4.2：compounding tasks 的子任务/依赖结构参照（不跑 MCP 工具）
+    license_check: pending
+    status: pending
+  planbench:
+    org: harshakokel/PlanBench   # 实际 org 名待探测（方案文档两处拼写不一，Day 10 探测）
+    role: planning_sanity        # 方案 §4.4：结构化 sanity（Blocksworld/Logistics）
+    license_check: pending
+    status: pending
+
+deferred_track:                  # 全部后置（方案 §五/§十九），仅登记不实施
+  apb: online_planning_diagnostic
+  tau2: stateful_execution_replay
+  toolsandbox: stateful_execution
+  appworld_webarena: external_end_to_end

@@ -1,0 +1,36 @@
+{
+  "workflow_id": "ob_fixture_bad_waves_v1",
+  "schema_version": 1,
+  "root_goal": "（非法样例）波次把依赖方与被依赖方放进同一波",
+  "nodes": [
+    {
+      "id": "t1",
+      "description": "上游任务",
+      "task_type": "general",
+      "depends_on": [],
+      "outputs": ["u"],
+      "model": null,
+      "estimated_output_tokens": 100,
+      "duration_ms": 100
+    },
+    {
+      "id": "t2",
+      "description": "下游任务（依赖t1）",
+      "task_type": "general",
+      "depends_on": ["t1"],
+      "inputs": ["u"],
+      "model": null,
+      "estimated_output_tokens": 100,
+      "duration_ms": 100
+    }
+  ],
+  "edges": [{ "from": "t1", "to": "t2", "type": "data" }],
+  "waves": [["t1", "t2"]],
+  "aggregation": { "type": "final_synthesis" },
+  "meta": {
+    "source_benchmark": "fixture",
+    "source_id": "bad_waves",
+    "purpose": "非法样例（expected: WAVE_ORDER）——对应 P4 Invalid Parallelism 的 schema 层证据",
+    "duration_basis": "手造 profile（模拟用，非实测）"
+  }
+}

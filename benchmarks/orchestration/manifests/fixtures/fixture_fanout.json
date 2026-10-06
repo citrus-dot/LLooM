@@ -1,0 +1,62 @@
+{
+  "workflow_id": "ob_fixture_fanout_v1",
+  "schema_version": 1,
+  "root_goal": "比较三个候选方案并给出最终建议",
+  "nodes": [
+    {
+      "id": "t1",
+      "description": "调研方案A的成本",
+      "task_type": "general",
+      "depends_on": [],
+      "outputs": ["cost_a"],
+      "model": null,
+      "estimated_output_tokens": 400,
+      "duration_ms": 800
+    },
+    {
+      "id": "t2",
+      "description": "调研方案B的成本",
+      "task_type": "general",
+      "depends_on": [],
+      "outputs": ["cost_b"],
+      "model": null,
+      "estimated_output_tokens": 400,
+      "duration_ms": 1000
+    },
+    {
+      "id": "t3",
+      "description": "计算两方案ROI对比",
+      "task_type": "math_logic",
+      "depends_on": ["t1", "t2"],
+      "inputs": ["cost_a", "cost_b"],
+      "outputs": ["roi"],
+      "model": null,
+      "estimated_output_tokens": 600,
+      "duration_ms": 900
+    },
+    {
+      "id": "t4",
+      "description": "综合成本与ROI给出建议",
+      "task_type": "complex_reasoning",
+      "depends_on": ["t3"],
+      "inputs": ["cost_a", "cost_b", "roi"],
+      "outputs": ["recommendation"],
+      "model": null,
+      "estimated_output_tokens": 800,
+      "duration_ms": 1500
+    }
+  ],
+  "edges": [
+    { "from": "t1", "to": "t3", "type": "data" },
+    { "from": "t2", "to": "t3", "type": "data" },
+    { "from": "t3", "to": "t4", "type": "data" }
+  ],
+  "waves": [["t1", "t2"], ["t3"], ["t4"]],
+  "aggregation": { "type": "final_synthesis" },
+  "meta": {
+    "source_benchmark": "fixture",
+    "source_id": "fanout",
+    "purpose": "扇出并行基线：O-Day 11 legal parallelism 与 parallelization utilization 参照",
+    "duration_basis": "手造 profile（模拟用，非实测）"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "workflow_id": "ob_fixture_unsolvable_v1",
+  "schema_version": 1,
+  "root_goal": "在不访问任何网络的前提下给出明天某未公开股票的精确收盘价",
+  "nodes": [],
+  "edges": [],
+  "waves": null,
+  "aggregation": { "type": "unsolvable" },
+  "meta": {
+    "source_benchmark": "fixture",
+    "source_id": "unsolvable",
+    "purpose": "不可解识别参照（方案 §九 9.6）：正确行为是拒绝计划而非硬造节点",
+    "duration_basis": "无（不可解无执行）"
+  }
+}

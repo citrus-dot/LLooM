@@ -1,0 +1,25 @@
+{
+  "workflow_id": "ob_fixture_unknown_ref_v1",
+  "schema_version": 1,
+  "root_goal": "（非法样例）边与 depends_on 引用不存在节点",
+  "nodes": [
+    {
+      "id": "t1",
+      "description": "唯一真实节点",
+      "task_type": "general",
+      "depends_on": ["t_missing_dep"],
+      "model": null,
+      "estimated_output_tokens": 100,
+      "duration_ms": 100
+    }
+  ],
+  "edges": [{ "from": "t1", "to": "t_ghost", "type": "data" }],
+  "waves": null,
+  "aggregation": { "type": "final_synthesis" },
+  "meta": {
+    "source_benchmark": "fixture",
+    "source_id": "unknown_ref",
+    "purpose": "非法样例（expected: UNKNOWN_NODE_REF ×2 + DEPENDS_EDGE_MISMATCH）——引用完整性闸门",
+    "duration_basis": "手造 profile（模拟用，非实测）"
+  }
+}

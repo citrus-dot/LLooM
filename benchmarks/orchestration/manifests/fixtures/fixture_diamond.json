@@ -1,0 +1,64 @@
+{
+  "workflow_id": "ob_fixture_diamond_v1",
+  "schema_version": 1,
+  "root_goal": "菱形依赖工作流：分支探索后汇合验证",
+  "nodes": [
+    {
+      "id": "t1",
+      "description": "提出初始假设",
+      "task_type": "complex_reasoning",
+      "depends_on": [],
+      "outputs": ["hypothesis"],
+      "model": null,
+      "estimated_output_tokens": 500,
+      "duration_ms": 1000
+    },
+    {
+      "id": "t2",
+      "description": "用实验A验证假设",
+      "task_type": "general",
+      "depends_on": ["t1"],
+      "inputs": ["hypothesis"],
+      "outputs": ["exp_a"],
+      "model": null,
+      "estimated_output_tokens": 500,
+      "duration_ms": 800
+    },
+    {
+      "id": "t3",
+      "description": "用实验B验证假设",
+      "task_type": "general",
+      "depends_on": ["t1"],
+      "inputs": ["hypothesis"],
+      "outputs": ["exp_b"],
+      "model": null,
+      "estimated_output_tokens": 500,
+      "duration_ms": 1200
+    },
+    {
+      "id": "t4",
+      "description": "汇合两次实验结论并裁决假设",
+      "task_type": "complex_reasoning",
+      "depends_on": ["t2", "t3"],
+      "inputs": ["exp_a", "exp_b"],
+      "outputs": ["verdict"],
+      "model": null,
+      "estimated_output_tokens": 700,
+      "duration_ms": 1000
+    }
+  ],
+  "edges": [
+    { "from": "t1", "to": "t2", "type": "data" },
+    { "from": "t1", "to": "t3", "type": "data" },
+    { "from": "t2", "to": "t4", "type": "data" },
+    { "from": "t3", "to": "t4", "type": "data" }
+  ],
+  "waves": null,
+  "aggregation": { "type": "final_synthesis" },
+  "meta": {
+    "source_benchmark": "fixture",
+    "source_id": "diamond",
+    "purpose": "菱形依赖：waves=null 验证 evaluator 现算路径；分支时长不等（800/1200）用于区分 wave 划分与 makespan 两套指标",
+    "duration_basis": "手造 profile（模拟用，非实测）"
+  }
+}

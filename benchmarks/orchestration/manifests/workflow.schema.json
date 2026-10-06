@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "lloom-orchbench/workflow.schema.json",
+  "title": "LLooM OrchestrationBench Canonical Workflow v1",
+  "description": "方案 16-OrchestrationBench §七 canonical object：外部 benchmark adapter → canonical workflow → 生产 orchestrator/evaluator。本 schema 是结构层规范；图语义（DAG 无环、波次先序、引用完整性）由 validate.py 实施（JSON Schema 不表达图约束）。",
+  "type": "object",
+  "required": ["workflow_id", "schema_version", "root_goal", "nodes", "edges", "aggregation"],
+  "additionalProperties": true,
+  "properties": {
+    "workflow_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "实例唯一 id，全局建议格式 ob_{benchmark}_{source_id}（slug 化，与 RouterBench sample_id 惯例一致）"
+    },
+    "schema_version": { "const": 1 },
+    "root_goal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "根目标（用户意图原文或规范化改写；adapter 必须保留原文于 meta.source_goal）"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "task_type", "depends_on"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "description": "节点 id；bridge 层按声明序映射到生产 SubTask.id (usize)"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "子任务描述（生产 fallback_decompose/parse_decomposition 的 description 同义）"
+          },
+          "task_type": {
+            "enum": ["simple_qa", "coding", "math_logic", "complex_reasoning", "general"],
+            "description": "生产词表（router.rs task_rules + fallback general）；adapter 从源数据映射，映射规则记 manifests/datasets.yaml"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "前置节点 id 列表（edges 的节点内紧凑表达，与 edges 冗余互验）"
+          },
+          "inputs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "输入产物名（方案 §七 node.inputs）"
+          },
+          "outputs": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "constraints": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "硬约束（planning evaluator 的 invalid plan 判据来源之一）"
+          },
+          "model": {
+            "type": ["string", "null"],
+            "description": "模型分派（RouterBench slug 或 null=未分派）；O-Day 12 Router bridge 回填"
+          },
+          "estimated_output_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "生产 SubTask.estimated_output_tokens 同义（缺省 1024 对齐 parse_decomposition）"
+          },
+          "duration_ms": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "调度模拟时长 profile（毫秒）；null 时 simulator 用 default_duration_ms"
+          }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to", "type"],
+        "additionalProperties": false,
+        "properties": {
+          "from": { "type": "string", "minLength": 1 },
+          "to": { "type": "string", "minLength": 1 },
+          "type": {
+            "enum": ["data", "control", "resource"],
+            "description": "data=产物依赖（参与波次先序）；control=顺序约束；resource=共享资源标注（v0.1 不参与波次计算）"
+          }
+        }
+      }
+    },
+    "waves": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "description": "波次划分（可选；null=由 evaluator 调 dependency_waves 现算）。必须是 nodes 的精确分区，且每节点全部依赖落在更早波次（严格先序，同波依赖即 WAVE_ORDER 非法）"
+    },
+    "aggregation": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "enum": ["final_synthesis", "none", "unsolvable"],
+          "description": "final_synthesis=聚合根产出；none=无聚合（叶子即产物）；unsolvable=源基准标注不可解（正确行为是拒绝计划，planning 指标 §九 9.6）"
+        }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "description": "adapter 透传的源数据 provenance（source_goal/source_id/checklist 引用/切分 seed 等）；结构自由，禁止放凭据"
+    }
+  }
+}
