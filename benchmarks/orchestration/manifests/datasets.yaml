@@ -1,9 +1,10 @@
-# datasets.yaml — OrchestrationBench 外部数据源清单与接入状态（O-Day 10 维护）
+# datasets.yaml — OrchestrationBench 外部数据源清单与接入状态（O-Day 10 实测定案）
 
 # 原则（任务红线）：下载前先看 license 与文件形态，宁缺毋滥；
 # 拿不到/形态不符 → 降级 fixture-only，缺口如实记录 status，不硬造数据。
 # 状态枚举：pending / fetching / imported / fixture_only / deferred(reason)
-# hash 惯例：下载件 sha256 记录在 source_manifest.json（继承 RouterBench 治理）。
+# 治理：raw/ 整体 gitignore（可由 commit hash 确定性重建 clone）；canonical 化产物落 orchbench.db；
+# 重建 = git clone --depth 1 <repo_url> && git checkout <commit> && 重跑 adapter --import。
 
 benchmark_id: lloom-orchbench-v0.1
 track: offline_zero_cost
@@ -11,22 +12,43 @@ track: offline_zero_cost
 sources:
   planningbench:
     org: Tencent-Hunyuan/PlanningBench
-    role: planning_core          # 方案 §4.1：零成本主力 Planning Track（467 实例+checklist）
-    license_check: pending
-    status: pending
+    repo_url: https://github.com/Tencent-Hunyuan/PlanningBench
+    commit: a7970a854526f458368be105be5e35d804b12fe3
+    license: CC-BY-4.0 (LICENSE.txt 实测确认)
+    role: planning_core          # 方案 §4.1：零成本主力 Planning Track
+    data: data/PlanningBench-eval.jsonl（467 实例：idx + messages[0].content 题面 + checklist 编号验证项）
+    adapter: adapters/planningbench.py（checklist 行首编号 → obligation 节点，node_semantics=checklist_obligation）
+    benchmark_id: lloom-orchbench-planningbench-v0.1
+    split: 全量 test（源 README 声明 all 467 intended for evaluation，不参与 tuning）
+    status: imported              # 2026-10-06：467/467 导入，3379 obligations，mean 7.24/实例
+  planbench:
+    org: harshakokel/PlanBench    # 方案文档拼写实测正确；karthikv129/plan-bench 已 404
+    repo_url: https://github.com/harshakokel/PlanBench
+    commit: 1f4d600f4806bedbefebbbe44b168372aaf5060d
+    license: MIT (Copyright 2024 Valmeekam Karthik)
+    role: planning_sanity + reference_dependency_graph   # 方案 §4.4；§九 9.4 的 ref DAG 真源
+    data: plan-bench/instances/**/generated*.pddl（PDDL problem：objects/init/goal）
+    adapter: adapters/planbench.py（goal 原子 → 节点；blocksworld 堆叠链依赖 on X Y ← on Y Z；logistics/depots flat）
+    benchmark_id: lloom-orchbench-planbench-v0.1
+    split: 哈希桶 sha256("lloom-obsplit:3407:"+sample_id)，calibration 20 / test 80
+    cap: MAX_PER_VARIANT=200（每 domain/variant 文件序升序）
+    storage: 663MB 实体在 /Volumes/Files/LLooM-bench/orchestration-raw/PlanBench，仓内 symlink
+    status: imported              # 2026-10-06：10 变体 ×200 上限，1901 行落库
   tps_bench:
     org: hanwenxu1/mcp-agent
-    role: scheduling_reference   # 方案 §4.2：compounding tasks 的子任务/依赖结构参照（不跑 MCP 工具）
-    license_check: pending
-    status: pending
-  planbench:
-    org: harshakokel/PlanBench   # 实际 org 名待探测（方案文档两处拼写不一，Day 10 探测）
-    role: planning_sanity        # 方案 §4.4：结构化 sanity（Blocksworld/Logistics）
-    license_check: pending
-    status: pending
-
-deferred_track:                  # 全部后置（方案 §五/§十九），仅登记不实施
-  apb: online_planning_diagnostic
-  tau2: stateful_execution_replay
-  toolsandbox: stateful_execution
-  appworld_webarena: external_end_to_end
+    repo_url: https://github.com/hanwenxu1/mcp-agent
+    commit: dd95edf02649a32d02b7bdbb35bbd44f3a294029
+    license: 缺失（仓库无 LICENSE 文件，README 目录树与实际不符）
+    role: scheduling_reference    # 方案 §4.2
+    status: deferred              # 实测（2026-10-06）：仓库只含 Gemini eval runner 脚本 + MCP tool
+                                  # servers，未发布 200 compounding tasks 数据文件（README 的
+                                  # arxiv 链接为占位 xxxx.xxxxx）→ O-Day 11 scheduling 降级
+                                  # 自建 fixture（任务书允许路径），数据缺口如实记录
+  apb:
+    status: deferred              # 方案 §4.3：官方 runner 要求 tested+judge model API，非零成本
+  tau2:
+    status: deferred              # 方案 §五 5.2：historical trajectory 复用后置
+  toolsandbox:
+    status: deferred              # 方案 §五 5.1：stateful execution 后置
+  appworld_webarena:
+    status: deferred              # 方案 §五 5.4：external end-to-end 后置

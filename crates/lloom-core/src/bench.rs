@@ -379,11 +379,20 @@ pub struct ReplayCtx {
     /// 质量估计减 p×tier_gap（gap=band_req−true_tier；v1 只有 medium 放行 → gap 恒 1）。
     /// 走 quality_override 通道，production 公式不动。注意 penalty 会被 quality_weight 缩放。
     pub soft_gate: Option<f64>,
+    /// Day 12 matched random 目标：cost_matched_random=目标期望成本；strong_share_matched=P(strong)
+    pub matched_target: Option<f64>,
+    /// Day 12 budget curve：P2 的 strong 调用预算占比（0-1）。预算耗尽时 strong 降级为
+    /// fallback_chain 中首个非 strong 合格模型（hard 带无合格替代则如实超支并计数）。
+    pub strong_budget: Option<f64>,
 }
 
 impl ReplayCtx {
     pub fn new(pool: BenchPool, models: Vec<Model>, specs: HashMap<(String, String), PriceSpec>, stats: CalibrationStats) -> Self {
-        Self { pool, models, specs, zones: ZoneResolver::new(), stats, use_calibration: false, weights: None, soft_gate: None }
+        Self {
+            pool, models, specs, zones: ZoneResolver::new(), stats,
+            use_calibration: false, weights: None, soft_gate: None,
+            matched_target: None, strong_budget: None,
+        }
     }
 
     fn policy_for(&self, task_type: &str) -> RoutingPolicy {
@@ -450,6 +459,10 @@ pub enum Strategy {
     Oracle,
     /// 消融变体（非 8 基线）：band→tier→model 直接映射，隔离 band 门槛贡献（13-v2 §九 V1）
     BandOnly,
+    /// Day 12 matched random：期望成本 = --matched-target（两点混合 {weak,strong}，确定性 seed）
+    CostMatchedRandom,
+    /// Day 12 matched random：P(strong) = --matched-target（其余填 mid）
+    StrongShareMatchedRandom,
 }
 
 impl Strategy {
@@ -475,13 +488,18 @@ impl Strategy {
             Strategy::BestSingle => "best_single",
             Strategy::Oracle => "oracle",
             Strategy::BandOnly => "band_only",
+            Strategy::CostMatchedRandom => "cost_matched_random",
+            Strategy::StrongShareMatchedRandom => "strong_share_matched_random",
         }
     }
 
     pub fn parse(s: &str) -> Option<Strategy> {
-        // BandOnly 是消融变体，不进 ALL 基线集，但 --strategy 可显式指定
-        if s == "band_only" {
-            return Some(Strategy::BandOnly);
+        // BandOnly / matched random 是消融与对照变体，不进 ALL 基线集，但 --strategy 可显式指定
+        match s {
+            "band_only" => return Some(Strategy::BandOnly),
+            "cost_matched_random" => return Some(Strategy::CostMatchedRandom),
+            "strong_share_matched_random" => return Some(Strategy::StrongShareMatchedRandom),
+            _ => {}
         }
         Strategy::ALL.iter().copied().find(|st| st.name() == s)
     }
@@ -514,6 +532,49 @@ pub fn replay(
     let mut best_single_cache: HashMap<String, String> = HashMap::new();
     let mut rng = Lcg(RANDOM_SEED);
     let empty_hit: HashMap<String, f64> = HashMap::new(); // 红线：hit_rate 恒全零
+
+    // matched random 权重（回放集上预求解一次；确定性采样 seed=RANDOM_SEED）
+    let mr_weights: Option<(f64, f64, f64)> = match strategy {
+        Strategy::CostMatchedRandom => {
+            let target = ctx.matched_target.ok_or_else(|| {
+                AppError::InvalidRequest("cost_matched_random 需要 --matched-target（目标期望成本）".into())
+            })?;
+            let mean = |m: &str| {
+                let mut s = 0.0;
+                let mut n = 0usize;
+                for i in instances {
+                    if let Some((_, c)) = matrix.lookup(&i.sample_id, m) {
+                        s += c;
+                        n += 1;
+                    }
+                }
+                if n == 0 { 0.0 } else { s / n as f64 }
+            };
+            let (cw, cs) = (mean(&ctx.pool.weak), mean(&ctx.pool.strong));
+            let raw = if cs - cw > 1e-15 { (target - cw) / (cs - cw) } else { 0.5 };
+            let ps = raw.clamp(0.0, 1.0);
+            if (ps - raw).abs() > 1e-12 {
+                eprintln!("⚠ 目标成本 {target} 超出 [{cw}, {cs}] 可达区间，已截断（期望成本将偏离目标）");
+            }
+            Some((1.0 - ps, 0.0, ps)) // 两点混合 {weak, strong}：成本杠杆最大
+        }
+        Strategy::StrongShareMatchedRandom => {
+            let target = ctx.matched_target.ok_or_else(|| {
+                AppError::InvalidRequest("strong_share_matched_random 需要 --matched-target（目标 P(strong)）".into())
+            })?;
+            let ps = target.clamp(0.0, 1.0);
+            Some((0.0, 1.0 - ps, ps)) // 其余填 mid：隔离"weak 使用是否真有收益"
+        }
+        _ => None,
+    };
+
+    // budget curve：strong 预算（P2 变体；预算耗尽时按 fallback_chain 降级，hard 带无替代则如实超支）
+    let n_total = instances.len();
+    let budget_total: usize = ctx
+        .strong_budget
+        .map(|b| (b.clamp(0.0, 1.0) * n_total as f64).floor() as usize)
+        .unwrap_or(usize::MAX);
+    let mut strong_used: usize = 0;
 
     for inst in instances {
         let (selected, decision) = match strategy {
@@ -620,6 +681,20 @@ pub fn replay(
                     .find(|m| m.name == ctx.pool.weak)
                     .map(|m| m.capability_tier)
                     .unwrap_or(1);
+                let mut selected_model = outcome.primary.clone();
+                let mut budget_downgrade = false;
+                let mut budget_violation = false;
+                if ctx.strong_budget.is_some() && selected_model == ctx.pool.strong {
+                    if strong_used < budget_total {
+                        strong_used += 1;
+                    } else if let Some(alt) = outcome.fallback_chain.iter().find(|m| **m != ctx.pool.strong) {
+                        // 预算耗尽：降级到 fallback_chain 中首个非 strong 合格模型（hard 带无替代则超支）
+                        selected_model = alt.clone();
+                        budget_downgrade = true;
+                    } else {
+                        budget_violation = true; // hard 带无合格替代，如实超支
+                    }
+                }
                 let decision = json!({
                     "strategy": strategy.name(),
                     "task_type": inst.task_type,
@@ -629,15 +704,33 @@ pub fn replay(
                     "quality_override": ctx.use_calibration,
                     "soft_gate_penalty": ctx.soft_gate,
                     "weak_nominal_tier": weak_nominal,
+                    "strong_budget": ctx.strong_budget,
+                    "budget_downgrade": budget_downgrade,
+                    "budget_violation": budget_violation,
                     "cost_weight": ctx.weights.map(|w| w.0),
                     "quality_weight": ctx.weights.map(|w| w.1),
                     "candidates": outcome.candidates.iter().map(|c| json!({
                         "model": c.name, "score": c.score, "est_cost": c.est_cost,
                         "quality": c.quality, "capability_tier": c.capability_tier,
                     })).collect::<Vec<_>>(),
-                    "selected_model": outcome.primary,
+                    "selected_model": selected_model,
                 });
-                (decision["selected_model"].as_str().unwrap_or_default().to_string(), decision)
+                (selected_model, decision)
+            }
+            Strategy::CostMatchedRandom | Strategy::StrongShareMatchedRandom => {
+                let (pw, pm, ps) = mr_weights.unwrap_or((1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0));
+                let u = (rng.next() >> 11) as f64 / (1u64 << 53) as f64;
+                let m = if u < pw {
+                    ctx.pool.weak.clone()
+                } else if u < pw + pm {
+                    ctx.pool.mid.clone()
+                } else {
+                    ctx.pool.strong.clone()
+                };
+                (m, json!({ "strategy": strategy.name(), "seed": RANDOM_SEED,
+                            "target": ctx.matched_target,
+                            "weights": {"weak": pw, "mid": pm, "strong": ps},
+                            "rule": "deterministic weighted sampling（期望成本/strong 占比对齐 LLooM）" }))
             }
         };
 

@@ -1,0 +1,28 @@
+# model_pool_v02.yaml — Day 11 冻结（2026-10-06）
+# 来源：Day 9 Calibration Tournament R7_stability 冠军（16-v3 §5.1，calibration-only 选出）
+# 冻结规则：任何模型 id/tier 变更 = 新 pool_id = 新 benchmark_id；不写 production models 表
+pool_id: llmrb_tournament_r7_v1
+version: 1
+track: public_screening
+cost_basis: llmrouterbench_source
+frozen_at: "2026-10-06"
+selection_reason: >-
+  Tournament 中唯一 P2 对 BASE Pareto 改配的池：weak share 0→9.7%、weak recall 0.115、
+  weak precision 0.809、retention 100.4%、saving 12.6%（calibration，13 datasets 覆盖）。
+calibration_snapshot:
+  n_calibration_covered: 3136
+  quality_mean_p2: 0.5859
+  cost_mean_p2: 0.000819
+  weak_recall: 0.1154
+  weak_precision: 0.8092
+models:
+  - role: weak
+    lloom_model_id: deephermes_3_llama_3_8b_preview
+    capability_tier: 1
+    nominal_tier_in_policy: 2   # P2 Soft Eligibility：medium 放行，hard 仍拒
+  - role: mid
+    lloom_model_id: deepseek_r1_distill_qwen_7b
+    capability_tier: 2
+  - role: strong
+    lloom_model_id: intern_s1_mini
+    capability_tier: 3

@@ -330,8 +330,10 @@ def _validate_semantics(wf: dict, nodes: dict[str, dict], issues: list[WorkflowI
         if nodes:
             _err(issues, "UNSOLVABLE_WITH_NODES", "aggregation.type", "unsolvable 任务不允许携带 nodes（正确行为=拒绝计划）")
         return
-    if not nodes:
-        _err(issues, "EMPTY_NODES", "nodes", f"aggregation.type={agg_type!r} 时必须有至少 1 个节点")
+    # final_synthesis 必须有节点；none 允许空（planning-only 任务登记：PlanningBench 类
+    # 数据只有 goal+checklist，无可执行工作流，adapter 以 obligation-node 形态或空节点接入）
+    if agg_type == "final_synthesis" and not nodes:
+        _err(issues, "EMPTY_NODES", "nodes", "aggregation.type=final_synthesis 时必须有至少 1 个节点")
     pool = wf.get("meta", {}).get("model_pool") if isinstance(wf.get("meta"), dict) else None
     for nid, node in nodes.items():
         model = node.get("model")

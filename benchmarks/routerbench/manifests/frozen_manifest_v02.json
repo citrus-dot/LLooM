@@ -1,0 +1,72 @@
+{
+  "benchmark_id": "lloom-routerbench-v0.2",
+  "track_scope": "public_screening",
+  "source_matrix": "llmrouterbench（v0.1 的 routerbench 0-shot 矩阵模型集与本池不相交，故 v0.2 换源；成本口径分轨见 cost_basis_hash）",
+  "frozen_at": "2026-10-06T13:13:42+00:00",
+  "schema_version": 2,
+  "hashes": {
+    "benchmark_hash": "23f755069ce1634ab13bf5e8e232b6c10e4f1d2155f18235fea2606c3e8797ff",
+    "pool_hash": "4bd9ea7edc55bd8567a89cb5720ffa1b49e48080a731056d51e0744d1464be95",
+    "policy_hash": "1e6168ee94cb5f38a7fe3e7c927dab9313e65cb0aba9bf9fee9896c509e739ed",
+    "split_hash": "3e9dfde6c95e10da68f73ed160f236a15900180aff9b3c94fc2f4c22970f67f2",
+    "scorer_hash": "aa5988602bbc93a14f04800d98ab90a5b661e4c85b167702d8a1f867743ed50c",
+    "cost_basis_hash": "6c217b5c0c6ef12edf055a236ee31a0d3357b4873f7cef58d2546637f119ba3d"
+  },
+  "manifest_hash": "cbebcefd05b14057deb789449cc0512944733dc1696d43b9d30b2a142dc9db5a",
+  "pool_id": "llmrb_tournament_r7_v1",
+  "policy": {
+    "family": "P2_softgate0",
+    "soft_gate_penalty": 0.0,
+    "weak_nominal_tier": 2,
+    "weights": {
+      "cost": 0.5,
+      "quality": 0.4,
+      "latency": 0.1
+    },
+    "quality_prior": "calibration global mean（注册冷启动先验）",
+    "hit_rate": "all-zero",
+    "est_profile": {
+      "est_in": "chars*0.6",
+      "est_out_cold_start": 750
+    },
+    "production_code": "router::plan() 未改动；eligibility 走内存 nominal tier + quality_override 通道"
+  },
+  "test_selection": {
+    "file": "benchmarks/routerbench/manifests/test_selection_v02.jsonl",
+    "total": 12345,
+    "per_dataset": {
+      "llmrb_aime_hybrid_v1": 50,
+      "llmrb_arcc_test_v1": 917,
+      "llmrb_arenahard_coding_test_v1": 207,
+      "llmrb_arenahard_creative_writing_test_v1": 196,
+      "llmrb_arenahard_math_test_v1": 191,
+      "llmrb_arenahard_test_v1": 598,
+      "llmrb_bbh_test_v1": 886,
+      "llmrb_emorynlp_test_v1": 572,
+      "llmrb_finqa_test_v1": 912,
+      "llmrb_gpqa_test_v1": 157,
+      "llmrb_humaneval_test_v1": 122,
+      "llmrb_kandk_test_v1": 562,
+      "llmrb_korbench_test_v1": 954,
+      "llmrb_livecodebench_test_v1": 823,
+      "llmrb_livemathbench_test_v1": 98,
+      "llmrb_math500_test_v1": 397,
+      "llmrb_mathbench_test_v1": 124,
+      "llmrb_mbpp_test_v1": 774,
+      "llmrb_medqa_test_v1": 1031,
+      "llmrb_meld_test_v1": 964,
+      "llmrb_mmlupro_test_1000_v1": 805,
+      "llmrb_winogrande_valid_v1": 1005
+    },
+    "rule": "llmrb test split × R7 池三模型全覆盖（覆盖是矩阵属性，非抽样）；名单落盘 test_selection_v02.jsonl"
+  },
+  "inputs": {
+    "instances_sha256": "4e1206f60aa9a7382c67ef025bcafa403def558747ce3efdebc6c9e96f35a1b4",
+    "outcomes_sha256": "480e7fe8fde3751c64954afeea85081414b9cd48ca79796f1f12ba3e65990d4d",
+    "source_tar_sha256": "b79f8cde1a6f029c2efa663a3a3b6f7748defb22341fe59f328cebef6648c8f1",
+    "tournament_report_sha256": "75f37b5951ad5519c54205eab2909b9ba65744b259f8e80507f3b92a377976a9",
+    "entrants_sha256": "c65d63105a2eaf5b7bd3ed0b1dc852232fdaed4f82d93015ed8cb668df39be61"
+  },
+  "leakage_statement": "池选择/policy 选择全部发生在 calibration split（Day 9 tournament）；test split 在本 manifest 冻结前未被任何策略读取（Day 6-9 全程 calibration-only）",
+  "next": "Day 12：冻结配置 test 一次性 replay + matched random + budget curve（test 只读）"
+}

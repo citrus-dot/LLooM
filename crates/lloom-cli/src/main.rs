@@ -91,6 +91,12 @@ enum BenchCmd {
         /// 回放哪个 split（Day 9 Calibration Tournament 用 calibration）
         #[arg(long, default_value = "test")]
         split: String,
+        /// matched random 目标（cost_matched_random=期望成本；strong_share_matched=P(strong)）
+        #[arg(long)]
+        matched_target: Option<f64>,
+        /// Budget curve：LLooM strong 调用预算占比 0-1（预算耗尽按 fallback_chain 降级）
+        #[arg(long)]
+        strong_budget: Option<f64>,
     },
     /// λ sweep：LLooM cost 权重 0→1 步进 0.1，产出 Pareto 点集（10 号 §十四）
     Sweep {
@@ -292,23 +298,25 @@ async fn bench_ctx(
     manifest: &std::path::Path,
     calibration: bool,
     soft_gate: Option<f64>,
-) -> Result<(String, String, bench::BenchPool, bench::ReplayCtx, Vec<bench::BenchInstance>, Vec<bench::BenchInstance>, bench::FrozenMatrix), Box<dyn std::error::Error>> {
+) -> Result<(String, String, String, bench::BenchPool, bench::ReplayCtx, Vec<bench::BenchInstance>, Vec<bench::BenchInstance>, bench::FrozenMatrix), Box<dyn std::error::Error>> {
     // manifest 容错：llmrb 等未冻结矩阵没有 benchmark_id/manifest_hash，回退占位 identity
-    let (benchmark_id, manifest_hash) = match std::fs::read_to_string(manifest) {
+    let (benchmark_id, manifest_hash, pool_id) = match std::fs::read_to_string(manifest) {
         Ok(text) => {
             let frozen: Value = serde_json::from_str(&text)?;
             let id = frozen["benchmark_id"].as_str().unwrap_or_default().to_string();
             let hash = frozen["manifest_hash"].as_str().unwrap_or_default().to_string();
+            let pid = frozen["pool_id"].as_str().unwrap_or_default().to_string();
             if id.is_empty() || hash.is_empty() {
                 eprintln!("⚠ manifest 缺 benchmark_id/manifest_hash，回退占位 identity（calibration-only 运行）");
-                ("unfrozen-matrix".to_string(), "unfrozen".to_string())
+                ("unfrozen-matrix".to_string(), "unfrozen".to_string(), "unfrozen".to_string())
             } else {
-                (id, hash)
+                let pid = if pid.is_empty() { "public_matrix_top3_v1".to_string() } else { pid };
+                (id, hash, pid)
             }
         }
         Err(_) => {
             eprintln!("⚠ manifest 不可读（{manifest:?}），回退占位 identity（calibration-only 运行）");
-            ("unfrozen-matrix".to_string(), "unfrozen".to_string())
+            ("unfrozen-matrix".to_string(), "unfrozen".to_string(), "unfrozen".to_string())
         }
     };
 
@@ -342,7 +350,7 @@ async fn bench_ctx(
     let mut ctx = bench::ReplayCtx::new(pool.clone(), pool_models, specs, stats);
     ctx.use_calibration = calibration;
     ctx.soft_gate = soft_gate;
-    Ok((benchmark_id, manifest_hash, pool, ctx, test, calib, matrix))
+    Ok((benchmark_id, manifest_hash, pool_id, pool, ctx, test, calib, matrix))
 }
 
 async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -356,6 +364,8 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
         calibration,
         soft_gate,
         split,
+        matched_target,
+        strong_budget,
     } = cmd
     else {
         unreachable!()
@@ -364,8 +374,11 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
         eprintln!("✗ --split 只支持 test|calibration");
         std::process::exit(1);
     }
-    let (benchmark_id, manifest_hash, pool, ctx, test, calib, matrix) =
+    let (benchmark_id, manifest_hash, pool_id, pool, ctx, test, calib, matrix) =
         bench_ctx(models, &normalized, selection.as_deref(), &manifest, calibration, soft_gate).await?;
+    let mut ctx = ctx;
+    ctx.matched_target = matched_target;
+    ctx.strong_budget = strong_budget;
 
     let strategies: Vec<Strategy> = if strategy == "all" {
         Strategy::ALL.to_vec()
@@ -433,6 +446,8 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
             "hit_rate": "all-zero (红线)",
             "quality_override": calibration,
             "soft_gate_penalty": soft_gate,
+            "matched_target": matched_target,
+            "strong_budget": strong_budget,
             "weak_nominal_tier": if soft_gate.is_some() { 2 } else { 1 },
             "quality_score_source": "calibration global mean (注册冷启动先验)",
             "policy": { "min_capability_tier": 1, "weights": "cost .5 / quality .4 / latency .1 (default)" },
@@ -444,7 +459,7 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
             &bench::RunMeta {
                 benchmark_id: &benchmark_id,
                 manifest_hash: &manifest_hash,
-                pool_id: if manifest_hash == "unfrozen" { "unfrozen" } else { "public_matrix_top3_v1" },
+                pool_id: &pool_id,
                 strategy: st.name(),
                 parameter_json: &parameter_json,
                 split: split_label,
@@ -499,7 +514,7 @@ async fn cmd_bench_sweep(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>
     else {
         unreachable!()
     };
-    let (benchmark_id, manifest_hash, pool, mut ctx, test, _calib, matrix) =
+    let (benchmark_id, manifest_hash, _pool_id, pool, mut ctx, test, _calib, matrix) =
         bench_ctx(models, &normalized, None, &manifest, false, soft_gate).await?;
 
     let conn = bench::open_bench_db(&bench_db)?;
