@@ -64,7 +64,7 @@ enum Command {
 enum BenchCmd {
     /// 回放：Core 名单 test 实例 × 冻结矩阵 × 真实 plan()，零 LLM 成本（bench.rs）
     Replay {
-        /// 策略：all | lloom | always_weak | always_mid | always_strong | cheapest | random | best_single | oracle
+        /// 策略：all | lloom | always_weak | always_mid | always_strong | cheapest | random | best_single | oracle | band_only
         #[arg(long, default_value = "all")]
         strategy: String,
         /// 临时池三元 model_id（weak mid strong；冻结值见 manifests/model_pool_public.yaml）
@@ -73,10 +73,10 @@ enum BenchCmd {
         /// 冻结矩阵目录（instances/outcomes jsonl）
         #[arg(long, default_value = "benchmarks/routerbench/normalized")]
         normalized: std::path::PathBuf,
-        /// Core 抽样名单（Day 3 冻结）
-        #[arg(long, default_value = "benchmarks/routerbench/manifests/core_selection.jsonl")]
-        selection: std::path::PathBuf,
-        /// frozen manifest（benchmark_id/manifest_hash 溯源）
+        /// Core 抽样名单（缺省=不用名单，跑该 split 全部实例；Day 9 起可选化）
+        #[arg(long)]
+        selection: Option<std::path::PathBuf>,
+        /// frozen manifest（benchmark_id/manifest_hash 溯源；缺键时回退占位 identity）
         #[arg(long, default_value = "benchmarks/routerbench/manifests/frozen_manifest.json")]
         manifest: std::path::PathBuf,
         /// bench.db 落点（决策 P1a：独立库，生产零接触）
@@ -88,6 +88,9 @@ enum BenchCmd {
         /// Soft Gate penalty（给值即启用，含 0.0=pure eligibility；weak nominal tier 1→2）
         #[arg(long)]
         soft_gate: Option<f64>,
+        /// 回放哪个 split（Day 9 Calibration Tournament 用 calibration）
+        #[arg(long, default_value = "test")]
+        split: String,
     },
     /// λ sweep：LLooM cost 权重 0→1 步进 0.1，产出 Pareto 点集（10 号 §十四）
     Sweep {
@@ -285,14 +288,29 @@ async fn cmd_bench(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>> {
 async fn bench_ctx(
     models: Vec<String>,
     normalized: &std::path::Path,
-    selection: &std::path::Path,
+    selection: Option<&std::path::Path>,
     manifest: &std::path::Path,
     calibration: bool,
     soft_gate: Option<f64>,
-) -> Result<(String, String, bench::BenchPool, bench::ReplayCtx, Vec<bench::BenchInstance>, bench::FrozenMatrix), Box<dyn std::error::Error>> {
-    let frozen: Value = serde_json::from_str(&std::fs::read_to_string(manifest)?)?;
-    let benchmark_id = frozen["benchmark_id"].as_str().unwrap_or_default().to_string();
-    let manifest_hash = frozen["manifest_hash"].as_str().unwrap_or_default().to_string();
+) -> Result<(String, String, bench::BenchPool, bench::ReplayCtx, Vec<bench::BenchInstance>, Vec<bench::BenchInstance>, bench::FrozenMatrix), Box<dyn std::error::Error>> {
+    // manifest 容错：llmrb 等未冻结矩阵没有 benchmark_id/manifest_hash，回退占位 identity
+    let (benchmark_id, manifest_hash) = match std::fs::read_to_string(manifest) {
+        Ok(text) => {
+            let frozen: Value = serde_json::from_str(&text)?;
+            let id = frozen["benchmark_id"].as_str().unwrap_or_default().to_string();
+            let hash = frozen["manifest_hash"].as_str().unwrap_or_default().to_string();
+            if id.is_empty() || hash.is_empty() {
+                eprintln!("⚠ manifest 缺 benchmark_id/manifest_hash，回退占位 identity（calibration-only 运行）");
+                ("unfrozen-matrix".to_string(), "unfrozen".to_string())
+            } else {
+                (id, hash)
+            }
+        }
+        Err(_) => {
+            eprintln!("⚠ manifest 不可读（{manifest:?}），回退占位 identity（calibration-only 运行）");
+            ("unfrozen-matrix".to_string(), "unfrozen".to_string())
+        }
+    };
 
     if models.len() != 3 {
         eprintln!("✗ --models 需恰好 3 个 model_id（weak mid strong），顺序敏感");
@@ -304,8 +322,14 @@ async fn bench_ctx(
         strong: bench::slugify(&models[2]),
     };
 
-    let (test, calib, matrix) = bench::load_frozen(normalized, Some(selection))?;
-    let declared = frozen["core"]["total"].as_u64().unwrap_or(0) as usize;
+    let (test, calib, matrix) = bench::load_frozen(normalized, selection)?;
+    let declared = if selection.is_some() {
+        // 名单模式：对 RouterBench frozen manifest 做数量核对
+        let frozen: Value = serde_json::from_str(&std::fs::read_to_string(manifest)?)?;
+        frozen["core"]["total"].as_u64().unwrap_or(0) as usize
+    } else {
+        0
+    };
     if declared > 0 && test.len() != declared {
         eprintln!("✗ Core 数量不符：名单声明 {declared}，实载 {}（Gate 1 前置失败）", test.len());
         std::process::exit(1);
@@ -318,7 +342,7 @@ async fn bench_ctx(
     let mut ctx = bench::ReplayCtx::new(pool.clone(), pool_models, specs, stats);
     ctx.use_calibration = calibration;
     ctx.soft_gate = soft_gate;
-    Ok((benchmark_id, manifest_hash, pool, ctx, test, matrix))
+    Ok((benchmark_id, manifest_hash, pool, ctx, test, calib, matrix))
 }
 
 async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -331,28 +355,57 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
         bench_db,
         calibration,
         soft_gate,
+        split,
     } = cmd
     else {
         unreachable!()
     };
-    let (benchmark_id, manifest_hash, pool, ctx, test, matrix) =
-        bench_ctx(models, &normalized, &selection, &manifest, calibration, soft_gate).await?;
+    if split != "test" && split != "calibration" {
+        eprintln!("✗ --split 只支持 test|calibration");
+        std::process::exit(1);
+    }
+    let (benchmark_id, manifest_hash, pool, ctx, test, calib, matrix) =
+        bench_ctx(models, &normalized, selection.as_deref(), &manifest, calibration, soft_gate).await?;
 
     let strategies: Vec<Strategy> = if strategy == "all" {
         Strategy::ALL.to_vec()
     } else {
         vec![Strategy::parse(&strategy).unwrap_or_else(|| {
-            eprintln!("✗ 未知策略 '{strategy}'（可选 all/lloom/always_*/cheapest/random/best_single/oracle）");
+            eprintln!("✗ 未知策略 '{strategy}'（可选 all/lloom/always_*/cheapest/random/best_single/oracle/band_only）");
             std::process::exit(1);
         })]
     };
 
+    // Day 9：--split calibration ⇒ 回放 calibration 实例（Calibration Tournament，test 保持只读未触碰）
+    let (instances, split_label): (&Vec<bench::BenchInstance>, &str) = if split == "calibration" {
+        (&calib, "calibration")
+    } else {
+        (&test, "test")
+    };
+
+    // Gate 1（池覆盖过滤）：只保留池内三模型都有 frozen outcome 的实例。
+    // RouterBench Core 为 100% 覆盖（无影响）；llmrb 各 dataset 模型宇宙不一，跨池必需。
+    let n_total = instances.len();
+    let covered: Vec<bench::BenchInstance> = instances
+        .iter()
+        .filter(|i| {
+            [&pool.weak, &pool.mid, &pool.strong]
+                .iter()
+                .all(|m| matrix.lookup(&i.sample_id, m).is_some())
+        })
+        .cloned()
+        .collect();
+    if covered.len() < n_total {
+        eprintln!("ℹ 池覆盖过滤：{n_total} → {}（Gate 1：缺 outcome 实例不进入）", covered.len());
+    }
+
     let conn = bench::open_bench_db(&bench_db)?;
     println!(
-        "bench replay: {} ({}) | n={} test | pool={}/{}/{} | calibration={}",
+        "bench replay: {} ({}) | n={} {} | pool={}/{}/{} | calibration={}",
         benchmark_id,
         &manifest_hash[..12.min(manifest_hash.len())],
-        test.len(),
+        covered.len(),
+        split_label,
         pool.weak,
         pool.mid,
         pool.strong,
@@ -363,7 +416,7 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
     let mut strong_ref: Option<(f64, f64)> = None; // (Q, C) Always-Strong
     let mut weak_ref: Option<f64> = None; // Q Always-Weak
     for st in strategies {
-        let items = bench::replay(&ctx, &matrix, &test, st)?;
+        let items = bench::replay(&ctx, &matrix, &covered, st)?;
         let summary = bench::summarize(&items);
         if st == Strategy::AlwaysStrong {
             strong_ref = Some((
@@ -391,10 +444,10 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
             &bench::RunMeta {
                 benchmark_id: &benchmark_id,
                 manifest_hash: &manifest_hash,
-                pool_id: "public_matrix_top3_v1",
+                pool_id: if manifest_hash == "unfrozen" { "unfrozen" } else { "public_matrix_top3_v1" },
                 strategy: st.name(),
                 parameter_json: &parameter_json,
-                split: "test",
+                split: split_label,
                 summary_json: summary.to_string().as_str(),
             },
             &items,
@@ -437,7 +490,7 @@ async fn cmd_bench_sweep(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>
     let BenchCmd::Sweep {
         models,
         normalized,
-        selection,
+        selection: _,
         manifest,
         bench_db,
         output,
@@ -446,8 +499,8 @@ async fn cmd_bench_sweep(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>
     else {
         unreachable!()
     };
-    let (benchmark_id, manifest_hash, pool, mut ctx, test, matrix) =
-        bench_ctx(models, &normalized, &selection, &manifest, false, soft_gate).await?;
+    let (benchmark_id, manifest_hash, pool, mut ctx, test, _calib, matrix) =
+        bench_ctx(models, &normalized, None, &manifest, false, soft_gate).await?;
 
     let conn = bench::open_bench_db(&bench_db)?;
     println!("bench sweep: {} | n={} test | λ∈{{0,0.1,…,0.9}}（cost_weight；quality_weight=0.9−λ，latency 恒 0.1）", benchmark_id, test.len());

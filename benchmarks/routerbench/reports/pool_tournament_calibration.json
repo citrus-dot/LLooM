@@ -1,0 +1,2407 @@
+{
+  "generated_at": "2026-10-06T11:03:15+00:00",
+  "split": "calibration（test 未触碰，16-v3 §十四）",
+  "entrants_file": "benchmarks/routerbench/reports/tournament_entrants.json",
+  "results": [
+    {
+      "entrant": "R4_weak_opportunity",
+      "policy": "P0_current",
+      "run_id": 58,
+      "n": 3136,
+      "quality_mean": 0.5816,
+      "cost_mean": 0.000848,
+      "saving_vs_base": 0.0947,
+      "retention_vs_base": 0.9967,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.876,
+      "error_counts": {
+        "blocked_weak": 2747,
+        "optimal": 279,
+        "under_routing": 110
+      },
+      "selection_dist": {
+        "deepseek_r1_distill_qwen_7b": 304,
+        "intern_s1_mini": 2832
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 9,
+          "optimal": 1
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 250,
+          "under_routing": 2,
+          "optimal": 1
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 40,
+          "under_routing": 1,
+          "optimal": 5
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 49,
+          "optimal": 3,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "optimal": 6,
+          "under_routing": 7,
+          "blocked_weak": 43
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 127,
+          "optimal": 13,
+          "under_routing": 12
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 186,
+          "under_routing": 3,
+          "optimal": 5
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 106,
+          "optimal": 10,
+          "under_routing": 8
+        },
+        "llmrb_finqa_test_v1": {
+          "blocked_weak": 206,
+          "optimal": 15,
+          "under_routing": 5
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 34,
+          "optimal": 7
+        },
+        "llmrb_humaneval_test_v1": {
+          "optimal": 13,
+          "blocked_weak": 26,
+          "under_routing": 3
+        },
+        "llmrb_kandk_test_v1": {
+          "optimal": 45,
+          "blocked_weak": 89,
+          "under_routing": 4
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 218,
+          "optimal": 34,
+          "under_routing": 4
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 217,
+          "optimal": 8,
+          "under_routing": 7
+        },
+        "llmrb_livemathbench_test_v1": {
+          "blocked_weak": 20,
+          "optimal": 3
+        },
+        "llmrb_math500_test_v1": {
+          "blocked_weak": 100,
+          "optimal": 3
+        },
+        "llmrb_mathbench_test_v1": {
+          "blocked_weak": 22,
+          "optimal": 3,
+          "under_routing": 1
+        },
+        "llmrb_mbpp_test_v1": {
+          "blocked_weak": 130,
+          "optimal": 44,
+          "under_routing": 22
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 225,
+          "optimal": 13,
+          "under_routing": 4
+        },
+        "llmrb_meld_test_v1": {
+          "optimal": 29,
+          "blocked_weak": 229,
+          "under_routing": 9
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 177,
+          "under_routing": 11,
+          "optimal": 5
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 244,
+          "optimal": 13,
+          "under_routing": 5
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.1188,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.876,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini",
+        "weak": "deepseek_r1_0528_qwen3_8b"
+      }
+    },
+    {
+      "entrant": "R4_weak_opportunity",
+      "policy": "P1_band_only",
+      "run_id": 60,
+      "n": 3136,
+      "quality_mean": 0.5816,
+      "cost_mean": 0.000848,
+      "saving_vs_base": 0.0947,
+      "retention_vs_base": 0.9967,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.876,
+      "error_counts": {
+        "blocked_weak": 2747,
+        "optimal": 279,
+        "under_routing": 110
+      },
+      "selection_dist": {
+        "deepseek_r1_distill_qwen_7b": 304,
+        "intern_s1_mini": 2832
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 9,
+          "optimal": 1
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 250,
+          "under_routing": 2,
+          "optimal": 1
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 40,
+          "under_routing": 1,
+          "optimal": 5
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 49,
+          "optimal": 3,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "optimal": 6,
+          "under_routing": 7,
+          "blocked_weak": 43
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 127,
+          "optimal": 13,
+          "under_routing": 12
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 186,
+          "under_routing": 3,
+          "optimal": 5
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 106,
+          "optimal": 10,
+          "under_routing": 8
+        },
+        "llmrb_finqa_test_v1": {
+          "blocked_weak": 206,
+          "optimal": 15,
+          "under_routing": 5
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 34,
+          "optimal": 7
+        },
+        "llmrb_humaneval_test_v1": {
+          "optimal": 13,
+          "blocked_weak": 26,
+          "under_routing": 3
+        },
+        "llmrb_kandk_test_v1": {
+          "optimal": 45,
+          "blocked_weak": 89,
+          "under_routing": 4
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 218,
+          "optimal": 34,
+          "under_routing": 4
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 217,
+          "optimal": 8,
+          "under_routing": 7
+        },
+        "llmrb_livemathbench_test_v1": {
+          "blocked_weak": 20,
+          "optimal": 3
+        },
+        "llmrb_math500_test_v1": {
+          "blocked_weak": 100,
+          "optimal": 3
+        },
+        "llmrb_mathbench_test_v1": {
+          "blocked_weak": 22,
+          "optimal": 3,
+          "under_routing": 1
+        },
+        "llmrb_mbpp_test_v1": {
+          "blocked_weak": 130,
+          "optimal": 44,
+          "under_routing": 22
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 225,
+          "optimal": 13,
+          "under_routing": 4
+        },
+        "llmrb_meld_test_v1": {
+          "optimal": 29,
+          "blocked_weak": 229,
+          "under_routing": 9
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 177,
+          "under_routing": 11,
+          "optimal": 5
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 244,
+          "optimal": 13,
+          "under_routing": 5
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.1188,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.876,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini",
+        "weak": "deepseek_r1_0528_qwen3_8b"
+      }
+    },
+    {
+      "entrant": "R4_weak_opportunity",
+      "policy": "P2_softgate0",
+      "run_id": 62,
+      "n": 3136,
+      "quality_mean": 0.5802,
+      "cost_mean": 0.000849,
+      "saving_vs_base": 0.0935,
+      "retention_vs_base": 0.9943,
+      "weak_recall": 0.0826,
+      "weak_precision": 0.7467,
+      "weak_blocking_rate": 0.8036,
+      "error_counts": {
+        "blocked_weak": 2520,
+        "optimal": 238,
+        "under_routing": 74,
+        "correct_weak": 227,
+        "risky_weak": 77
+      },
+      "selection_dist": {
+        "deepseek_r1_0528_qwen3_8b": 304,
+        "intern_s1_mini": 2832
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 9,
+          "optimal": 1
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 250,
+          "under_routing": 2,
+          "optimal": 1
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 28,
+          "correct_weak": 12,
+          "risky_weak": 2,
+          "optimal": 4
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "correct_weak": 25,
+          "blocked_weak": 24,
+          "optimal": 3,
+          "risky_weak": 2
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "optimal": 5,
+          "risky_weak": 6,
+          "correct_weak": 19,
+          "blocked_weak": 24,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 80,
+          "correct_weak": 47,
+          "optimal": 13,
+          "risky_weak": 10,
+          "under_routing": 2
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 186,
+          "under_routing": 3,
+          "optimal": 5
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 106,
+          "optimal": 10,
+          "under_routing": 8
+        },
+        "llmrb_finqa_test_v1": {
+          "blocked_weak": 206,
+          "optimal": 15,
+          "under_routing": 5
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 34,
+          "optimal": 7
+        },
+        "llmrb_humaneval_test_v1": {
+          "optimal": 9,
+          "correct_weak": 8,
+          "blocked_weak": 18,
+          "risky_weak": 4,
+          "under_routing": 3
+        },
+        "llmrb_kandk_test_v1": {
+          "optimal": 45,
+          "blocked_weak": 89,
+          "under_routing": 4
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 218,
+          "optimal": 34,
+          "under_routing": 4
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 217,
+          "optimal": 8,
+          "under_routing": 7
+        },
+        "llmrb_livemathbench_test_v1": {
+          "blocked_weak": 20,
+          "optimal": 3
+        },
+        "llmrb_math500_test_v1": {
+          "blocked_weak": 100,
+          "optimal": 3
+        },
+        "llmrb_mathbench_test_v1": {
+          "blocked_weak": 22,
+          "optimal": 3,
+          "under_routing": 1
+        },
+        "llmrb_mbpp_test_v1": {
+          "correct_weak": 116,
+          "blocked_weak": 14,
+          "risky_weak": 53,
+          "optimal": 9,
+          "under_routing": 4
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 225,
+          "optimal": 13,
+          "under_routing": 4
+        },
+        "llmrb_meld_test_v1": {
+          "optimal": 29,
+          "blocked_weak": 229,
+          "under_routing": 9
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 177,
+          "under_routing": 11,
+          "optimal": 5
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 244,
+          "optimal": 13,
+          "under_routing": 5
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.1188,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.876,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini",
+        "weak": "deepseek_r1_0528_qwen3_8b"
+      }
+    },
+    {
+      "entrant": "R4_weak_opportunity",
+      "policy": "BASE",
+      "run_id": 61,
+      "n": 3136,
+      "quality_mean": 0.5835,
+      "cost_mean": 0.000937,
+      "saving_vs_base": null,
+      "retention_vs_base": null,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.876,
+      "error_counts": {
+        "blocked_weak": 2747,
+        "optimal": 301,
+        "under_routing": 88
+      },
+      "selection_dist": {
+        "intern_s1_mini": 3136
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 9,
+          "optimal": 1
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 250,
+          "under_routing": 2,
+          "optimal": 1
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 40,
+          "optimal": 5,
+          "under_routing": 1
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 49,
+          "optimal": 5
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "optimal": 10,
+          "blocked_weak": 43,
+          "under_routing": 3
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 127,
+          "optimal": 23,
+          "under_routing": 2
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 186,
+          "under_routing": 3,
+          "optimal": 5
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 106,
+          "optimal": 10,
+          "under_routing": 8
+        },
+        "llmrb_finqa_test_v1": {
+          "blocked_weak": 206,
+          "optimal": 15,
+          "under_routing": 5
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 34,
+          "optimal": 7
+        },
+        "llmrb_humaneval_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 26,
+          "under_routing": 5
+        },
+        "llmrb_kandk_test_v1": {
+          "optimal": 45,
+          "blocked_weak": 89,
+          "under_routing": 4
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 218,
+          "optimal": 34,
+          "under_routing": 4
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 217,
+          "optimal": 8,
+          "under_routing": 7
+        },
+        "llmrb_livemathbench_test_v1": {
+          "blocked_weak": 20,
+          "optimal": 3
+        },
+        "llmrb_math500_test_v1": {
+          "blocked_weak": 100,
+          "optimal": 3
+        },
+        "llmrb_mathbench_test_v1": {
+          "blocked_weak": 22,
+          "optimal": 3,
+          "under_routing": 1
+        },
+        "llmrb_mbpp_test_v1": {
+          "blocked_weak": 130,
+          "optimal": 52,
+          "under_routing": 14
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 225,
+          "optimal": 13,
+          "under_routing": 4
+        },
+        "llmrb_meld_test_v1": {
+          "optimal": 29,
+          "blocked_weak": 229,
+          "under_routing": 9
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 177,
+          "under_routing": 11,
+          "optimal": 5
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 244,
+          "optimal": 13,
+          "under_routing": 5
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.1188,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.876,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini",
+        "weak": "deepseek_r1_0528_qwen3_8b"
+      }
+    },
+    {
+      "entrant": "R5_cost_leverage",
+      "policy": "P0_current",
+      "run_id": 63,
+      "n": 807,
+      "quality_mean": 0.7478,
+      "cost_mean": 0.067251,
+      "saving_vs_base": 0.069,
+      "retention_vs_base": 0.943,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.5886,
+      "error_counts": {
+        "blocked_weak": 475,
+        "under_routing": 75,
+        "optimal": 257
+      },
+      "selection_dist": {
+        "gemini_2_5_flash": 123,
+        "gemini_2_5_pro": 684
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 8,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "optimal": 22,
+          "under_routing": 14,
+          "blocked_weak": 10
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 21,
+          "under_routing": 9,
+          "optimal": 24
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "blocked_weak": 16,
+          "under_routing": 16,
+          "optimal": 24
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 33,
+          "optimal": 95,
+          "under_routing": 24
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 25,
+          "optimal": 16
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 185,
+          "optimal": 44,
+          "under_routing": 3
+        },
+        "llmrb_livemathbench_test_v1": {
+          "blocked_weak": 19,
+          "under_routing": 3,
+          "optimal": 1
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 158,
+          "optimal": 31,
+          "under_routing": 4
+        }
+      },
+      "pool_regret_potential": {
+        "n": 807,
+        "mean": 0.3606,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.5886,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "gemini_2_5_flash",
+        "strong": "gemini_2_5_pro",
+        "weak": "deepseek_r1_0528_qwen3_8b"
+      }
+    },
+    {
+      "entrant": "R5_cost_leverage",
+      "policy": "P1_band_only",
+      "run_id": 64,
+      "n": 807,
+      "quality_mean": 0.7478,
+      "cost_mean": 0.067251,
+      "saving_vs_base": 0.069,
+      "retention_vs_base": 0.943,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.5886,
+      "error_counts": {
+        "blocked_weak": 475,
+        "under_routing": 75,
+        "optimal": 257
+      },
+      "selection_dist": {
+        "gemini_2_5_flash": 123,
+        "gemini_2_5_pro": 684
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 8,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "optimal": 22,
+          "under_routing": 14,
+          "blocked_weak": 10
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 21,
+          "under_routing": 9,
+          "optimal": 24
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "blocked_weak": 16,
+          "under_routing": 16,
+          "optimal": 24
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 33,
+          "optimal": 95,
+          "under_routing": 24
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 25,
+          "optimal": 16
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 185,
+          "optimal": 44,
+          "under_routing": 3
+        },
+        "llmrb_livemathbench_test_v1": {
+          "blocked_weak": 19,
+          "under_routing": 3,
+          "optimal": 1
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 158,
+          "optimal": 31,
+          "under_routing": 4
+        }
+      },
+      "pool_regret_potential": {
+        "n": 807,
+        "mean": 0.3606,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.5886,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "gemini_2_5_flash",
+        "strong": "gemini_2_5_pro",
+        "weak": "deepseek_r1_0528_qwen3_8b"
+      }
+    },
+    {
+      "entrant": "R5_cost_leverage",
+      "policy": "P2_softgate0",
+      "run_id": 66,
+      "n": 807,
+      "quality_mean": 0.7057,
+      "cost_mean": 0.066226,
+      "saving_vs_base": 0.0832,
+      "retention_vs_base": 0.8898,
+      "weak_recall": 0.0611,
+      "weak_precision": 0.2358,
+      "weak_blocking_rate": 0.5527,
+      "error_counts": {
+        "blocked_weak": 446,
+        "under_routing": 24,
+        "optimal": 214,
+        "risky_weak": 94,
+        "correct_weak": 29
+      },
+      "selection_dist": {
+        "deepseek_r1_0528_qwen3_8b": 123,
+        "gemini_2_5_pro": 684
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 8,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "optimal": 18,
+          "risky_weak": 12,
+          "under_routing": 6,
+          "blocked_weak": 8,
+          "correct_weak": 2
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "correct_weak": 10,
+          "risky_weak": 17,
+          "optimal": 16,
+          "blocked_weak": 11
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "blocked_weak": 10,
+          "risky_weak": 19,
+          "optimal": 19,
+          "correct_weak": 6,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 22,
+          "optimal": 69,
+          "risky_weak": 46,
+          "under_routing": 4,
+          "correct_weak": 11
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 25,
+          "optimal": 16
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 185,
+          "optimal": 44,
+          "under_routing": 3
+        },
+        "llmrb_livemathbench_test_v1": {
+          "blocked_weak": 19,
+          "under_routing": 3,
+          "optimal": 1
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 158,
+          "optimal": 31,
+          "under_routing": 4
+        }
+      },
+      "pool_regret_potential": {
+        "n": 807,
+        "mean": 0.3606,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.5886,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "gemini_2_5_flash",
+        "strong": "gemini_2_5_pro",
+        "weak": "deepseek_r1_0528_qwen3_8b"
+      }
+    },
+    {
+      "entrant": "R5_cost_leverage",
+      "policy": "BASE",
+      "run_id": 65,
+      "n": 807,
+      "quality_mean": 0.7931,
+      "cost_mean": 0.072234,
+      "saving_vs_base": null,
+      "retention_vs_base": null,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.5886,
+      "error_counts": {
+        "blocked_weak": 475,
+        "under_routing": 33,
+        "optimal": 299
+      },
+      "selection_dist": {
+        "gemini_2_5_pro": 807
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 8,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "optimal": 29,
+          "under_routing": 7,
+          "blocked_weak": 10
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 21,
+          "optimal": 31,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "blocked_weak": 16,
+          "optimal": 36,
+          "under_routing": 4
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 33,
+          "optimal": 111,
+          "under_routing": 8
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 25,
+          "optimal": 16
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 185,
+          "optimal": 44,
+          "under_routing": 3
+        },
+        "llmrb_livemathbench_test_v1": {
+          "blocked_weak": 19,
+          "under_routing": 3,
+          "optimal": 1
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 158,
+          "optimal": 31,
+          "under_routing": 4
+        }
+      },
+      "pool_regret_potential": {
+        "n": 807,
+        "mean": 0.3606,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.5886,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "gemini_2_5_flash",
+        "strong": "gemini_2_5_pro",
+        "weak": "deepseek_r1_0528_qwen3_8b"
+      }
+    },
+    {
+      "entrant": "R6_diversity",
+      "policy": "P0_current",
+      "run_id": 67,
+      "n": 1414,
+      "quality_mean": 0.5389,
+      "cost_mean": 0.00924,
+      "saving_vs_base": 0.0,
+      "retention_vs_base": 1.0,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.8925,
+      "error_counts": {
+        "blocked_weak": 1262,
+        "optimal": 108,
+        "under_routing": 44
+      },
+      "selection_dist": {
+        "qwen3_235b_a22b_thinking_2507": 1414
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 8,
+          "optimal": 2
+        },
+        "llmrb_arc_agi_v1_v1": {
+          "blocked_weak": 68,
+          "optimal": 13,
+          "under_routing": 1
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 34,
+          "optimal": 4,
+          "under_routing": 3
+        },
+        "llmrb_hle_test_v1": {
+          "blocked_weak": 388,
+          "optimal": 29,
+          "under_routing": 23
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 191,
+          "optimal": 36,
+          "under_routing": 5
+        },
+        "llmrb_mmlupro_test_3000_v1": {
+          "blocked_weak": 573,
+          "optimal": 24,
+          "under_routing": 12
+        }
+      },
+      "pool_regret_potential": {
+        "n": 1414,
+        "mean": 0.1075,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.8925,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "intern_s1_new",
+        "strong": "qwen3_235b_a22b_thinking_2507",
+        "weak": "deepseek_v3_1_terminus"
+      }
+    },
+    {
+      "entrant": "R6_diversity",
+      "policy": "P1_band_only",
+      "run_id": 68,
+      "n": 1414,
+      "quality_mean": 0.5389,
+      "cost_mean": 0.00924,
+      "saving_vs_base": 0.0,
+      "retention_vs_base": 1.0,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.8925,
+      "error_counts": {
+        "blocked_weak": 1262,
+        "optimal": 108,
+        "under_routing": 44
+      },
+      "selection_dist": {
+        "qwen3_235b_a22b_thinking_2507": 1414
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 8,
+          "optimal": 2
+        },
+        "llmrb_arc_agi_v1_v1": {
+          "blocked_weak": 68,
+          "optimal": 13,
+          "under_routing": 1
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 34,
+          "optimal": 4,
+          "under_routing": 3
+        },
+        "llmrb_hle_test_v1": {
+          "blocked_weak": 388,
+          "optimal": 29,
+          "under_routing": 23
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 191,
+          "optimal": 36,
+          "under_routing": 5
+        },
+        "llmrb_mmlupro_test_3000_v1": {
+          "blocked_weak": 573,
+          "optimal": 24,
+          "under_routing": 12
+        }
+      },
+      "pool_regret_potential": {
+        "n": 1414,
+        "mean": 0.1075,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.8925,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "intern_s1_new",
+        "strong": "qwen3_235b_a22b_thinking_2507",
+        "weak": "deepseek_v3_1_terminus"
+      }
+    },
+    {
+      "entrant": "R6_diversity",
+      "policy": "P2_softgate0",
+      "run_id": 70,
+      "n": 1414,
+      "quality_mean": 0.5389,
+      "cost_mean": 0.00924,
+      "saving_vs_base": 0.0,
+      "retention_vs_base": 1.0,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.8925,
+      "error_counts": {
+        "blocked_weak": 1262,
+        "optimal": 108,
+        "under_routing": 44
+      },
+      "selection_dist": {
+        "qwen3_235b_a22b_thinking_2507": 1414
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 8,
+          "optimal": 2
+        },
+        "llmrb_arc_agi_v1_v1": {
+          "blocked_weak": 68,
+          "optimal": 13,
+          "under_routing": 1
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 34,
+          "optimal": 4,
+          "under_routing": 3
+        },
+        "llmrb_hle_test_v1": {
+          "blocked_weak": 388,
+          "optimal": 29,
+          "under_routing": 23
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 191,
+          "optimal": 36,
+          "under_routing": 5
+        },
+        "llmrb_mmlupro_test_3000_v1": {
+          "blocked_weak": 573,
+          "optimal": 24,
+          "under_routing": 12
+        }
+      },
+      "pool_regret_potential": {
+        "n": 1414,
+        "mean": 0.1075,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.8925,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "intern_s1_new",
+        "strong": "qwen3_235b_a22b_thinking_2507",
+        "weak": "deepseek_v3_1_terminus"
+      }
+    },
+    {
+      "entrant": "R6_diversity",
+      "policy": "BASE",
+      "run_id": 69,
+      "n": 1414,
+      "quality_mean": 0.5389,
+      "cost_mean": 0.00924,
+      "saving_vs_base": null,
+      "retention_vs_base": null,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.8925,
+      "error_counts": {
+        "blocked_weak": 1262,
+        "optimal": 108,
+        "under_routing": 44
+      },
+      "selection_dist": {
+        "qwen3_235b_a22b_thinking_2507": 1414
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 8,
+          "optimal": 2
+        },
+        "llmrb_arc_agi_v1_v1": {
+          "blocked_weak": 68,
+          "optimal": 13,
+          "under_routing": 1
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 34,
+          "optimal": 4,
+          "under_routing": 3
+        },
+        "llmrb_hle_test_v1": {
+          "blocked_weak": 388,
+          "optimal": 29,
+          "under_routing": 23
+        },
+        "llmrb_livecodebench_test_v1": {
+          "blocked_weak": 191,
+          "optimal": 36,
+          "under_routing": 5
+        },
+        "llmrb_mmlupro_test_3000_v1": {
+          "blocked_weak": 573,
+          "optimal": 24,
+          "under_routing": 12
+        }
+      },
+      "pool_regret_potential": {
+        "n": 1414,
+        "mean": 0.1075,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.8925,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "intern_s1_new",
+        "strong": "qwen3_235b_a22b_thinking_2507",
+        "weak": "deepseek_v3_1_terminus"
+      }
+    },
+    {
+      "entrant": "R7_stability",
+      "policy": "P0_current",
+      "run_id": 71,
+      "n": 3136,
+      "quality_mean": 0.5816,
+      "cost_mean": 0.000848,
+      "saving_vs_base": 0.0947,
+      "retention_vs_base": 0.9967,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.6795,
+      "error_counts": {
+        "optimal": 817,
+        "blocked_weak": 2131,
+        "under_routing": 188
+      },
+      "selection_dist": {
+        "deepseek_r1_distill_qwen_7b": 304,
+        "intern_s1_mini": 2832
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "optimal": 9,
+          "blocked_weak": 1
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 210,
+          "under_routing": 9,
+          "optimal": 34
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 38,
+          "under_routing": 1,
+          "optimal": 7
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 38,
+          "optimal": 10,
+          "under_routing": 6
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "optimal": 10,
+          "under_routing": 7,
+          "blocked_weak": 39
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 116,
+          "optimal": 20,
+          "under_routing": 16
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 105,
+          "optimal": 82,
+          "under_routing": 7
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 106,
+          "optimal": 11,
+          "under_routing": 7
+        },
+        "llmrb_finqa_test_v1": {
+          "optimal": 64,
+          "blocked_weak": 155,
+          "under_routing": 7
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 24,
+          "optimal": 13,
+          "under_routing": 4
+        },
+        "llmrb_humaneval_test_v1": {
+          "blocked_weak": 32,
+          "optimal": 8,
+          "under_routing": 2
+        },
+        "llmrb_kandk_test_v1": {
+          "blocked_weak": 31,
+          "optimal": 97,
+          "under_routing": 10
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 175,
+          "optimal": 76,
+          "under_routing": 5
+        },
+        "llmrb_livecodebench_test_v1": {
+          "under_routing": 35,
+          "blocked_weak": 158,
+          "optimal": 39
+        },
+        "llmrb_livemathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 12
+        },
+        "llmrb_math500_test_v1": {
+          "optimal": 70,
+          "blocked_weak": 32,
+          "under_routing": 1
+        },
+        "llmrb_mathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 9,
+          "under_routing": 6
+        },
+        "llmrb_mbpp_test_v1": {
+          "blocked_weak": 158,
+          "optimal": 27,
+          "under_routing": 11
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 175,
+          "optimal": 58,
+          "under_routing": 9
+        },
+        "llmrb_meld_test_v1": {
+          "optimal": 42,
+          "blocked_weak": 212,
+          "under_routing": 13
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 124,
+          "optimal": 49,
+          "under_routing": 20
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 181,
+          "optimal": 69,
+          "under_routing": 12
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.3138,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.6795,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini",
+        "weak": "deephermes_3_llama_3_8b_preview"
+      }
+    },
+    {
+      "entrant": "R7_stability",
+      "policy": "P1_band_only",
+      "run_id": 72,
+      "n": 3136,
+      "quality_mean": 0.5816,
+      "cost_mean": 0.000848,
+      "saving_vs_base": 0.0947,
+      "retention_vs_base": 0.9967,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.6795,
+      "error_counts": {
+        "optimal": 817,
+        "blocked_weak": 2131,
+        "under_routing": 188
+      },
+      "selection_dist": {
+        "deepseek_r1_distill_qwen_7b": 304,
+        "intern_s1_mini": 2832
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "optimal": 9,
+          "blocked_weak": 1
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 210,
+          "under_routing": 9,
+          "optimal": 34
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 38,
+          "under_routing": 1,
+          "optimal": 7
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 38,
+          "optimal": 10,
+          "under_routing": 6
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "optimal": 10,
+          "under_routing": 7,
+          "blocked_weak": 39
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 116,
+          "optimal": 20,
+          "under_routing": 16
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 105,
+          "optimal": 82,
+          "under_routing": 7
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 106,
+          "optimal": 11,
+          "under_routing": 7
+        },
+        "llmrb_finqa_test_v1": {
+          "optimal": 64,
+          "blocked_weak": 155,
+          "under_routing": 7
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 24,
+          "optimal": 13,
+          "under_routing": 4
+        },
+        "llmrb_humaneval_test_v1": {
+          "blocked_weak": 32,
+          "optimal": 8,
+          "under_routing": 2
+        },
+        "llmrb_kandk_test_v1": {
+          "blocked_weak": 31,
+          "optimal": 97,
+          "under_routing": 10
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 175,
+          "optimal": 76,
+          "under_routing": 5
+        },
+        "llmrb_livecodebench_test_v1": {
+          "under_routing": 35,
+          "blocked_weak": 158,
+          "optimal": 39
+        },
+        "llmrb_livemathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 12
+        },
+        "llmrb_math500_test_v1": {
+          "optimal": 70,
+          "blocked_weak": 32,
+          "under_routing": 1
+        },
+        "llmrb_mathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 9,
+          "under_routing": 6
+        },
+        "llmrb_mbpp_test_v1": {
+          "blocked_weak": 158,
+          "optimal": 27,
+          "under_routing": 11
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 175,
+          "optimal": 58,
+          "under_routing": 9
+        },
+        "llmrb_meld_test_v1": {
+          "optimal": 42,
+          "blocked_weak": 212,
+          "under_routing": 13
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 124,
+          "optimal": 49,
+          "under_routing": 20
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 181,
+          "optimal": 69,
+          "under_routing": 12
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.3138,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.6795,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini",
+        "weak": "deephermes_3_llama_3_8b_preview"
+      }
+    },
+    {
+      "entrant": "R7_stability",
+      "policy": "P2_softgate0",
+      "run_id": 74,
+      "n": 3136,
+      "quality_mean": 0.5859,
+      "cost_mean": 0.000819,
+      "saving_vs_base": 0.1261,
+      "retention_vs_base": 1.0041,
+      "weak_recall": 0.1154,
+      "weak_precision": 0.8092,
+      "weak_blocking_rate": 0.6011,
+      "error_counts": {
+        "optimal": 793,
+        "blocked_weak": 1885,
+        "under_routing": 154,
+        "correct_weak": 246,
+        "risky_weak": 58
+      },
+      "selection_dist": {
+        "deephermes_3_llama_3_8b_preview": 304,
+        "intern_s1_mini": 2832
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "optimal": 9,
+          "blocked_weak": 1
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 210,
+          "under_routing": 9,
+          "optimal": 34
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 26,
+          "correct_weak": 12,
+          "risky_weak": 2,
+          "optimal": 6
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "correct_weak": 21,
+          "blocked_weak": 17,
+          "optimal": 10,
+          "risky_weak": 6
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "optimal": 8,
+          "risky_weak": 7,
+          "correct_weak": 18,
+          "blocked_weak": 21,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 74,
+          "correct_weak": 42,
+          "optimal": 19,
+          "risky_weak": 15,
+          "under_routing": 2
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 105,
+          "optimal": 82,
+          "under_routing": 7
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 106,
+          "optimal": 11,
+          "under_routing": 7
+        },
+        "llmrb_finqa_test_v1": {
+          "optimal": 64,
+          "blocked_weak": 155,
+          "under_routing": 7
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 24,
+          "optimal": 13,
+          "under_routing": 4
+        },
+        "llmrb_humaneval_test_v1": {
+          "blocked_weak": 21,
+          "correct_weak": 11,
+          "optimal": 7,
+          "risky_weak": 1,
+          "under_routing": 2
+        },
+        "llmrb_kandk_test_v1": {
+          "blocked_weak": 31,
+          "optimal": 97,
+          "under_routing": 10
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 175,
+          "optimal": 76,
+          "under_routing": 5
+        },
+        "llmrb_livecodebench_test_v1": {
+          "under_routing": 35,
+          "blocked_weak": 158,
+          "optimal": 39
+        },
+        "llmrb_livemathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 12
+        },
+        "llmrb_math500_test_v1": {
+          "optimal": 70,
+          "blocked_weak": 32,
+          "under_routing": 1
+        },
+        "llmrb_mathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 9,
+          "under_routing": 6
+        },
+        "llmrb_mbpp_test_v1": {
+          "correct_weak": 142,
+          "blocked_weak": 16,
+          "risky_weak": 27,
+          "optimal": 8,
+          "under_routing": 3
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 175,
+          "optimal": 58,
+          "under_routing": 9
+        },
+        "llmrb_meld_test_v1": {
+          "optimal": 42,
+          "blocked_weak": 212,
+          "under_routing": 13
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 124,
+          "optimal": 49,
+          "under_routing": 20
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 181,
+          "optimal": 69,
+          "under_routing": 12
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.3138,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.6795,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini",
+        "weak": "deephermes_3_llama_3_8b_preview"
+      }
+    },
+    {
+      "entrant": "R7_stability",
+      "policy": "BASE",
+      "run_id": 73,
+      "n": 3136,
+      "quality_mean": 0.5835,
+      "cost_mean": 0.000937,
+      "saving_vs_base": null,
+      "retention_vs_base": null,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.6795,
+      "error_counts": {
+        "optimal": 841,
+        "blocked_weak": 2131,
+        "under_routing": 164
+      },
+      "selection_dist": {
+        "intern_s1_mini": 3136
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "optimal": 9,
+          "blocked_weak": 1
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 210,
+          "under_routing": 9,
+          "optimal": 34
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 38,
+          "optimal": 7,
+          "under_routing": 1
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 38,
+          "optimal": 16
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "optimal": 14,
+          "blocked_weak": 39,
+          "under_routing": 3
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 116,
+          "optimal": 33,
+          "under_routing": 3
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 105,
+          "optimal": 82,
+          "under_routing": 7
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 106,
+          "optimal": 11,
+          "under_routing": 7
+        },
+        "llmrb_finqa_test_v1": {
+          "optimal": 64,
+          "blocked_weak": 155,
+          "under_routing": 7
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 24,
+          "optimal": 13,
+          "under_routing": 4
+        },
+        "llmrb_humaneval_test_v1": {
+          "blocked_weak": 32,
+          "optimal": 7,
+          "under_routing": 3
+        },
+        "llmrb_kandk_test_v1": {
+          "blocked_weak": 31,
+          "optimal": 97,
+          "under_routing": 10
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 175,
+          "optimal": 76,
+          "under_routing": 5
+        },
+        "llmrb_livecodebench_test_v1": {
+          "under_routing": 35,
+          "blocked_weak": 158,
+          "optimal": 39
+        },
+        "llmrb_livemathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 12
+        },
+        "llmrb_math500_test_v1": {
+          "optimal": 70,
+          "blocked_weak": 32,
+          "under_routing": 1
+        },
+        "llmrb_mathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 9,
+          "under_routing": 6
+        },
+        "llmrb_mbpp_test_v1": {
+          "blocked_weak": 158,
+          "optimal": 29,
+          "under_routing": 9
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 175,
+          "optimal": 58,
+          "under_routing": 9
+        },
+        "llmrb_meld_test_v1": {
+          "optimal": 42,
+          "blocked_weak": 212,
+          "under_routing": 13
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 124,
+          "optimal": 49,
+          "under_routing": 20
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 181,
+          "optimal": 69,
+          "under_routing": 12
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.3138,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.6795,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini",
+        "weak": "deephermes_3_llama_3_8b_preview"
+      }
+    },
+    {
+      "entrant": "REF_global_top",
+      "policy": "P0_current",
+      "run_id": 75,
+      "n": 3136,
+      "quality_mean": 0.6637,
+      "cost_mean": 0.000409,
+      "saving_vs_base": 0.1024,
+      "retention_vs_base": 0.9928,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.6936,
+      "error_counts": {
+        "blocked_weak": 2175,
+        "optimal": 845,
+        "under_routing": 116
+      },
+      "selection_dist": {
+        "llama_3_1_8b_ultramedical": 304,
+        "qwen3_8b": 2832
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 3,
+          "optimal": 7
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 230,
+          "optimal": 23
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 38,
+          "optimal": 6,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 33,
+          "optimal": 10,
+          "under_routing": 11
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "blocked_weak": 42,
+          "optimal": 9,
+          "under_routing": 5
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 102,
+          "optimal": 31,
+          "under_routing": 19
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 128,
+          "optimal": 64,
+          "under_routing": 2
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 108,
+          "optimal": 12,
+          "under_routing": 4
+        },
+        "llmrb_finqa_test_v1": {
+          "blocked_weak": 162,
+          "under_routing": 6,
+          "optimal": 58
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 19,
+          "optimal": 17,
+          "under_routing": 5
+        },
+        "llmrb_humaneval_test_v1": {
+          "blocked_weak": 33,
+          "optimal": 6,
+          "under_routing": 3
+        },
+        "llmrb_kandk_test_v1": {
+          "blocked_weak": 47,
+          "optimal": 89,
+          "under_routing": 2
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 172,
+          "optimal": 82,
+          "under_routing": 2
+        },
+        "llmrb_livecodebench_test_v1": {
+          "optimal": 120,
+          "blocked_weak": 110,
+          "under_routing": 2
+        },
+        "llmrb_livemathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 12
+        },
+        "llmrb_math500_test_v1": {
+          "optimal": 53,
+          "blocked_weak": 50
+        },
+        "llmrb_mathbench_test_v1": {
+          "blocked_weak": 13,
+          "optimal": 13
+        },
+        "llmrb_mbpp_test_v1": {
+          "under_routing": 16,
+          "optimal": 24,
+          "blocked_weak": 156
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 187,
+          "under_routing": 8,
+          "optimal": 47
+        },
+        "llmrb_meld_test_v1": {
+          "blocked_weak": 212,
+          "optimal": 42,
+          "under_routing": 13
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 137,
+          "under_routing": 6,
+          "optimal": 50
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 181,
+          "optimal": 71,
+          "under_routing": 10
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.2999,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.6936,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "llama_3_1_8b_ultramedical",
+        "strong": "qwen3_8b",
+        "weak": "llama_3_1_8b_instruct"
+      }
+    },
+    {
+      "entrant": "REF_global_top",
+      "policy": "P1_band_only",
+      "run_id": 76,
+      "n": 3136,
+      "quality_mean": 0.6637,
+      "cost_mean": 0.000409,
+      "saving_vs_base": 0.1024,
+      "retention_vs_base": 0.9928,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.6936,
+      "error_counts": {
+        "blocked_weak": 2175,
+        "optimal": 845,
+        "under_routing": 116
+      },
+      "selection_dist": {
+        "llama_3_1_8b_ultramedical": 304,
+        "qwen3_8b": 2832
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 3,
+          "optimal": 7
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 230,
+          "optimal": 23
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 38,
+          "optimal": 6,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 33,
+          "optimal": 10,
+          "under_routing": 11
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "blocked_weak": 42,
+          "optimal": 9,
+          "under_routing": 5
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 102,
+          "optimal": 31,
+          "under_routing": 19
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 128,
+          "optimal": 64,
+          "under_routing": 2
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 108,
+          "optimal": 12,
+          "under_routing": 4
+        },
+        "llmrb_finqa_test_v1": {
+          "blocked_weak": 162,
+          "under_routing": 6,
+          "optimal": 58
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 19,
+          "optimal": 17,
+          "under_routing": 5
+        },
+        "llmrb_humaneval_test_v1": {
+          "blocked_weak": 33,
+          "optimal": 6,
+          "under_routing": 3
+        },
+        "llmrb_kandk_test_v1": {
+          "blocked_weak": 47,
+          "optimal": 89,
+          "under_routing": 2
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 172,
+          "optimal": 82,
+          "under_routing": 2
+        },
+        "llmrb_livecodebench_test_v1": {
+          "optimal": 120,
+          "blocked_weak": 110,
+          "under_routing": 2
+        },
+        "llmrb_livemathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 12
+        },
+        "llmrb_math500_test_v1": {
+          "optimal": 53,
+          "blocked_weak": 50
+        },
+        "llmrb_mathbench_test_v1": {
+          "blocked_weak": 13,
+          "optimal": 13
+        },
+        "llmrb_mbpp_test_v1": {
+          "under_routing": 16,
+          "optimal": 24,
+          "blocked_weak": 156
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 187,
+          "under_routing": 8,
+          "optimal": 47
+        },
+        "llmrb_meld_test_v1": {
+          "blocked_weak": 212,
+          "optimal": 42,
+          "under_routing": 13
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 137,
+          "under_routing": 6,
+          "optimal": 50
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 181,
+          "optimal": 71,
+          "under_routing": 10
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.2999,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.6936,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "llama_3_1_8b_ultramedical",
+        "strong": "qwen3_8b",
+        "weak": "llama_3_1_8b_instruct"
+      }
+    },
+    {
+      "entrant": "REF_global_top",
+      "policy": "P2_softgate0",
+      "run_id": 78,
+      "n": 3136,
+      "quality_mean": 0.6637,
+      "cost_mean": 0.000409,
+      "saving_vs_base": 0.1024,
+      "retention_vs_base": 0.9928,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.618,
+      "error_counts": {
+        "blocked_weak": 1938,
+        "optimal": 845,
+        "missed_weak": 237,
+        "under_routing": 116
+      },
+      "selection_dist": {
+        "llama_3_1_8b_ultramedical": 304,
+        "qwen3_8b": 2832
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 3,
+          "optimal": 7
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 230,
+          "optimal": 23
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 25,
+          "missed_weak": 13,
+          "optimal": 6,
+          "under_routing": 2
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "missed_weak": 17,
+          "optimal": 10,
+          "under_routing": 11,
+          "blocked_weak": 16
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "blocked_weak": 22,
+          "missed_weak": 20,
+          "optimal": 9,
+          "under_routing": 5
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 64,
+          "optimal": 31,
+          "missed_weak": 38,
+          "under_routing": 19
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 128,
+          "optimal": 64,
+          "under_routing": 2
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 108,
+          "optimal": 12,
+          "under_routing": 4
+        },
+        "llmrb_finqa_test_v1": {
+          "blocked_weak": 162,
+          "under_routing": 6,
+          "optimal": 58
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 19,
+          "optimal": 17,
+          "under_routing": 5
+        },
+        "llmrb_humaneval_test_v1": {
+          "blocked_weak": 24,
+          "missed_weak": 9,
+          "optimal": 6,
+          "under_routing": 3
+        },
+        "llmrb_kandk_test_v1": {
+          "blocked_weak": 47,
+          "optimal": 89,
+          "under_routing": 2
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 172,
+          "optimal": 82,
+          "under_routing": 2
+        },
+        "llmrb_livecodebench_test_v1": {
+          "optimal": 120,
+          "blocked_weak": 110,
+          "under_routing": 2
+        },
+        "llmrb_livemathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 12
+        },
+        "llmrb_math500_test_v1": {
+          "optimal": 53,
+          "blocked_weak": 50
+        },
+        "llmrb_mathbench_test_v1": {
+          "blocked_weak": 13,
+          "optimal": 13
+        },
+        "llmrb_mbpp_test_v1": {
+          "under_routing": 16,
+          "optimal": 24,
+          "missed_weak": 140,
+          "blocked_weak": 16
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 187,
+          "under_routing": 8,
+          "optimal": 47
+        },
+        "llmrb_meld_test_v1": {
+          "blocked_weak": 212,
+          "optimal": 42,
+          "under_routing": 13
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 137,
+          "under_routing": 6,
+          "optimal": 50
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 181,
+          "optimal": 71,
+          "under_routing": 10
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.2999,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.6936,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "llama_3_1_8b_ultramedical",
+        "strong": "qwen3_8b",
+        "weak": "llama_3_1_8b_instruct"
+      }
+    },
+    {
+      "entrant": "REF_global_top",
+      "policy": "BASE",
+      "run_id": 77,
+      "n": 3136,
+      "quality_mean": 0.6685,
+      "cost_mean": 0.000456,
+      "saving_vs_base": null,
+      "retention_vs_base": null,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "weak_blocking_rate": 0.6936,
+      "error_counts": {
+        "blocked_weak": 2175,
+        "optimal": 883,
+        "under_routing": 78
+      },
+      "selection_dist": {
+        "qwen3_8b": 3136
+      },
+      "per_dataset": {
+        "llmrb_aime_hybrid_v1": {
+          "blocked_weak": 3,
+          "optimal": 7
+        },
+        "llmrb_arcc_test_v1": {
+          "blocked_weak": 230,
+          "optimal": 23
+        },
+        "llmrb_arenahard_coding_test_v1": {
+          "blocked_weak": 38,
+          "optimal": 7,
+          "under_routing": 1
+        },
+        "llmrb_arenahard_creative_writing_test_v1": {
+          "blocked_weak": 33,
+          "optimal": 20,
+          "under_routing": 1
+        },
+        "llmrb_arenahard_math_test_v1": {
+          "blocked_weak": 42,
+          "optimal": 14
+        },
+        "llmrb_arenahard_test_v1": {
+          "blocked_weak": 102,
+          "optimal": 44,
+          "under_routing": 6
+        },
+        "llmrb_bbh_test_v1": {
+          "blocked_weak": 128,
+          "optimal": 64,
+          "under_routing": 2
+        },
+        "llmrb_emorynlp_test_v1": {
+          "blocked_weak": 108,
+          "optimal": 12,
+          "under_routing": 4
+        },
+        "llmrb_finqa_test_v1": {
+          "blocked_weak": 162,
+          "under_routing": 6,
+          "optimal": 58
+        },
+        "llmrb_gpqa_test_v1": {
+          "blocked_weak": 19,
+          "optimal": 17,
+          "under_routing": 5
+        },
+        "llmrb_humaneval_test_v1": {
+          "blocked_weak": 33,
+          "optimal": 5,
+          "under_routing": 4
+        },
+        "llmrb_kandk_test_v1": {
+          "blocked_weak": 47,
+          "optimal": 89,
+          "under_routing": 2
+        },
+        "llmrb_korbench_test_v1": {
+          "blocked_weak": 172,
+          "optimal": 82,
+          "under_routing": 2
+        },
+        "llmrb_livecodebench_test_v1": {
+          "optimal": 120,
+          "blocked_weak": 110,
+          "under_routing": 2
+        },
+        "llmrb_livemathbench_test_v1": {
+          "optimal": 11,
+          "blocked_weak": 12
+        },
+        "llmrb_math500_test_v1": {
+          "optimal": 53,
+          "blocked_weak": 50
+        },
+        "llmrb_mathbench_test_v1": {
+          "blocked_weak": 13,
+          "optimal": 13
+        },
+        "llmrb_mbpp_test_v1": {
+          "optimal": 34,
+          "blocked_weak": 156,
+          "under_routing": 6
+        },
+        "llmrb_medqa_test_v1": {
+          "blocked_weak": 187,
+          "under_routing": 8,
+          "optimal": 47
+        },
+        "llmrb_meld_test_v1": {
+          "blocked_weak": 212,
+          "optimal": 42,
+          "under_routing": 13
+        },
+        "llmrb_mmlupro_test_1000_v1": {
+          "blocked_weak": 137,
+          "under_routing": 6,
+          "optimal": 50
+        },
+        "llmrb_winogrande_valid_v1": {
+          "blocked_weak": 181,
+          "optimal": 71,
+          "under_routing": 10
+        }
+      },
+      "pool_regret_potential": {
+        "n": 3136,
+        "mean": 0.2999,
+        "median": 0.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "p_regret_zero": 0.6936,
+        "note": "weak_regret(q)=max_pool_score(q)−weak_score(q)；P(regret=0)=weak_oracle_share；accuracy 类 dataset 上 regret∈{0,1}，judge 类连续——解读须分 dataset（16-v3 §八）"
+      },
+      "pool": {
+        "mid": "llama_3_1_8b_ultramedical",
+        "strong": "qwen3_8b",
+        "weak": "llama_3_1_8b_instruct"
+      }
+    }
+  ],
+  "p2_vs_p0": [
+    {
+      "entrant": "R4_weak_opportunity",
+      "d_quality_pp": -0.14,
+      "d_cost_pct": 0.12,
+      "weak_share_p0": 0.0,
+      "weak_share_p2": 0.0969,
+      "pareto_vs_base": false
+    },
+    {
+      "entrant": "R5_cost_leverage",
+      "d_quality_pp": -4.21,
+      "d_cost_pct": -1.52,
+      "weak_share_p0": 0.0,
+      "weak_share_p2": 0.1524,
+      "pareto_vs_base": false
+    },
+    {
+      "entrant": "R6_diversity",
+      "d_quality_pp": 0.0,
+      "d_cost_pct": 0.0,
+      "weak_share_p0": 0.0,
+      "weak_share_p2": 0.0,
+      "pareto_vs_base": false
+    },
+    {
+      "entrant": "R7_stability",
+      "d_quality_pp": 0.43,
+      "d_cost_pct": -3.42,
+      "weak_share_p0": 0.0,
+      "weak_share_p2": 0.0969,
+      "pareto_vs_base": true
+    },
+    {
+      "entrant": "REF_global_top",
+      "d_quality_pp": 0.0,
+      "d_cost_pct": 0.0,
+      "weak_share_p0": 0.0,
+      "weak_share_p2": 0.0,
+      "pareto_vs_base": false
+    }
+  ],
+  "notes": [
+    "策略族：P0=Current（weak tier1，medium 被拒）/ P1=BandOnly / P2=Soft Eligibility（weak tier2，penalty=0） / BASE=池内 Always-Strong（16-v3 §六）",
+    "aggregate 为池覆盖 dataset 的实例合并值；dataset 间 n 与分数量纲差异大，判读须结合 per_dataset",
+    "weak regret potential 是池属性（与 policy 无关），口径见字段 note"
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "selection_rule": "R4=max weak_oracle_share_mean；R5=max cost_ratio_geo（cheap_safe_mean≥0.70 守卫）；R6=max winner_entropy_mean；R7=max median(pool_score)（cross-dataset stability）；REF=max pool_score_mean；同名池去重顺延。全部 calibration-only（16-v3 §5.1/5.2）",
+  "min_datasets": 5,
+  "candidates_considered": 142,
+  "entrants": [
+    {
+      "name": "R4_weak_opportunity",
+      "pool": {
+        "weak": "deepseek_r1_0528_qwen3_8b",
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini"
+      },
+      "basis": {
+        "datasets": 6,
+        "pool_score_mean": 0.6857,
+        "stability_median": 0.6843,
+        "weak_oracle_share_mean": 0.9079,
+        "cheap_safe_mean": 0.9272,
+        "winner_entropy_mean": 1.0871,
+        "oracle_gain_mean": 0.085,
+        "cost_ratio_geo": 2.6654
+      }
+    },
+    {
+      "name": "R5_cost_leverage",
+      "pool": {
+        "weak": "deepseek_r1_0528_qwen3_8b",
+        "mid": "gemini_2_5_flash",
+        "strong": "gemini_2_5_pro"
+      },
+      "basis": {
+        "datasets": 5,
+        "pool_score_mean": 0.6316,
+        "stability_median": 0.6398,
+        "weak_oracle_share_mean": 0.7704,
+        "cheap_safe_mean": 0.8432,
+        "winner_entropy_mean": 1.0905,
+        "oracle_gain_mean": 0.0394,
+        "cost_ratio_geo": 80.2319
+      }
+    },
+    {
+      "name": "R6_diversity",
+      "pool": {
+        "weak": "deepseek_v3_1_terminus",
+        "mid": "intern_s1_new",
+        "strong": "qwen3_235b_a22b_thinking_2507"
+      },
+      "basis": {
+        "datasets": 5,
+        "pool_score_mean": 0.683,
+        "stability_median": 0.6865,
+        "weak_oracle_share_mean": 0.8445,
+        "cheap_safe_mean": 0.8699,
+        "winner_entropy_mean": 1.0966,
+        "oracle_gain_mean": 0.0636,
+        "cost_ratio_geo": 7.5178
+      }
+    },
+    {
+      "name": "R7_stability",
+      "pool": {
+        "weak": "deephermes_3_llama_3_8b_preview",
+        "mid": "deepseek_r1_distill_qwen_7b",
+        "strong": "intern_s1_mini"
+      },
+      "basis": {
+        "datasets": 13,
+        "pool_score_mean": 0.7736,
+        "stability_median": 0.7941,
+        "weak_oracle_share_mean": 0.6989,
+        "cheap_safe_mean": 0.7738,
+        "winner_entropy_mean": 1.0881,
+        "oracle_gain_mean": 0.1498,
+        "cost_ratio_geo": 17.4353
+      }
+    },
+    {
+      "name": "REF_global_top",
+      "pool": {
+        "weak": "llama_3_1_8b_instruct",
+        "mid": "llama_3_1_8b_ultramedical",
+        "strong": "qwen3_8b"
+      },
+      "basis": {
+        "datasets": 5,
+        "pool_score_mean": 0.7569,
+        "stability_median": 0.7408,
+        "weak_oracle_share_mean": 0.8101,
+        "cheap_safe_mean": 0.853,
+        "winner_entropy_mean": 1.0954,
+        "oracle_gain_mean": 0.1162,
+        "cost_ratio_geo": 19.6981
+      }
+    }
+  ]
+}

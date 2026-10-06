@@ -59,6 +59,7 @@ pub struct FrozenMatrix {
 }
 
 /// Core 回放实例（来自 instances.jsonl，经 core_selection 名单过滤）。
+#[derive(Debug, Clone)]
 pub struct BenchInstance {
     pub dataset_id: String,
     pub sample_id: String,

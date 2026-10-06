@@ -121,6 +121,8 @@ def main() -> int:
     ap.add_argument("--split", default="calibration")
     ap.add_argument("--top-k", type=int, default=10)
     ap.add_argument("--min-datasets", type=int, default=5, help="global 池至少覆盖的 dataset 数")
+    ap.add_argument("--dump-full", default=None,
+                    help="可选：导出全部枚举池 × dataset 的 PoolScore 矩阵（R7 stability 计算用）")
     ap.add_argument("--output", default="benchmarks/routerbench/reports/pool_candidates.json")
     args = ap.parse_args()
 
@@ -170,6 +172,7 @@ def main() -> int:
                                "pools_enumerated": len(raw),
                                "top": ranked[: args.top_k], "winners": winners}
         for m in raw:
+            m["dataset"] = ds
             global_accum[(m["pool"]["weak"], m["pool"]["mid"], m["pool"]["strong"])].append(m)
 
     # global：跨 dataset 聚合（简单算术均值；n 加权均值作参考）
@@ -207,6 +210,27 @@ def main() -> int:
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    if args.dump_full:
+        full = {
+            "|".join(pool): {
+                e["dataset"]: {
+                    "pool_score": e["pool_score"],
+                    "oracle_gain": e["oracle_gain"],
+                    "weak_oracle_share": e["weak_oracle_share"],
+                    "cheap_safe": e["cheap_safe"],
+                    "winner_entropy": e["winner_entropy"],
+                    "cost_ratio": e["cost_ratio"],
+                    "n": e["n"],
+                }
+                for e in entries
+            }
+            for pool, entries in global_accum.items()
+        }
+        Path(args.dump_full).write_text(
+            json.dumps(full, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"✓ full matrix → {args.dump_full}（{len(full)} 池）")
 
     print(f"✓ {out}")
     print(f"datasets={len(per_dataset_out)} | global 池（≥{args.min_datasets} datasets）{len(global_pools)} 个，Top-10：")

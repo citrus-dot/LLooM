@@ -69,6 +69,7 @@ def diagnose_run(
         "FROM bench_run_items WHERE run_id=?", (run_id,)
     ).fetchall()
     counts: dict[str, int] = {}
+    per_dataset_counts: dict[str, dict[str, int]] = {}
     cost_regrets: list[float] = []
     weak_equiv_total = weak_selected_total = weak_eligible_equiv = 0
     selected_weak_total = weak_prec_ok = 0
@@ -76,8 +77,9 @@ def diagnose_run(
     for dataset_id, sample_id, selected, _score, cost, djson in rows:
         d = json.loads(djson)
         candidates = d.get("candidates") or []
-        # 候选集 = 该 run 实际可竞争的模型（gate 实况）；weak 的分数从矩阵直查
-        models_in_cands = {c["model"] for c in candidates}
+        # 候选集 = 该 run 实际可竞争的模型（gate 实况）；分数从矩阵直查。
+        # 常量策略（Always*/BandOnly）无 candidates 字段 → 资格集退化为 {selected}。
+        models_in_cands = {c["model"] for c in candidates} or {selected}
         scores = {m: matrix.get((sample_id, m)) for m in (pool["weak"], pool["mid"], pool["strong"])}
         scores = {m: s for m, s in scores.items() if s is not None}
         if len(scores) < 3:
@@ -103,6 +105,8 @@ def diagnose_run(
         # Cost Regret：oracle-equivalent 集合内最小成本与实际成本之差
         equiv_min_cost = min(costs.get((sample_id, m), cost) for m in equiv)
         cost_regrets.append(max(0.0, cost - equiv_min_cost))
+        per_ds = per_dataset_counts.setdefault(dataset_id, {})
+        per_ds[cls] = per_ds.get(cls, 0) + 1
         if cls in ("blocked_weak", "missed_weak") and len(per_class_examples.get(cls, [])) < 3:
             per_class_examples.setdefault(cls, []).append(
                 {"dataset_id": dataset_id, "sample_id": sample_id, "band": d.get("band")}
@@ -120,6 +124,7 @@ def diagnose_run(
         "parameter": meta,
         "n": n,
         "error_counts": counts,
+        "per_dataset": {ds: dict(c) for ds, c in sorted(per_dataset_counts.items())},
         "weak_oracle_equivalent_total": weak_equiv_total,
         "weak_blocking_rate": round(blocking_rate, 4),
         "weak_recall": round(recall, 4) if recall is not None else None,
