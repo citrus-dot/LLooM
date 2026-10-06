@@ -1,0 +1,97 @@
+{
+  "selection_rule": "R4=max weak_oracle_share_mean；R5=max cost_ratio_geo（cheap_safe_mean≥0.70 守卫）；R6=max winner_entropy_mean；R7=max median(pool_score)（cross-dataset stability）；REF=max pool_score_mean；同名池去重顺延。全部 calibration-only（16-v3 §5.1/5.2）",
+  "min_datasets": 5,
+  "candidates_considered": 9,
+  "entrants": [
+    {
+      "name": "R4_weak_opportunity",
+      "pool": {
+        "weak": "claude_instant_v1",
+        "mid": "gpt_3_5_turbo_1106",
+        "strong": "zero_one_ai_yi_34b_chat"
+      },
+      "basis": {
+        "datasets": 5,
+        "pool_score_mean": 0.586,
+        "stability_median": 0.6148,
+        "weak_oracle_share_mean": 0.8583,
+        "cheap_safe_mean": 0.8667,
+        "winner_entropy_mean": 1.0842,
+        "oracle_gain_mean": 0.0083,
+        "cost_ratio_geo": 1.909
+      }
+    },
+    {
+      "name": "R5_cost_leverage",
+      "pool": {
+        "weak": "claude_instant_v1",
+        "mid": "claude_v2",
+        "strong": "gpt_4_1106_preview"
+      },
+      "basis": {
+        "datasets": 26,
+        "pool_score_mean": 0.6239,
+        "stability_median": 0.6421,
+        "weak_oracle_share_mean": 0.6889,
+        "cheap_safe_mean": 0.7323,
+        "winner_entropy_mean": 1.0197,
+        "oracle_gain_mean": 0.0399,
+        "cost_ratio_geo": 16.15
+      }
+    },
+    {
+      "name": "R6_diversity",
+      "pool": {
+        "weak": "claude_instant_v1",
+        "mid": "claude_v1",
+        "strong": "claude_v2"
+      },
+      "basis": {
+        "datasets": 17,
+        "pool_score_mean": 0.6975,
+        "stability_median": 0.7013,
+        "weak_oracle_share_mean": 0.7548,
+        "cheap_safe_mean": 0.8081,
+        "winner_entropy_mean": 1.0671,
+        "oracle_gain_mean": 0.0665,
+        "cost_ratio_geo": 12.3132
+      }
+    },
+    {
+      "name": "R7_stability",
+      "pool": {
+        "weak": "mistralai_mistral_7b_chat",
+        "mid": "wizardlm_wizardlm_13b_v1_2",
+        "strong": "zero_one_ai_yi_34b_chat"
+      },
+      "basis": {
+        "datasets": 25,
+        "pool_score_mean": 0.6438,
+        "stability_median": 0.6534,
+        "weak_oracle_share_mean": 0.811,
+        "cheap_safe_mean": 0.8604,
+        "winner_entropy_mean": 1.0421,
+        "oracle_gain_mean": 0.0508,
+        "cost_ratio_geo": 4.7983
+      }
+    },
+    {
+      "name": "REF_global_top",
+      "pool": {
+        "weak": "claude_instant_v1",
+        "mid": "claude_v1",
+        "strong": "gpt_4_1106_preview"
+      },
+      "basis": {
+        "datasets": 28,
+        "pool_score_mean": 0.6305,
+        "stability_median": 0.6339,
+        "weak_oracle_share_mean": 0.6696,
+        "cheap_safe_mean": 0.7365,
+        "winner_entropy_mean": 1.0264,
+        "oracle_gain_mean": 0.0534,
+        "cost_ratio_geo": 15.1916
+      }
+    }
+  ]
+}

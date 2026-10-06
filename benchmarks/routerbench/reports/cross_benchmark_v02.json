@@ -1,0 +1,392 @@
+{
+  "generated_at": "2026-10-06T13:52:40+00:00",
+  "llmrb_side": {
+    "benchmark_id": "lloom-routerbench-v0.2",
+    "pool": "R7_stability（deephermes-3-8b / r1-distill-qwen-7b / intern-s1-mini）",
+    "policy": "P2 softgate0",
+    "n_test": 12345,
+    "saving_vs_strong": 0.1346,
+    "retention_vs_strong": 1.0005,
+    "weak_precision_ci": {
+      "point": 0.786,
+      "ci95_low": 0.7629,
+      "ci95_high": 0.8086
+    },
+    "vs_cost_matched": {
+      "point": 0.0252,
+      "ci95_low": 0.0207,
+      "ci95_high": 0.0297
+    },
+    "vs_strong_share_matched": {
+      "point": 0.0114,
+      "ci95_low": 0.0075,
+      "ci95_high": 0.0153
+    },
+    "verdict": "weak rescue 显著成立（saving 13.5%、retention≈1、precision 78.6%、双 matched random CI 不含 0）"
+  },
+  "routerbench_side": {
+    "matrix": "RouterBench 0-shot（2024 世代 11 模型）",
+    "day8_core_test": {
+      "pool": "v0.1（mistral-7b / Yi-34B / GPT-4）",
+      "p2_saving": 0.3686,
+      "p2_retention": 0.9069,
+      "p2_quality": 0.69175,
+      "note": "P2 有 saving 36.9% 但 retention 90.7%（质量代价大）、weak precision 0.572（Day 8）"
+    },
+    "day14_tournament": {
+      "verdict": "全部 5 entrant 的 P0 ≡ BASE（weak share=0），P2 仅 easy 带（99 题）有变化",
+      "runs": [
+        {
+          "run_id": 100,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "gpt_3_5_turbo_1106",
+            "strong": "zero_one_ai_yi_34b_chat",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.6467843891713619,
+          "cost_mean": 0.0001871161192799234,
+          "selection_dist": {
+            "zero_one_ai_yi_34b_chat": 7277
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 101,
+          "strategy": "band_only",
+          "pool": {
+            "mid": "gpt_3_5_turbo_1106",
+            "strong": "zero_one_ai_yi_34b_chat",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.6486051944482617,
+          "cost_mean": 0.0001882366634602174,
+          "selection_dist": {
+            "gpt_3_5_turbo_1106": 99,
+            "zero_one_ai_yi_34b_chat": 7178
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 102,
+          "strategy": "always_strong",
+          "pool": {
+            "mid": "gpt_3_5_turbo_1106",
+            "strong": "zero_one_ai_yi_34b_chat",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.6467843891713619,
+          "cost_mean": 0.0001871161192799234,
+          "selection_dist": {
+            "zero_one_ai_yi_34b_chat": 7277
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 103,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "gpt_3_5_turbo_1106",
+            "strong": "zero_one_ai_yi_34b_chat",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.6467843891713619,
+          "cost_mean": 0.0001871161192799234,
+          "selection_dist": {
+            "zero_one_ai_yi_34b_chat": 7277
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 104,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "claude_v2",
+            "strong": "gpt_4_1106_preview",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.7824996564518347,
+          "cost_mean": 0.0033358169575374544,
+          "selection_dist": {
+            "gpt_4_1106_preview": 7277
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 105,
+          "strategy": "band_only",
+          "pool": {
+            "mid": "claude_v2",
+            "strong": "gpt_4_1106_preview",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.7815377215885668,
+          "cost_mean": 0.003297182905043293,
+          "selection_dist": {
+            "claude_v2": 99,
+            "gpt_4_1106_preview": 7178
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 106,
+          "strategy": "always_strong",
+          "pool": {
+            "mid": "claude_v2",
+            "strong": "gpt_4_1106_preview",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.7824996564518347,
+          "cost_mean": 0.0033358169575374544,
+          "selection_dist": {
+            "gpt_4_1106_preview": 7277
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 107,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "claude_v2",
+            "strong": "gpt_4_1106_preview",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.7808849800742065,
+          "cost_mean": 0.0032403731207915425,
+          "selection_dist": {
+            "claude_instant_v1": 99,
+            "gpt_4_1106_preview": 7178
+          },
+          "weak_share": 0.0136
+        },
+        {
+          "run_id": 108,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "claude_v1",
+            "strong": "claude_v2",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.6366359763638864,
+          "cost_mean": 0.0024266714305345625,
+          "selection_dist": {
+            "claude_v1": 99,
+            "claude_v2": 7178
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 109,
+          "strategy": "band_only",
+          "pool": {
+            "mid": "claude_v1",
+            "strong": "claude_v2",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.6366359763638864,
+          "cost_mean": 0.0024266714305345625,
+          "selection_dist": {
+            "claude_v1": 99,
+            "claude_v2": 7178
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 110,
+          "strategy": "always_strong",
+          "pool": {
+            "mid": "claude_v1",
+            "strong": "claude_v2",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.6370482341624297,
+          "cost_mean": 0.002443049608355098,
+          "selection_dist": {
+            "claude_v2": 7277
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 111,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "claude_v1",
+            "strong": "claude_v2",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.6363954926480694,
+          "cost_mean": 0.002386239824103338,
+          "selection_dist": {
+            "claude_instant_v1": 99,
+            "claude_v2": 7178
+          },
+          "weak_share": 0.0136
+        },
+        {
+          "run_id": 112,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "wizardlm_wizardlm_13b_v1_2",
+            "strong": "zero_one_ai_yi_34b_chat",
+            "weak": "mistralai_mistral_7b_chat"
+          },
+          "quality_mean": 0.645204067610279,
+          "cost_mean": 0.0001854453620997668,
+          "selection_dist": {
+            "wizardlm_wizardlm_13b_v1_2": 99,
+            "zero_one_ai_yi_34b_chat": 7178
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 113,
+          "strategy": "band_only",
+          "pool": {
+            "mid": "wizardlm_wizardlm_13b_v1_2",
+            "strong": "zero_one_ai_yi_34b_chat",
+            "weak": "mistralai_mistral_7b_chat"
+          },
+          "quality_mean": 0.645204067610279,
+          "cost_mean": 0.0001854453620997668,
+          "selection_dist": {
+            "wizardlm_wizardlm_13b_v1_2": 99,
+            "zero_one_ai_yi_34b_chat": 7178
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 114,
+          "strategy": "always_strong",
+          "pool": {
+            "mid": "wizardlm_wizardlm_13b_v1_2",
+            "strong": "zero_one_ai_yi_34b_chat",
+            "weak": "mistralai_mistral_7b_chat"
+          },
+          "quality_mean": 0.6467843891713619,
+          "cost_mean": 0.0001871161192799234,
+          "selection_dist": {
+            "zero_one_ai_yi_34b_chat": 7277
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 115,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "wizardlm_wizardlm_13b_v1_2",
+            "strong": "zero_one_ai_yi_34b_chat",
+            "weak": "mistralai_mistral_7b_chat"
+          },
+          "quality_mean": 0.6453414868764602,
+          "cost_mean": 0.00018513813384636555,
+          "selection_dist": {
+            "mistralai_mistral_7b_chat": 99,
+            "zero_one_ai_yi_34b_chat": 7178
+          },
+          "weak_share": 0.0136
+        },
+        {
+          "run_id": 116,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "claude_v1",
+            "strong": "gpt_4_1106_preview",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.7824996564518347,
+          "cost_mean": 0.0033358169575374544,
+          "selection_dist": {
+            "gpt_4_1106_preview": 7277
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 117,
+          "strategy": "band_only",
+          "pool": {
+            "mid": "claude_v1",
+            "strong": "gpt_4_1106_preview",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.7811254637900235,
+          "cost_mean": 0.0032808047272227647,
+          "selection_dist": {
+            "claude_v1": 99,
+            "gpt_4_1106_preview": 7178
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 118,
+          "strategy": "always_strong",
+          "pool": {
+            "mid": "claude_v1",
+            "strong": "gpt_4_1106_preview",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.7824996564518347,
+          "cost_mean": 0.0033358169575374544,
+          "selection_dist": {
+            "gpt_4_1106_preview": 7277
+          },
+          "weak_share": 0.0
+        },
+        {
+          "run_id": 119,
+          "strategy": "lloom",
+          "pool": {
+            "mid": "claude_v1",
+            "strong": "gpt_4_1106_preview",
+            "weak": "claude_instant_v1"
+          },
+          "quality_mean": 0.7808849800742065,
+          "cost_mean": 0.0032403731207915425,
+          "selection_dist": {
+            "claude_instant_v1": 99,
+            "gpt_4_1106_preview": 7178
+          },
+          "weak_share": 0.0136
+        }
+      ],
+      "structural_reason": "mistral-7b 质量先验 0.31 与 mid（Yi-34B）0.66 差距 0.35，cost 权重（等效单价差 ~4×）不足以翻转质量项——weak 放行也不被选"
+    },
+    "verdict": "weak rescue 不可行（弱模型质量先验过低；saving 头条无法在该矩阵产生）"
+  },
+  "direction_judgment": {
+    "mechanism_consistent": true,
+    "mechanism_evidence": [
+      "gate 因果链两源一致：RouterBench 100% Blocked（Day 8）/ llmrb 池覆盖过滤同构",
+      "P0≡P1（band 门槛主导）在两源的多个池上均成立",
+      "weak rescue 的可行性由『弱模型质量先验与 mid 的差距』决定——这是池属性，不是 router 属性"
+    ],
+    "magnitude_differs": true,
+    "magnitude_explanation": "RouterBench 2024 世代小模型（7B）与 mid 差距 0.35 → rescue 代价大（retention 90.7%）；llmrb 新世代高效小模型与 mid 差距小 → rescue 近乎免费（retention 100.05%）。两源结果不矛盾，是同一机制在不同模型代际上的不同表现"
+  },
+  "day15_native_checklist": {
+    "1_frozen_test_improvement_over_v0": {
+      "pass": true,
+      "evidence": "llmrb R7+P2 vs R7+P0：weak share 0→9.7%，cost −3.3%，quality 持平；vs 旧池 P2 precision 0.572→0.809"
+    },
+    "2_quality_retention_guardrail": {
+      "pass": true,
+      "evidence": "retention 100.05% CI [0.9957, 1.0052]（vs Always-Strong 无显著差）"
+    },
+    "3_cost_saving_material": {
+      "pass": true,
+      "evidence": "saving 13.46% CI [12.20, 14.73]（llmrb）；RouterBench 36.9%（有质量代价）"
+    },
+    "4_matched_random_beaten": {
+      "pass": true,
+      "evidence": "双 matched random 质量差 CI [2.07,2.97] / [0.75,1.53] 均不含 0"
+    },
+    "5_second_source_consistent": {
+      "pass": "partial",
+      "evidence": "机制方向一致（gate 因果/P0≡P1/池决定可行性）；幅度不同且 RouterBench 侧 rescue 不可行——属边界条件而非反证，但严格按 16-v3 §三十一字面为不满足"
+    }
+  },
+  "recommendation": {
+    "native": "hold（暂缓）",
+    "reason": "五条件 4/5 全过 + 1 项 partial。v0.2 headline（saving 13.5%、retention≈1、content-aware 实证）已足够支撑立项展示；Native（qwen3.6 池自采）的预期增益是验证『llmrb 结构可迁移到生产池』，属确认性实验而非新结论——建议挂起至立项材料需要生产池数字时再采（届时 2×2×50 sanity 起步）",
+    "routerbench_status": "Day 15 后转入 maintenance（16-v3 §二十三），资源切换 OrchestrationBench"
+  }
+}

@@ -1,0 +1,1903 @@
+{
+  "claude_instant_v1|claude_v1|claude_v2": {
+    "rb0shot_abstract2title_v1": {
+      "pool_score": 0.7071,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 10.388394635506572,
+      "n": 41
+    },
+    "rb0shot_bias_detection_v1": {
+      "pool_score": 0.9353,
+      "oracle_gain": 0.125,
+      "weak_oracle_share": 0.8571428571428571,
+      "cheap_safe": 0.8928571428571429,
+      "winner_entropy": 1.0984676022748046,
+      "cost_ratio": 16.237663376900503,
+      "n": 56
+    },
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.8291,
+      "oracle_gain": 0.19999999999999996,
+      "weak_oracle_share": 0.6,
+      "cheap_safe": 0.6,
+      "winner_entropy": 1.0608569471580214,
+      "cost_ratio": 12.89505428226779,
+      "n": 5
+    },
+    "rb0shot_chinese_ancient_poetry_v1": {
+      "pool_score": 0.6272,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.094780226007948,
+      "cost_ratio": 9.684579439252339,
+      "n": 6
+    },
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.6505,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.875,
+      "cheap_safe": 0.9583333333333334,
+      "winner_entropy": 1.0970628120114805,
+      "cost_ratio": 30.19152771518702,
+      "n": 24
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.4559,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0397207708399179,
+      "cost_ratio": 11.071428571428571,
+      "n": 2
+    },
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.1926,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": 0.6931471805599453,
+      "cost_ratio": 51.75675675675675,
+      "n": 1
+    },
+    "rb0shot_chinese_modern_poem_identification_v1": {
+      "pool_score": 0.6933,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 8.562874251497007,
+      "n": 1
+    },
+    "rb0shot_chinese_poem_v1": {
+      "pool_score": 0.6193,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.6666666666666666,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0789922078775833,
+      "cost_ratio": 9.51834862385321,
+      "n": 3
+    },
+    "rb0shot_chinese_remainder_theorem_v1": {
+      "pool_score": 0.6577,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 6.980991427506522,
+      "n": 3
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.7013,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 10.502092050209203,
+      "n": 5
+    },
+    "rb0shot_chinese_tang_poetries_v1": {
+      "pool_score": 0.7529,
+      "oracle_gain": 0.14285714285714285,
+      "weak_oracle_share": 0.7142857142857143,
+      "cheap_safe": 0.8571428571428571,
+      "winner_entropy": 1.0950778621205006,
+      "cost_ratio": 10.131868131868131,
+      "n": 7
+    },
+    "rb0shot_consensus_summary_v1": {
+      "pool_score": 0.836,
+      "oracle_gain": 0.17753623188405798,
+      "weak_oracle_share": 0.5652173913043478,
+      "cheap_safe": 0.6521739130434783,
+      "winner_entropy": 1.0954041286732956,
+      "cost_ratio": 13.006611631989841,
+      "n": 69
+    },
+    "rb0shot_gsm8k_v1": {
+      "pool_score": 0.6024,
+      "oracle_gain": 0.05781758957654726,
+      "weak_oracle_share": 0.7739413680781759,
+      "cheap_safe": 0.8123778501628665,
+      "winner_entropy": 1.0983238964463022,
+      "cost_ratio": 10.39499656749552,
+      "n": 1535
+    },
+    "rb0shot_hellaswag_v1": {
+      "pool_score": 0.9138,
+      "oracle_gain": 0.17742755465175397,
+      "weak_oracle_share": 0.7808845958312151,
+      "cheap_safe": 0.8276563294356889,
+      "winner_entropy": 1.0982604728303458,
+      "cost_ratio": 9.965156712172252,
+      "n": 1967
+    },
+    "rb0shot_mbpp_v1": {
+      "pool_score": 0.9293,
+      "oracle_gain": 0.15384615384615385,
+      "weak_oracle_share": 0.8205128205128205,
+      "cheap_safe": 0.9102564102564102,
+      "winner_entropy": 1.098533390092057,
+      "cost_ratio": 11.563330199861038,
+      "n": 78
+    },
+    "rb0shot_mmlu_v1": {
+      "pool_score": 0.7542,
+      "oracle_gain": 0.0956146657081236,
+      "weak_oracle_share": 0.8447160316319194,
+      "cheap_safe": 0.8936017253774263,
+      "winner_entropy": 1.0982235497752213,
+      "cost_ratio": 10.000751943774658,
+      "n": 2782
+    }
+  },
+  "claude_instant_v1|claude_v1|gpt_4_1106_preview": {
+    "rb0shot_abstract2title_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 12.051852343646264,
+      "n": 41
+    },
+    "rb0shot_accounting_audit_v1": {
+      "pool_score": 0.5301,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.6,
+      "cheap_safe": 0.6,
+      "winner_entropy": 1.0670895187820832,
+      "cost_ratio": 12.328767123287674,
+      "n": 5
+    },
+    "rb0shot_arc_v1": {
+      "pool_score": 0.6284,
+      "oracle_gain": 0.013114754098360715,
+      "weak_oracle_share": 0.780327868852459,
+      "cheap_safe": 0.7836065573770492,
+      "winner_entropy": 1.0938861822498704,
+      "cost_ratio": 12.639510944159502,
+      "n": 305
+    },
+    "rb0shot_bias_detection_v1": {
+      "pool_score": 0.9487,
+      "oracle_gain": 0.125,
+      "weak_oracle_share": 0.8214285714285714,
+      "cheap_safe": 0.8928571428571429,
+      "winner_entropy": 1.0982662398104732,
+      "cost_ratio": 26.577087223259532,
+      "n": 56
+    },
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.5712,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8,
+      "cheap_safe": 0.8,
+      "winner_entropy": 1.0775563270668007,
+      "cost_ratio": 4.357659831121833,
+      "n": 5
+    },
+    "rb0shot_chinese_ancient_poetry_v1": {
+      "pool_score": 0.6392,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.094780226007948,
+      "cost_ratio": 12.19334112149533,
+      "n": 6
+    },
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.9374,
+      "oracle_gain": 0.08333333333333334,
+      "weak_oracle_share": 0.7916666666666666,
+      "cheap_safe": 0.875,
+      "winner_entropy": 1.0963060192180683,
+      "cost_ratio": 68.60635421360973,
+      "n": 24
+    },
+    "rb0shot_chinese_chu_ci_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 12.5,
+      "n": 1
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 20.08928571428571,
+      "n": 2
+    },
+    "rb0shot_chinese_hard_translations_v1": {
+      "pool_score": 0.581,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0397207708399179,
+      "cost_ratio": 12.188796680497925,
+      "n": 2
+    },
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.9148,
+      "oracle_gain": 0.4,
+      "weak_oracle_share": 0.6,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 12.500000000000002,
+      "n": 5
+    },
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.204,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": 0.6931471805599453,
+      "cost_ratio": 75.8445945945946,
+      "n": 1
+    },
+    "rb0shot_chinese_lantern_riddles_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 25.448759791122715,
+      "n": 4
+    },
+    "rb0shot_chinese_modern_poem_identification_v1": {
+      "pool_score": 0.1,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 12.724550898203592,
+      "n": 1
+    },
+    "rb0shot_chinese_poem_v1": {
+      "pool_score": 0.6285,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.6666666666666666,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0789922078775833,
+      "cost_ratio": 11.295871559633026,
+      "n": 3
+    },
+    "rb0shot_chinese_remainder_theorem_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 18.496086470368986,
+      "n": 3
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.6239,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8,
+      "cheap_safe": 0.8,
+      "winner_entropy": 1.0928305535284886,
+      "cost_ratio": 13.755230125523015,
+      "n": 5
+    },
+    "rb0shot_chinese_song_ci_v1": {
+      "pool_score": 0.3925,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.3333333333333333,
+      "cheap_safe": 0.3333333333333333,
+      "winner_entropy": 0.9502705392332347,
+      "cost_ratio": 11.264970059880238,
+      "n": 6
+    },
+    "rb0shot_chinese_tang_poetries_v1": {
+      "pool_score": 0.7643,
+      "oracle_gain": 0.14285714285714285,
+      "weak_oracle_share": 0.7142857142857143,
+      "cheap_safe": 0.8571428571428571,
+      "winner_entropy": 1.0950778621205006,
+      "cost_ratio": 12.747252747252746,
+      "n": 7
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "pool_score": 0.5911,
+      "oracle_gain": 0.07058823529411762,
+      "weak_oracle_share": 0.35294117647058826,
+      "cheap_safe": 0.4235294117647059,
+      "winner_entropy": 1.0299994514432782,
+      "cost_ratio": 12.500000000000002,
+      "n": 85
+    },
+    "rb0shot_consensus_summary_v1": {
+      "pool_score": 0.6826,
+      "oracle_gain": 0.11956521739130432,
+      "weak_oracle_share": 0.6811594202898551,
+      "cheap_safe": 0.782608695652174,
+      "winner_entropy": 1.0851178703660982,
+      "cost_ratio": 10.793862761943895,
+      "n": 69
+    },
+    "rb0shot_gsm8k_v1": {
+      "pool_score": 0.6618,
+      "oracle_gain": 0.06661237785016294,
+      "weak_oracle_share": 0.7537459283387622,
+      "cheap_safe": 0.7798045602605863,
+      "winner_entropy": 1.0985149390222915,
+      "cost_ratio": 14.715369596034344,
+      "n": 1535
+    },
+    "rb0shot_hellaswag_v1": {
+      "pool_score": 0.5752,
+      "oracle_gain": 0.061514997458057996,
+      "weak_oracle_share": 0.6868327402135231,
+      "cheap_safe": 0.7025927808845959,
+      "winner_entropy": 1.0868183536475664,
+      "cost_ratio": 12.520449185691591,
+      "n": 1967
+    },
+    "rb0shot_mbpp_v1": {
+      "pool_score": 0.7858,
+      "oracle_gain": 0.10256410256410253,
+      "weak_oracle_share": 0.8076923076923077,
+      "cheap_safe": 0.8461538461538461,
+      "winner_entropy": 1.0975150381738226,
+      "cost_ratio": 19.361793436056733,
+      "n": 78
+    },
+    "rb0shot_mmlu_v1": {
+      "pool_score": 0.6002,
+      "oracle_gain": 0.0632638389647735,
+      "weak_oracle_share": 0.7189072609633357,
+      "cheap_safe": 0.732566498921639,
+      "winner_entropy": 1.092296340460983,
+      "cost_ratio": 12.555173874465492,
+      "n": 2782
+    },
+    "rb0shot_mt_bench_v1": {
+      "pool_score": 0.708,
+      "oracle_gain": 0.18125000000000002,
+      "weak_oracle_share": 0.3125,
+      "cheap_safe": 0.375,
+      "winner_entropy": 1.0327438135557083,
+      "cost_ratio": 21.194605009633907,
+      "n": 16
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.433,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 10.445205479452055,
+      "n": 2
+    },
+    "rb0shot_winogrande_v1": {
+      "pool_score": 0.578,
+      "oracle_gain": 0.06513409961685823,
+      "weak_oracle_share": 0.6934865900383141,
+      "cheap_safe": 0.7049808429118773,
+      "winner_entropy": 1.0906300642815596,
+      "cost_ratio": 12.881131241714534,
+      "n": 261
+    }
+  },
+  "claude_instant_v1|claude_v2|gpt_4_1106_preview": {
+    "rb0shot_abstract2title_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 12.051852343646264,
+      "n": 41
+    },
+    "rb0shot_accounting_audit_v1": {
+      "pool_score": 0.5301,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.6,
+      "cheap_safe": 0.6,
+      "winner_entropy": 1.0670895187820832,
+      "cost_ratio": 12.328767123287674,
+      "n": 5
+    },
+    "rb0shot_arc_v1": {
+      "pool_score": 0.6284,
+      "oracle_gain": 0.013114754098360715,
+      "weak_oracle_share": 0.780327868852459,
+      "cheap_safe": 0.7836065573770492,
+      "winner_entropy": 1.0940490961854261,
+      "cost_ratio": 12.639510944159502,
+      "n": 305
+    },
+    "rb0shot_bias_detection_v1": {
+      "pool_score": 0.8376,
+      "oracle_gain": 0.0892857142857143,
+      "weak_oracle_share": 0.8571428571428571,
+      "cheap_safe": 0.8928571428571429,
+      "winner_entropy": 1.098005984222774,
+      "cost_ratio": 26.577087223259532,
+      "n": 56
+    },
+    "rb0shot_chinese_ancient_poetry_v1": {
+      "pool_score": 0.6393,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.0950778621205006,
+      "cost_ratio": 12.19334112149533,
+      "n": 6
+    },
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.7979,
+      "oracle_gain": 0.04166666666666666,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.875,
+      "winner_entropy": 1.0969145891465133,
+      "cost_ratio": 68.60635421360973,
+      "n": 24
+    },
+    "rb0shot_chinese_chu_ci_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 12.5,
+      "n": 1
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.581,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0397207708399179,
+      "cost_ratio": 20.08928571428571,
+      "n": 2
+    },
+    "rb0shot_chinese_hard_translations_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 12.188796680497925,
+      "n": 2
+    },
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.714,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0933747175566468,
+      "cost_ratio": 12.500000000000002,
+      "n": 5
+    },
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.204,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": 0.6931471805599453,
+      "cost_ratio": 75.8445945945946,
+      "n": 1
+    },
+    "rb0shot_chinese_lantern_riddles_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 25.448759791122715,
+      "n": 4
+    },
+    "rb0shot_chinese_modern_poem_identification_v1": {
+      "pool_score": 0.1,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 12.724550898203592,
+      "n": 1
+    },
+    "rb0shot_chinese_poem_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 11.295871559633026,
+      "n": 3
+    },
+    "rb0shot_chinese_remainder_theorem_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 18.496086470368986,
+      "n": 3
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.6239,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8,
+      "cheap_safe": 0.8,
+      "winner_entropy": 1.0928305535284886,
+      "cost_ratio": 13.755230125523015,
+      "n": 5
+    },
+    "rb0shot_chinese_song_ci_v1": {
+      "pool_score": 0.6434,
+      "oracle_gain": 0.16666666666666663,
+      "weak_oracle_share": 0.16666666666666666,
+      "cheap_safe": 0.3333333333333333,
+      "winner_entropy": 0.9002560512685369,
+      "cost_ratio": 11.264970059880238,
+      "n": 6
+    },
+    "rb0shot_chinese_tang_poetries_v1": {
+      "pool_score": 0.7643,
+      "oracle_gain": 0.14285714285714285,
+      "weak_oracle_share": 0.7142857142857143,
+      "cheap_safe": 0.8571428571428571,
+      "winner_entropy": 1.0950778621205006,
+      "cost_ratio": 12.747252747252746,
+      "n": 7
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "pool_score": 0.542,
+      "oracle_gain": 0.04705882352941171,
+      "weak_oracle_share": 0.3764705882352941,
+      "cheap_safe": 0.4235294117647059,
+      "winner_entropy": 1.0275436262165278,
+      "cost_ratio": 12.500000000000002,
+      "n": 85
+    },
+    "rb0shot_gsm8k_v1": {
+      "pool_score": 0.6672,
+      "oracle_gain": 0.0675895765472313,
+      "weak_oracle_share": 0.752442996742671,
+      "cheap_safe": 0.7798045602605863,
+      "winner_entropy": 1.0981785088092126,
+      "cost_ratio": 14.715369596034344,
+      "n": 1535
+    },
+    "rb0shot_hellaswag_v1": {
+      "pool_score": 0.6005,
+      "oracle_gain": 0.07219115404168785,
+      "weak_oracle_share": 0.6761565836298933,
+      "cheap_safe": 0.7025927808845959,
+      "winner_entropy": 1.0887445241575424,
+      "cost_ratio": 12.520449185691591,
+      "n": 1967
+    },
+    "rb0shot_mbpp_v1": {
+      "pool_score": 0.7858,
+      "oracle_gain": 0.10256410256410253,
+      "weak_oracle_share": 0.8076923076923077,
+      "cheap_safe": 0.8461538461538461,
+      "winner_entropy": 1.0976239637786862,
+      "cost_ratio": 19.361793436056733,
+      "n": 78
+    },
+    "rb0shot_mmlu_v1": {
+      "pool_score": 0.6094,
+      "oracle_gain": 0.06649892163910853,
+      "weak_oracle_share": 0.7156721782890008,
+      "cheap_safe": 0.732566498921639,
+      "winner_entropy": 1.0914268444179636,
+      "cost_ratio": 12.555173874465492,
+      "n": 2782
+    },
+    "rb0shot_mt_bench_v1": {
+      "pool_score": 0.6408,
+      "oracle_gain": 0.15625,
+      "weak_oracle_share": 0.3125,
+      "cheap_safe": 0.375,
+      "winner_entropy": 1.0054668293254954,
+      "cost_ratio": 21.194605009633907,
+      "n": 16
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.433,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 10.445205479452055,
+      "n": 2
+    },
+    "rb0shot_winogrande_v1": {
+      "pool_score": 0.5903,
+      "oracle_gain": 0.07279693486590044,
+      "weak_oracle_share": 0.685823754789272,
+      "cheap_safe": 0.7049808429118773,
+      "winner_entropy": 1.0906345601430287,
+      "cost_ratio": 12.881131241714534,
+      "n": 261
+    }
+  },
+  "claude_instant_v1|gpt_3_5_turbo_1106|gpt_4_1106_preview": {
+    "rb0shot_abstract2title_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 12.051852343646264,
+      "n": 41
+    },
+    "rb0shot_accounting_audit_v1": {
+      "pool_score": 0.5316,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.6,
+      "cheap_safe": 0.6,
+      "winner_entropy": 1.0775563270668007,
+      "cost_ratio": 12.328767123287674,
+      "n": 5
+    },
+    "rb0shot_arc_v1": {
+      "pool_score": 0.6166,
+      "oracle_gain": 0.00983606557377048,
+      "weak_oracle_share": 0.7836065573770492,
+      "cheap_safe": 0.7836065573770492,
+      "winner_entropy": 1.0934924174097247,
+      "cost_ratio": 12.639510944159502,
+      "n": 305
+    },
+    "rb0shot_bias_detection_v1": {
+      "pool_score": 0.9485,
+      "oracle_gain": 0.125,
+      "weak_oracle_share": 0.8214285714285714,
+      "cheap_safe": 0.8928571428571429,
+      "winner_entropy": 1.0971935125431302,
+      "cost_ratio": 26.577087223259532,
+      "n": 56
+    },
+    "rb0shot_chinese_ancient_poetry_v1": {
+      "pool_score": 0.6392,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.094780226007948,
+      "cost_ratio": 12.19334112149533,
+      "n": 6
+    },
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.7979,
+      "oracle_gain": 0.04166666666666666,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.875,
+      "winner_entropy": 1.0969145891465133,
+      "cost_ratio": 68.60635421360973,
+      "n": 24
+    },
+    "rb0shot_chinese_chu_ci_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 12.5,
+      "n": 1
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 20.08928571428571,
+      "n": 2
+    },
+    "rb0shot_chinese_hard_translations_v1": {
+      "pool_score": 0.581,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0397207708399179,
+      "cost_ratio": 12.188796680497925,
+      "n": 2
+    },
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 12.500000000000002,
+      "n": 5
+    },
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.1,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 75.8445945945946,
+      "n": 1
+    },
+    "rb0shot_chinese_lantern_riddles_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 25.448759791122715,
+      "n": 4
+    },
+    "rb0shot_chinese_modern_poem_identification_v1": {
+      "pool_score": 0.1,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 12.724550898203592,
+      "n": 1
+    },
+    "rb0shot_chinese_poem_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 11.295871559633026,
+      "n": 3
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.6239,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8,
+      "cheap_safe": 0.8,
+      "winner_entropy": 1.0928305535284886,
+      "cost_ratio": 13.755230125523015,
+      "n": 5
+    },
+    "rb0shot_chinese_song_ci_v1": {
+      "pool_score": 0.6489,
+      "oracle_gain": 0.16666666666666663,
+      "weak_oracle_share": 0.16666666666666666,
+      "cheap_safe": 0.3333333333333333,
+      "winner_entropy": 0.9368883075390159,
+      "cost_ratio": 11.264970059880238,
+      "n": 6
+    },
+    "rb0shot_chinese_tang_poetries_v1": {
+      "pool_score": 0.6501,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8571428571428571,
+      "cheap_safe": 0.8571428571428571,
+      "winner_entropy": 1.0958871542125534,
+      "cost_ratio": 12.747252747252746,
+      "n": 7
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "pool_score": 0.7102,
+      "oracle_gain": 0.12941176470588234,
+      "weak_oracle_share": 0.29411764705882354,
+      "cheap_safe": 0.4235294117647059,
+      "winner_entropy": 1.0131291587587097,
+      "cost_ratio": 12.500000000000002,
+      "n": 85
+    },
+    "rb0shot_hellaswag_v1": {
+      "pool_score": 0.6381,
+      "oracle_gain": 0.08845958312150481,
+      "weak_oracle_share": 0.6598881545500762,
+      "cheap_safe": 0.7025927808845959,
+      "winner_entropy": 1.0856355242983047,
+      "cost_ratio": 12.520449185691591,
+      "n": 1967
+    },
+    "rb0shot_mmlu_v1": {
+      "pool_score": 0.6291,
+      "oracle_gain": 0.07332854061826022,
+      "weak_oracle_share": 0.7088425593098491,
+      "cheap_safe": 0.732566498921639,
+      "winner_entropy": 1.0918450631748553,
+      "cost_ratio": 12.555173874465492,
+      "n": 2782
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.433,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 10.445205479452055,
+      "n": 2
+    },
+    "rb0shot_winogrande_v1": {
+      "pool_score": 0.5959,
+      "oracle_gain": 0.07662835249042155,
+      "weak_oracle_share": 0.6819923371647509,
+      "cheap_safe": 0.7049808429118773,
+      "winner_entropy": 1.0861937215011315,
+      "cost_ratio": 12.881131241714534,
+      "n": 261
+    }
+  },
+  "claude_instant_v1|gpt_3_5_turbo_1106|meta_llama_2_70b_chat": {
+    "rb0shot_abstract2title_v1": {
+      "pool_score": 0.618,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0985449165831689,
+      "cost_ratio": 1.3518374053910502,
+      "n": 41
+    },
+    "rb0shot_accounting_audit_v1": {
+      "pool_score": 0.7961,
+      "oracle_gain": 0.20000000000000007,
+      "weak_oracle_share": 0.6,
+      "cheap_safe": 1.0,
+      "winner_entropy": 0.9743147528693494,
+      "cost_ratio": 1.3202054794520548,
+      "n": 5
+    },
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.6047,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.9583333333333334,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0984091583194793,
+      "cost_ratio": 1.6545459666516444,
+      "n": 24
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.6216,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.6473214285714286,
+      "n": 2
+    },
+    "rb0shot_chinese_hard_translations_v1": {
+      "pool_score": 0.481,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0397207708399179,
+      "cost_ratio": 1.6524896265560167,
+      "n": 2
+    },
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.6223,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0733942812811266,
+      "cost_ratio": 2.1816702819956615,
+      "n": 5
+    },
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.01,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 2.9645270270270268,
+      "n": 1
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.6167,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.419194560669456,
+      "n": 5
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "pool_score": 0.4983,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5411764705882353,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0471330807375263,
+      "cost_ratio": 1.3231507968941563,
+      "n": 85
+    }
+  },
+  "claude_v1|claude_v2|gpt_4_1106_preview": {
+    "rb0shot_abstract2title_v1": {
+      "pool_score": 0.6148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.2202541005646683,
+      "n": 41
+    },
+    "rb0shot_bias_detection_v1": {
+      "pool_score": 0.7904,
+      "oracle_gain": 0.10714285714285715,
+      "weak_oracle_share": 0.8571428571428571,
+      "cheap_safe": 0.8571428571428571,
+      "winner_entropy": 1.0980334173990254,
+      "cost_ratio": 2.3482795192081074,
+      "n": 56
+    },
+    "rb0shot_chinese_ancient_poetry_v1": {
+      "pool_score": 0.5393,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.0950778621205006,
+      "cost_ratio": 1.2728658536585367,
+      "n": 6
+    },
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.8929,
+      "oracle_gain": 0.08333333333333334,
+      "weak_oracle_share": 0.9166666666666666,
+      "cheap_safe": 0.9166666666666666,
+      "winner_entropy": 1.0976250611902076,
+      "cost_ratio": 3.3917232928595307,
+      "n": 24
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.4935,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0397207708399179,
+      "cost_ratio": 2.008928571428571,
+      "n": 2
+    },
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.6161,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.9762323943661975,
+      "n": 1
+    },
+    "rb0shot_chinese_modern_poem_identification_v1": {
+      "pool_score": 0.0,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 1.551094890510949,
+      "n": 1
+    },
+    "rb0shot_chinese_poem_v1": {
+      "pool_score": 0.6118,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0789922078775833,
+      "cost_ratio": 1.2693298969072164,
+      "n": 3
+    },
+    "rb0shot_chinese_remainder_theorem_v1": {
+      "pool_score": 0.6148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 3.078473945409429,
+      "n": 3
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.5239,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8,
+      "cheap_safe": 0.8,
+      "winner_entropy": 1.0928305535284886,
+      "cost_ratio": 1.333671399594321,
+      "n": 5
+    },
+    "rb0shot_chinese_tang_poetries_v1": {
+      "pool_score": 0.8177,
+      "oracle_gain": 0.2857142857142857,
+      "weak_oracle_share": 0.7142857142857143,
+      "cheap_safe": 0.8571428571428571,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.2747252747252746,
+      "n": 7
+    },
+    "rb0shot_gsm8k_v1": {
+      "pool_score": 0.5733,
+      "oracle_gain": 0.06644951140065147,
+      "weak_oracle_share": 0.7778501628664495,
+      "cheap_safe": 0.8123778501628665,
+      "winner_entropy": 1.0983087185011478,
+      "cost_ratio": 1.7272713002255211,
+      "n": 1535
+    },
+    "rb0shot_hellaswag_v1": {
+      "pool_score": 0.4906,
+      "oracle_gain": 0.0686324351804779,
+      "weak_oracle_share": 0.6741230299949161,
+      "cheap_safe": 0.7020843924758515,
+      "winner_entropy": 1.0884801402455433,
+      "cost_ratio": 1.2571642576430602,
+      "n": 1967
+    },
+    "rb0shot_mbpp_v1": {
+      "pool_score": 0.8057,
+      "oracle_gain": 0.14102564102564097,
+      "weak_oracle_share": 0.782051282051282,
+      "cheap_safe": 0.8461538461538461,
+      "winner_entropy": 1.0977606874943682,
+      "cost_ratio": 2.2530438504708457,
+      "n": 78
+    },
+    "rb0shot_mmlu_v1": {
+      "pool_score": 0.5192,
+      "oracle_gain": 0.06002875629043847,
+      "weak_oracle_share": 0.7818116462976276,
+      "cheap_safe": 0.798705966930266,
+      "winner_entropy": 1.0936316131126063,
+      "cost_ratio": 1.2555645931455242,
+      "n": 2782
+    }
+  },
+  "mistralai_mistral_7b_chat|mistralai_mixtral_8x7b_chat|zero_one_ai_yi_34b_chat": {
+    "rb0shot_abstract2title_v1": {
+      "pool_score": 0.6615,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 4.078451349974529,
+      "n": 41
+    },
+    "rb0shot_accounting_audit_v1": {
+      "pool_score": 0.5426,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.6,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0296530140645737,
+      "cost_ratio": 3.521608040201005,
+      "n": 5
+    },
+    "rb0shot_arc_v1": {
+      "pool_score": 0.6564,
+      "oracle_gain": 0.08852459016393444,
+      "weak_oracle_share": 0.4262295081967213,
+      "cheap_safe": 0.46229508196721314,
+      "winner_entropy": 1.0490811558101811,
+      "cost_ratio": 3.95645821157218,
+      "n": 305
+    },
+    "rb0shot_bias_detection_v1": {
+      "pool_score": 0.6417,
+      "oracle_gain": 0.05357142857142855,
+      "weak_oracle_share": 0.8035714285714286,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0928786943335447,
+      "cost_ratio": 3.7840235046288595,
+      "n": 56
+    },
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.7009,
+      "oracle_gain": 0.041666666666666685,
+      "weak_oracle_share": 0.7916666666666666,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.0952738521158556,
+      "cost_ratio": 4.393592677345537,
+      "n": 24
+    },
+    "rb0shot_chinese_chu_ci_v1": {
+      "pool_score": 0.45,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 4.7164179104477615,
+      "n": 1
+    },
+    "rb0shot_chinese_hard_translations_v1": {
+      "pool_score": 0.6479,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0397207708399179,
+      "cost_ratio": 4.197802197802198,
+      "n": 2
+    },
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.6113,
+      "oracle_gain": 0.19999999999999996,
+      "weak_oracle_share": 0.4,
+      "cheap_safe": 1.0,
+      "winner_entropy": 0.6365141682948128,
+      "cost_ratio": 6.73170731707317,
+      "n": 5
+    },
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.0104,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 3.0109890109890114,
+      "n": 1
+    },
+    "rb0shot_chinese_lantern_riddles_v1": {
+      "pool_score": 0.5008,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.75,
+      "cheap_safe": 0.75,
+      "winner_entropy": 1.0888999753452238,
+      "cost_ratio": 6.481437125748504,
+      "n": 4
+    },
+    "rb0shot_chinese_modern_poem_identification_v1": {
+      "pool_score": 0.659,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 4.372093023255814,
+      "n": 1
+    },
+    "rb0shot_chinese_poem_v1": {
+      "pool_score": 0.6655,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 4.343163538873995,
+      "n": 3
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.6781,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 6.50126582278481,
+      "n": 5
+    },
+    "rb0shot_chinese_tang_poetries_v1": {
+      "pool_score": 0.6636,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 4.320802005012531,
+      "n": 7
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "pool_score": 0.6356,
+      "oracle_gain": 0.03529411764705881,
+      "weak_oracle_share": 0.6,
+      "cheap_safe": 0.9764705882352941,
+      "winner_entropy": 1.0702772139560839,
+      "cost_ratio": 4.0939881456392895,
+      "n": 85
+    },
+    "rb0shot_consensus_summary_v1": {
+      "pool_score": 0.4952,
+      "oracle_gain": 0.08695652173913049,
+      "weak_oracle_share": 0.6956521739130435,
+      "cheap_safe": 0.782608695652174,
+      "winner_entropy": 1.098564834457966,
+      "cost_ratio": 3.445894480272179,
+      "n": 69
+    },
+    "rb0shot_gsm8k_v1": {
+      "pool_score": 0.7197,
+      "oracle_gain": 0.10798045602605866,
+      "weak_oracle_share": 0.43713355048859937,
+      "cheap_safe": 0.5609120521172638,
+      "winner_entropy": 1.0763295309072674,
+      "cost_ratio": 4.193176735983169,
+      "n": 1535
+    },
+    "rb0shot_hellaswag_v1": {
+      "pool_score": 0.4691,
+      "oracle_gain": 0.08693441789527201,
+      "weak_oracle_share": 0.4255210981189629,
+      "cheap_safe": 0.4758515505846467,
+      "winner_entropy": 1.0500437308167971,
+      "cost_ratio": 3.9816998818732614,
+      "n": 1967
+    },
+    "rb0shot_mbpp_v1": {
+      "pool_score": 0.5335,
+      "oracle_gain": 0.05128205128205132,
+      "weak_oracle_share": 0.6666666666666666,
+      "cheap_safe": 0.8205128205128205,
+      "winner_entropy": 1.0877060983011344,
+      "cost_ratio": 4.637331515183299,
+      "n": 78
+    },
+    "rb0shot_mmlu_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.15564342199856218,
+      "weak_oracle_share": 0.4421279654924515,
+      "cheap_safe": 0.5100647016534867,
+      "winner_entropy": 1.0613527058013632,
+      "cost_ratio": 3.9850366511177073,
+      "n": 2782
+    },
+    "rb0shot_mt_bench_v1": {
+      "pool_score": 0.5529,
+      "oracle_gain": 0.10624999999999996,
+      "weak_oracle_share": 0.5625,
+      "cheap_safe": 0.6875,
+      "winner_entropy": 1.0952733774372052,
+      "cost_ratio": 6.282332050902634,
+      "n": 16
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.7148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 38.57142857142857,
+      "n": 2
+    },
+    "rb0shot_winogrande_v1": {
+      "pool_score": 0.6886,
+      "oracle_gain": 0.15325670498084287,
+      "weak_oracle_share": 0.7854406130268199,
+      "cheap_safe": 0.8160919540229885,
+      "winner_entropy": 1.098117456092535,
+      "cost_ratio": 3.950398316548925,
+      "n": 261
+    }
+  },
+  "mistralai_mistral_7b_chat|wizardlm_wizardlm_13b_v1_2|zero_one_ai_yi_34b_chat": {
+    "rb0shot_abstract2title_v1": {
+      "pool_score": 0.6615,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 4.078451349974529,
+      "n": 41
+    },
+    "rb0shot_accounting_audit_v1": {
+      "pool_score": 0.9017,
+      "oracle_gain": 0.2,
+      "weak_oracle_share": 0.8,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0900596587107838,
+      "cost_ratio": 3.521608040201005,
+      "n": 5
+    },
+    "rb0shot_arc_v1": {
+      "pool_score": 0.6455,
+      "oracle_gain": 0.0852459016393442,
+      "weak_oracle_share": 0.42950819672131146,
+      "cheap_safe": 0.46229508196721314,
+      "winner_entropy": 1.0542511400949395,
+      "cost_ratio": 3.95645821157218,
+      "n": 305
+    },
+    "rb0shot_bias_detection_v1": {
+      "pool_score": 0.5722,
+      "oracle_gain": 0.035714285714285754,
+      "weak_oracle_share": 0.7678571428571429,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0890104174393593,
+      "cost_ratio": 3.7840235046288595,
+      "n": 56
+    },
+    "rb0shot_chinese_ancient_poetry_v1": {
+      "pool_score": 0.5739,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.094780226007948,
+      "cost_ratio": 3.1817192600652895,
+      "n": 6
+    },
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.5612,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.094780226007948,
+      "cost_ratio": 4.393592677345537,
+      "n": 24
+    },
+    "rb0shot_chinese_chu_ci_v1": {
+      "pool_score": 0.45,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 4.7164179104477615,
+      "n": 1
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.6534,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 4.367346938775511,
+      "n": 2
+    },
+    "rb0shot_chinese_hard_translations_v1": {
+      "pool_score": 0.6502,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 4.197802197802198,
+      "n": 2
+    },
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.6768,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0733942812811266,
+      "cost_ratio": 6.73170731707317,
+      "n": 5
+    },
+    "rb0shot_chinese_lantern_riddles_v1": {
+      "pool_score": 0.5008,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.75,
+      "cheap_safe": 0.75,
+      "winner_entropy": 1.0888999753452238,
+      "cost_ratio": 6.481437125748504,
+      "n": 4
+    },
+    "rb0shot_chinese_modern_poem_identification_v1": {
+      "pool_score": 0.659,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 4.372093023255814,
+      "n": 1
+    },
+    "rb0shot_chinese_poem_v1": {
+      "pool_score": 0.6655,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 4.343163538873995,
+      "n": 3
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.6781,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 6.50126582278481,
+      "n": 5
+    },
+    "rb0shot_chinese_song_ci_v1": {
+      "pool_score": 0.5726,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.094780226007948,
+      "cost_ratio": 4.223255813953489,
+      "n": 6
+    },
+    "rb0shot_chinese_tang_poetries_v1": {
+      "pool_score": 0.6636,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 4.320802005012531,
+      "n": 7
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "pool_score": 0.7862,
+      "oracle_gain": 0.07058823529411765,
+      "weak_oracle_share": 0.8588235294117647,
+      "cheap_safe": 0.9764705882352941,
+      "winner_entropy": 1.0977626584716325,
+      "cost_ratio": 4.0939881456392895,
+      "n": 85
+    },
+    "rb0shot_consensus_summary_v1": {
+      "pool_score": 0.6523,
+      "oracle_gain": 0.1376811594202898,
+      "weak_oracle_share": 0.6521739130434783,
+      "cheap_safe": 0.782608695652174,
+      "winner_entropy": 1.0984001859762889,
+      "cost_ratio": 3.445894480272179,
+      "n": 69
+    },
+    "rb0shot_gsm8k_v1": {
+      "pool_score": 0.6311,
+      "oracle_gain": 0.09234527687296423,
+      "weak_oracle_share": 0.4560260586319218,
+      "cheap_safe": 0.5609120521172638,
+      "winner_entropy": 1.0776315708146953,
+      "cost_ratio": 4.193176735983169,
+      "n": 1535
+    },
+    "rb0shot_hellaswag_v1": {
+      "pool_score": 0.4114,
+      "oracle_gain": 0.06253177427554657,
+      "weak_oracle_share": 0.4499237417386884,
+      "cheap_safe": 0.4758515505846467,
+      "winner_entropy": 1.0462205487082008,
+      "cost_ratio": 3.9816998818732614,
+      "n": 1967
+    },
+    "rb0shot_mbpp_v1": {
+      "pool_score": 0.8232,
+      "oracle_gain": 0.14102564102564097,
+      "weak_oracle_share": 0.7692307692307693,
+      "cheap_safe": 0.8205128205128205,
+      "winner_entropy": 1.0975279086823067,
+      "cost_ratio": 4.637331515183299,
+      "n": 78
+    },
+    "rb0shot_mmlu_v1": {
+      "pool_score": 0.7165,
+      "oracle_gain": 0.1560028756290438,
+      "weak_oracle_share": 0.4417685118619698,
+      "cheap_safe": 0.5100647016534867,
+      "winner_entropy": 1.065388541694435,
+      "cost_ratio": 3.9850366511177073,
+      "n": 2782
+    },
+    "rb0shot_mt_bench_v1": {
+      "pool_score": 0.4733,
+      "oracle_gain": 0.0625,
+      "weak_oracle_share": 0.6875,
+      "cheap_safe": 0.6875,
+      "winner_entropy": 1.0926240370360876,
+      "cost_ratio": 6.282332050902634,
+      "n": 16
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.7082,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 38.57142857142857,
+      "n": 2
+    },
+    "rb0shot_winogrande_v1": {
+      "pool_score": 0.8058,
+      "oracle_gain": 0.22605363984674332,
+      "weak_oracle_share": 0.7126436781609196,
+      "cheap_safe": 0.8160919540229885,
+      "winner_entropy": 1.0961426711909106,
+      "cost_ratio": 3.950398316548925,
+      "n": 261
+    }
+  },
+  "gpt_3_5_turbo_1106|meta_llama_2_70b_chat|mistralai_mistral_7b_chat": {
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.6405,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 2.414869888475837,
+      "n": 5
+    }
+  },
+  "gpt_3_5_turbo_1106|meta_llama_2_70b_chat|mistralai_mixtral_8x7b_chat": {
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.5239,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8,
+      "cheap_safe": 0.8,
+      "winner_entropy": 1.0928305535284886,
+      "cost_ratio": 1.1018587360594791,
+      "n": 5
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.6252,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.8675000000000002,
+      "n": 2
+    }
+  },
+  "gpt_3_5_turbo_1106|meta_llama_2_70b_chat|zero_one_ai_yi_34b_chat": {
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.0202,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 2.075836431226766,
+      "n": 5
+    }
+  },
+  "gpt_3_5_turbo_1106|mistralai_mixtral_8x7b_chat|zero_one_ai_yi_34b_chat": {
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.0877,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": 0.45056120886630463,
+      "cost_ratio": 2.075836431226766,
+      "n": 5
+    }
+  },
+  "meta_code_llama_instruct_34b_chat|meta_llama_2_70b_chat|mistralai_mistral_7b_chat": {
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.6511,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 3.1708840987191507,
+      "n": 5
+    }
+  },
+  "meta_code_llama_instruct_34b_chat|meta_llama_2_70b_chat|mistralai_mixtral_8x7b_chat": {
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.532,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8,
+      "cheap_safe": 0.8,
+      "winner_entropy": 1.0928305535284886,
+      "cost_ratio": 1.4468134957825676,
+      "n": 5
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.6354,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 2.601699637782112,
+      "n": 2
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.381,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0397207708399179,
+      "cost_ratio": 2.3416789396170836,
+      "n": 2
+    }
+  },
+  "meta_code_llama_instruct_34b_chat|meta_llama_2_70b_chat|zero_one_ai_yi_34b_chat": {
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.0303,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 2.7257107154014375,
+      "n": 5
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.4357,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0397207708399179,
+      "cost_ratio": 11.929307805596464,
+      "n": 2
+    }
+  },
+  "meta_code_llama_instruct_34b_chat|mistralai_mixtral_8x7b_chat|zero_one_ai_yi_34b_chat": {
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.0979,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": 0.45056120886630463,
+      "cost_ratio": 2.7257107154014375,
+      "n": 5
+    },
+    "rb0shot_chinese_tang_poetries_v1": {
+      "pool_score": 0.6148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.1541036283304327,
+      "n": 7
+    },
+    "rb0shot_mbpp_v1": {
+      "pool_score": 0.6865,
+      "oracle_gain": 0.10256410256410253,
+      "weak_oracle_share": 0.782051282051282,
+      "cheap_safe": 0.8846153846153846,
+      "winner_entropy": 1.0936966852948515,
+      "cost_ratio": 1.4278608893367435,
+      "n": 78
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.438,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 11.929307805596464,
+      "n": 2
+    }
+  },
+  "meta_llama_2_70b_chat|mistralai_mixtral_8x7b_chat|zero_one_ai_yi_34b_chat": {
+    "rb0shot_chinese_ancient_masterpieces_dynasty_v1": {
+      "pool_score": 0.0871,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": 0.45056120886630463,
+      "cost_ratio": 2.0409356725146206,
+      "n": 5
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.4267,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 8.78048780487805,
+      "n": 2
+    }
+  },
+  "claude_instant_v1|gpt_3_5_turbo_1106|zero_one_ai_yi_34b_chat": {
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.6789,
+      "oracle_gain": 0.041666666666666685,
+      "weak_oracle_share": 0.7916666666666666,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.0952738521158556,
+      "cost_ratio": 1.622352410995944,
+      "n": 24
+    },
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.6148,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.273809523809524,
+      "n": 2
+    },
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.611,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0733942812811266,
+      "cost_ratio": 1.646420824295011,
+      "n": 5
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.615,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.3430962343096235,
+      "n": 5
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.4105,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 5.547945205479452,
+      "n": 2
+    }
+  },
+  "claude_instant_v1|meta_code_llama_instruct_34b_chat|meta_llama_2_70b_chat": {
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.6152,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.6545459666516444,
+      "n": 24
+    },
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.6214,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0670895187820832,
+      "cost_ratio": 2.1816702819956615,
+      "n": 5
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.6167,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.419194560669456,
+      "n": 5
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "pool_score": 0.6207,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0984677022758946,
+      "cost_ratio": 1.3231507968941563,
+      "n": 85
+    }
+  },
+  "claude_instant_v1|meta_code_llama_instruct_34b_chat|zero_one_ai_yi_34b_chat": {
+    "rb0shot_chinese_character_riddles_v1": {
+      "pool_score": 0.5392,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.8333333333333334,
+      "cheap_safe": 0.8333333333333334,
+      "winner_entropy": 1.094780226007948,
+      "cost_ratio": 1.622352410995944,
+      "n": 24
+    },
+    "rb0shot_chinese_shi_jing_v1": {
+      "pool_score": 0.615,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 1.3430962343096235,
+      "n": 5
+    }
+  },
+  "claude_instant_v1|gpt_3_5_turbo_1106|mistralai_mixtral_8x7b_chat": {
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.6305,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 2.2232142857142856,
+      "n": 2
+    }
+  },
+  "claude_instant_v1|meta_llama_2_70b_chat|mistralai_mixtral_8x7b_chat": {
+    "rb0shot_chinese_famous_novel_v1": {
+      "pool_score": 0.6305,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0986122886681096,
+      "cost_ratio": 2.2232142857142856,
+      "n": 2
+    }
+  },
+  "claude_instant_v1|gpt_3_5_turbo_1106|meta_code_llama_instruct_34b_chat": {
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.6119,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0733942812811266,
+      "cost_ratio": 1.6854013015184381,
+      "n": 5
+    },
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.017,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 3.997972972972973,
+      "n": 1
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "pool_score": 0.4961,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5411764705882353,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0471330807375263,
+      "cost_ratio": 1.229743563547201,
+      "n": 85
+    }
+  },
+  "gpt_3_5_turbo_1106|meta_code_llama_instruct_34b_chat|meta_llama_2_70b_chat": {
+    "rb0shot_chinese_homonym_v1": {
+      "pool_score": 0.6127,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0670895187820832,
+      "cost_ratio": 1.7644736842105264,
+      "n": 5
+    },
+    "rb0shot_chinese_zodiac_v1": {
+      "pool_score": 0.6063,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 1.0417304176060327,
+      "cost_ratio": 1.0772301933873982,
+      "n": 85
+    }
+  },
+  "claude_instant_v1|mistralai_mixtral_8x7b_chat|wizardlm_wizardlm_13b_v1_2": {
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.0018,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 2.021959459459459,
+      "n": 1
+    }
+  },
+  "claude_instant_v1|mistralai_mixtral_8x7b_chat|zero_one_ai_yi_34b_chat": {
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.0,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.0,
+      "cheap_safe": 0.0,
+      "winner_entropy": -0.0,
+      "cost_ratio": 1.8513513513513515,
+      "n": 1
+    },
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.4105,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 5.547945205479452,
+      "n": 2
+    }
+  },
+  "mistralai_mistral_7b_chat|mistralai_mixtral_8x7b_chat|wizardlm_wizardlm_13b_v1_2": {
+    "rb0shot_chinese_idioms_v1": {
+      "pool_score": 0.5664,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 1.0,
+      "cheap_safe": 1.0,
+      "winner_entropy": 0.6931471805599453,
+      "cost_ratio": 3.288461538461538,
+      "n": 1
+    }
+  },
+  "claude_instant_v1|claude_v2|zero_one_ai_yi_34b_chat": {
+    "rb0shot_test_match_v1": {
+      "pool_score": 0.4105,
+      "oracle_gain": 0.0,
+      "weak_oracle_share": 0.5,
+      "cheap_safe": 0.5,
+      "winner_entropy": 1.0549201679861442,
+      "cost_ratio": 5.547945205479452,
+      "n": 2
+    }
+  }
+}
