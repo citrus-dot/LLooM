@@ -1,0 +1,56 @@
+{
+  "benchmark_id": "lloom-orchbench-v0.1",
+  "manifest_hash": "1d613721b989e635",
+  "n_cases": 4,
+  "summary": {
+    "task_success": 3,
+    "partial": 1,
+    "failed": 0,
+    "primary_error_dist": {
+      "none": 1,
+      "P1": 1,
+      "P4": 1,
+      "P8": 1
+    }
+  },
+  "cases": [
+    {
+      "workflow_id": "ob_fixture_chain_v1__clean",
+      "workflow_final": "task_success",
+      "planning_recall": 1.0,
+      "makespan_ms": 2400,
+      "primary_error": null,
+      "secondary_errors": []
+    },
+    {
+      "workflow_id": "ob_fixture_chain_v1__missing_node",
+      "workflow_final": "task_success",
+      "planning_recall": 0.6666666666666666,
+      "makespan_ms": 2400,
+      "primary_error": "P1",
+      "secondary_errors": [
+        "P3"
+      ]
+    },
+    {
+      "workflow_id": "ob_fixture_bad_waves_v1__illegal_parallelism",
+      "workflow_final": "task_success",
+      "planning_recall": 1.0,
+      "makespan_ms": 200,
+      "primary_error": "P4",
+      "secondary_errors": []
+    },
+    {
+      "workflow_id": "ob_fixture_chain_v1__f2_no_fallback",
+      "workflow_final": "partial_success",
+      "planning_recall": 1.0,
+      "makespan_ms": 2400,
+      "primary_error": "P8",
+      "secondary_errors": [
+        "P9",
+        "P7",
+        "P11"
+      ]
+    }
+  ]
+}
