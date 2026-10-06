@@ -67,14 +67,15 @@ def load_inputs(input_path: Path, seed: int, calibration_ratio: float):
             raise SystemExit(
                 f"✗ {input_path} 缺 instances.jsonl / outcomes.jsonl——请先跑 import_frozen.py 生成冻结矩阵"
             )
+        # 用 split("\n") 而非 splitlines()：JSON 字符串里合法的 U+2028/U+2029 会被 splitlines 误切
         instances = [
             json.loads(line)
-            for line in inst_path.read_text(encoding="utf-8").splitlines()
+            for line in inst_path.read_text(encoding="utf-8").split("\n")
             if line.strip()
         ]
         outcomes = [
             json.loads(line)
-            for line in out_path.read_text(encoding="utf-8").splitlines()
+            for line in out_path.read_text(encoding="utf-8").split("\n")
             if line.strip()
         ]
         return instances, outcomes
@@ -235,12 +236,15 @@ def main() -> None:
             f"✗ 模型不在矩阵内: {unknown}\n  可用 model_id: {sorted(known_models)}"
         )
 
-    # split 过滤（泄漏防护：screening 默认不见 test）+ family 过滤
+    # split 过滤（泄漏防护：screening 默认不见 test）+ family 过滤（dataset_id 子串或 task_family 匹配）
     if args.split != "all":
         instances = [i for i in instances if i.get("split") == args.split]
     if args.tasks:
-        wanted = {f"rb0shot_{t}_v1" for t in args.tasks}
-        instances = [i for i in instances if i["dataset_id"] in wanted]
+        wanted = {slugify(t) for t in args.tasks}
+        instances = [
+            i for i in instances
+            if any(t in i["dataset_id"] or t == slugify(i.get("task_family", "")) for t in wanted)
+        ]
 
     by_sample: dict[str, dict[str, tuple[float, float]]] = {}
     for o in outcomes:
