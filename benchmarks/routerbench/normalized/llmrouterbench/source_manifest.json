@@ -1,0 +1,233 @@
+{
+  "status": "provisional",
+  "created_at": "2026-10-06T03:57:35+00:00",
+  "schema_version": 2,
+  "source": {
+    "type": "llmrouterbench",
+    "revision": "hf-mirror.com/datasets/NPULH/LLMRouterBench bench-release.tar.gz",
+    "source_url": "https://hf-mirror.com/datasets/NPULH/LLMRouterBench/resolve/main/bench-release.tar.gz",
+    "files": [
+      {
+        "path": "benchmarks/routerbench/raw/llmrouterbench/bench-release.tar.gz",
+        "sha256": "b79f8cde1a6f029c2efa663a3a3b6f7748defb22341fe59f328cebef6648c8f1",
+        "integrity_gate": "解压前 shasum 校验（12 号记录同值）"
+      }
+    ],
+    "result_files_used": 700
+  },
+  "scoring": {
+    "metric": "raw_score（v1 normalized=raw）",
+    "note": "accuracy 类 0/1；hle/arenahard* 为 LLM-judge 分（源量纲）；详见 doc 13-参考资料 §4.2",
+    "scorer_groups": {
+      "accuracy": [
+        "aime",
+        "livemathbench",
+        "math500",
+        "mathbench",
+        "korbench",
+        "mbpp",
+        "humaneval",
+        "livecodebench",
+        "swe-bench",
+        "mmlupro",
+        "simpleqa",
+        "finqa",
+        "medqa",
+        "gpqa",
+        "winogrande",
+        "arcc",
+        "emorynlp",
+        "meld"
+      ],
+      "llm_judge": [
+        "hle",
+        "arenahard",
+        "arenahard_coding",
+        "arenahard_math",
+        "arenahard_creative_writing"
+      ],
+      "other": [
+        "tau2",
+        "bbh",
+        "kandk",
+        "arc-agi"
+      ]
+    }
+  },
+  "prompt_profile": {
+    "mode": "source_prompt",
+    "note": "沿用源 benchmark 的 prompt 模板与采样设定"
+  },
+  "split": {
+    "calibration_ratio": 0.2,
+    "test_ratio": 0.8,
+    "seed": 3407,
+    "method": "哈希桶（与 import_frozen.py 同法）；官方 split 边界已编入 dataset_id（<ds>_<setting>）"
+  },
+  "row_counts": {
+    "instances": 27034,
+    "outcomes": 541152,
+    "dropped": {
+      "bad_record": 4327,
+      "dup_outcome": 2580,
+      "mismatched_dir": 0
+    }
+  },
+  "per_dataset": {
+    "llmrb_aime_hybrid_v1": {
+      "instances": 60,
+      "outcomes": 2280,
+      "models": 38
+    },
+    "llmrb_arc_agi_v1_v1": {
+      "instances": 400,
+      "outcomes": 6800,
+      "models": 17
+    },
+    "llmrb_arcc_test_v1": {
+      "instances": 1170,
+      "outcomes": 23400,
+      "models": 20
+    },
+    "llmrb_arenahard_coding_test_v1": {
+      "instances": 253,
+      "outcomes": 8349,
+      "models": 33
+    },
+    "llmrb_arenahard_creative_writing_test_v1": {
+      "instances": 250,
+      "outcomes": 8250,
+      "models": 33
+    },
+    "llmrb_arenahard_math_test_v1": {
+      "instances": 247,
+      "outcomes": 8151,
+      "models": 33
+    },
+    "llmrb_arenahard_test_v1": {
+      "instances": 751,
+      "outcomes": 26250,
+      "models": 35
+    },
+    "llmrb_bbh_test_v1": {
+      "instances": 1080,
+      "outcomes": 21600,
+      "models": 20
+    },
+    "llmrb_emorynlp_test_v1": {
+      "instances": 696,
+      "outcomes": 13920,
+      "models": 20
+    },
+    "llmrb_finqa_test_v1": {
+      "instances": 1138,
+      "outcomes": 22760,
+      "models": 20
+    },
+    "llmrb_gpqa_test_v1": {
+      "instances": 198,
+      "outcomes": 7524,
+      "models": 38
+    },
+    "llmrb_hle_subset_500_v1": {
+      "instances": 500,
+      "outcomes": 7500,
+      "models": 15
+    },
+    "llmrb_hle_test_v1": {
+      "instances": 2159,
+      "outcomes": 32370,
+      "models": 15
+    },
+    "llmrb_humaneval_test_v1": {
+      "instances": 164,
+      "outcomes": 3608,
+      "models": 22
+    },
+    "llmrb_kandk_test_v1": {
+      "instances": 700,
+      "outcomes": 14000,
+      "models": 20
+    },
+    "llmrb_korbench_test_v1": {
+      "instances": 1210,
+      "outcomes": 24200,
+      "models": 20
+    },
+    "llmrb_livecodebench_test_v1": {
+      "instances": 1055,
+      "outcomes": 40090,
+      "models": 38
+    },
+    "llmrb_livemathbench_test_v1": {
+      "instances": 121,
+      "outcomes": 4235,
+      "models": 35
+    },
+    "llmrb_math500_test_v1": {
+      "instances": 500,
+      "outcomes": 10000,
+      "models": 20
+    },
+    "llmrb_mathbench_test_v1": {
+      "instances": 150,
+      "outcomes": 3000,
+      "models": 20
+    },
+    "llmrb_mbpp_test_v1": {
+      "instances": 970,
+      "outcomes": 19399,
+      "models": 20
+    },
+    "llmrb_medqa_test_v1": {
+      "instances": 1273,
+      "outcomes": 25460,
+      "models": 20
+    },
+    "llmrb_meld_test_v1": {
+      "instances": 1231,
+      "outcomes": 24620,
+      "models": 20
+    },
+    "llmrb_mmlupro_test_1000_v1": {
+      "instances": 998,
+      "outcomes": 35928,
+      "models": 36
+    },
+    "llmrb_mmlupro_test_3000_v1": {
+      "instances": 3000,
+      "outcomes": 45000,
+      "models": 15
+    },
+    "llmrb_simpleqa_subset_500_v1": {
+      "instances": 500,
+      "outcomes": 7050,
+      "models": 15
+    },
+    "llmrb_simpleqa_test_v1": {
+      "instances": 4326,
+      "outcomes": 60564,
+      "models": 14
+    },
+    "llmrb_swe_bench_verified_v1": {
+      "instances": 500,
+      "outcomes": 7500,
+      "models": 15
+    },
+    "llmrb_tau2_test_v1": {
+      "instances": 167,
+      "outcomes": 2004,
+      "models": 12
+    },
+    "llmrb_winogrande_valid_v1": {
+      "instances": 1267,
+      "outcomes": 25340,
+      "models": 20
+    }
+  },
+  "notes": [
+    "raw_output 不复制进 canonical：outcomes 带 source_file/source_record_index 溯源，原文在 raw/llmrouterbench/bench-release/（sha256 门控归档）",
+    "cost_basis=llmrouterbench_source：与 RouterBench source 成本口径分轨，headline 禁止跨源混算",
+    "sample_id 内容哈希派生（ds+setting+origin_query），与行序/record index 无关"
+  ]
+}

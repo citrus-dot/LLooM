@@ -64,8 +64,12 @@ CODE_GUIDE.md
 /AGENTS.md
 
 # RouterBench：原始数据与运行期数据不入库（99.6MB/1.28GB 下载件由 source_manifest 记录 sha256）
-benchmarks/**/raw/
+# raw 与 bench.db 是指向外置盘（/Volumes/Files/LLooM-bench/）的 symlink，同样不入库
+benchmarks/**/raw
 benchmarks/**/data/
-# normalized 大文件可由 raw + import_frozen.py 确定性重建；仅保留 source_manifest.json 入库
+# normalized 真目录在本仓，大 jsonl 为外置盘 symlink；仅 source_manifest.json 入库
 benchmarks/**/normalized/*
 !benchmarks/**/normalized/source_manifest.json
+!benchmarks/**/normalized/llmrouterbench/
+benchmarks/**/normalized/llmrouterbench/*
+!benchmarks/**/normalized/llmrouterbench/source_manifest.json
