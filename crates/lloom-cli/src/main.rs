@@ -85,6 +85,9 @@ enum BenchCmd {
         /// E5 实验：LLooM 启用 calibration 质量先验（w/ 版；缺省 w/o）
         #[arg(long, default_value_t = false)]
         calibration: bool,
+        /// Soft Gate penalty（给值即启用，含 0.0=pure eligibility；weak nominal tier 1→2）
+        #[arg(long)]
+        soft_gate: Option<f64>,
     },
     /// λ sweep：LLooM cost 权重 0→1 步进 0.1，产出 Pareto 点集（10 号 §十四）
     Sweep {
@@ -101,6 +104,9 @@ enum BenchCmd {
         /// Pareto 点集输出（json）
         #[arg(long, default_value = "benchmarks/routerbench/reports/pareto_points.json")]
         output: std::path::PathBuf,
+        /// Soft Gate penalty（给值即启用，含 0.0=pure eligibility；weak nominal tier 1→2）
+        #[arg(long)]
+        soft_gate: Option<f64>,
     },
 }
 
@@ -282,6 +288,7 @@ async fn bench_ctx(
     selection: &std::path::Path,
     manifest: &std::path::Path,
     calibration: bool,
+    soft_gate: Option<f64>,
 ) -> Result<(String, String, bench::BenchPool, bench::ReplayCtx, Vec<bench::BenchInstance>, bench::FrozenMatrix), Box<dyn std::error::Error>> {
     let frozen: Value = serde_json::from_str(&std::fs::read_to_string(manifest)?)?;
     let benchmark_id = frozen["benchmark_id"].as_str().unwrap_or_default().to_string();
@@ -305,9 +312,12 @@ async fn bench_ctx(
     }
 
     let stats = bench::calibration_stats(&matrix, &pool, &calib);
-    let (pool_models, specs) = bench::build_pool_models(&pool, &stats);
+    // Soft Gate：penalty 存在（含 0.0）即启用 nominal tier 抬升（weak 1→2，medium 放行，hard 仍拒）
+    let weak_nominal_tier = if soft_gate.is_some() { 2 } else { 1 };
+    let (pool_models, specs) = bench::build_pool_models_gated(&pool, &stats, weak_nominal_tier);
     let mut ctx = bench::ReplayCtx::new(pool.clone(), pool_models, specs, stats);
     ctx.use_calibration = calibration;
+    ctx.soft_gate = soft_gate;
     Ok((benchmark_id, manifest_hash, pool, ctx, test, matrix))
 }
 
@@ -320,12 +330,13 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
         manifest,
         bench_db,
         calibration,
+        soft_gate,
     } = cmd
     else {
         unreachable!()
     };
     let (benchmark_id, manifest_hash, pool, ctx, test, matrix) =
-        bench_ctx(models, &normalized, &selection, &manifest, calibration).await?;
+        bench_ctx(models, &normalized, &selection, &manifest, calibration, soft_gate).await?;
 
     let strategies: Vec<Strategy> = if strategy == "all" {
         Strategy::ALL.to_vec()
@@ -368,6 +379,8 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
             "est_profile": { "est_in": "chars*0.6", "est_out_cold_start": bench::EST_OUT_COLD_START },
             "hit_rate": "all-zero (红线)",
             "quality_override": calibration,
+            "soft_gate_penalty": soft_gate,
+            "weak_nominal_tier": if soft_gate.is_some() { 2 } else { 1 },
             "quality_score_source": "calibration global mean (注册冷启动先验)",
             "policy": { "min_capability_tier": 1, "weights": "cost .5 / quality .4 / latency .1 (default)" },
             "cost_basis": "source (等效单价由 calibration 导出，公式见 bench.rs)"
@@ -428,12 +441,13 @@ async fn cmd_bench_sweep(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>
         manifest,
         bench_db,
         output,
+        soft_gate,
     } = cmd
     else {
         unreachable!()
     };
     let (benchmark_id, manifest_hash, pool, mut ctx, test, matrix) =
-        bench_ctx(models, &normalized, &selection, &manifest, false).await?;
+        bench_ctx(models, &normalized, &selection, &manifest, false, soft_gate).await?;
 
     let conn = bench::open_bench_db(&bench_db)?;
     println!("bench sweep: {} | n={} test | λ∈{{0,0.1,…,0.9}}（cost_weight；quality_weight=0.9−λ，latency 恒 0.1）", benchmark_id, test.len());
@@ -450,6 +464,8 @@ async fn cmd_bench_sweep(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>
             "est_profile": { "est_in": "chars*0.6", "est_out_cold_start": bench::EST_OUT_COLD_START },
             "hit_rate": "all-zero (红线)",
             "quality_override": false,
+            "soft_gate_penalty": soft_gate,
+            "weak_nominal_tier": if soft_gate.is_some() { 2 } else { 1 },
             "quality_score_source": "calibration global mean (注册冷启动先验)",
             "policy": { "min_capability_tier": 1, "cost_weight": cw, "quality_weight": qw, "latency_weight": 0.1 },
             "cost_basis": "source (等效单价由 calibration 导出)"

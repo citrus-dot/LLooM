@@ -1,0 +1,120 @@
+{
+  "benchmark_id": "lloom-routerbench-v0.1",
+  "manifest_hash": "199fb962164bcda80f6d883d2741f570c4ce994ad9754ea04b9ec3d02be5e9fe",
+  "note": "λ sweep Pareto 点集（10 号 §十四）；latency 权重恒 0.1，cost+quality=0.9 与生产 default 形态一致",
+  "points": [
+    {
+      "cost_mean": 0.004423070000000003,
+      "cost_weight": 0.0,
+      "quality_mean": 0.76275,
+      "quality_weight": 0.9,
+      "run_id": 45,
+      "selection_dist": {
+        "gpt_4_1106_preview": 1000
+      }
+    },
+    {
+      "cost_mean": 0.004423070000000003,
+      "cost_weight": 0.1,
+      "quality_mean": 0.76275,
+      "quality_weight": 0.8,
+      "run_id": 46,
+      "selection_dist": {
+        "gpt_4_1106_preview": 1000
+      }
+    },
+    {
+      "cost_mean": 0.004423070000000003,
+      "cost_weight": 0.2,
+      "quality_mean": 0.76275,
+      "quality_weight": 0.7,
+      "run_id": 47,
+      "selection_dist": {
+        "gpt_4_1106_preview": 1000
+      }
+    },
+    {
+      "cost_mean": 0.002825724799999996,
+      "cost_weight": 0.3,
+      "quality_mean": 0.70875,
+      "quality_weight": 0.6000000000000001,
+      "run_id": 48,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    },
+    {
+      "cost_mean": 0.002825724799999996,
+      "cost_weight": 0.4,
+      "quality_mean": 0.70875,
+      "quality_weight": 0.5,
+      "run_id": 49,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "zero_one_ai_yi_34b_chat": 180
+      }
+    },
+    {
+      "cost_mean": 0.002792789399999997,
+      "cost_weight": 0.5,
+      "quality_mean": 0.69175,
+      "quality_weight": 0.4,
+      "run_id": 50,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "mistralai_mistral_7b_chat": 180
+      }
+    },
+    {
+      "cost_mean": 0.002792789399999997,
+      "cost_weight": 0.6,
+      "quality_mean": 0.69175,
+      "quality_weight": 0.30000000000000004,
+      "run_id": 51,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "mistralai_mistral_7b_chat": 180
+      }
+    },
+    {
+      "cost_mean": 0.002792789399999997,
+      "cost_weight": 0.7,
+      "quality_mean": 0.69175,
+      "quality_weight": 0.20000000000000007,
+      "run_id": 52,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "mistralai_mistral_7b_chat": 180
+      }
+    },
+    {
+      "cost_mean": 0.002792789399999997,
+      "cost_weight": 0.8,
+      "quality_mean": 0.69175,
+      "quality_weight": 0.09999999999999998,
+      "run_id": 53,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "mistralai_mistral_7b_chat": 180
+      }
+    },
+    {
+      "cost_mean": 0.002792789399999997,
+      "cost_weight": 0.9,
+      "quality_mean": 0.69175,
+      "quality_weight": 0.0,
+      "run_id": 54,
+      "selection_dist": {
+        "gpt_4_1106_preview": 820,
+        "mistralai_mistral_7b_chat": 180
+      }
+    }
+  ],
+  "pool": {
+    "mid": "zero_one_ai_yi_34b_chat",
+    "strong": "gpt_4_1106_preview",
+    "weak": "mistralai_mistral_7b_chat"
+  },
+  "split": "test"
+}

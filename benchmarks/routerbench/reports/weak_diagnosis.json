@@ -1,0 +1,127 @@
+{
+  "generated_at": "2026-10-06T04:20:58+00:00",
+  "runs": [
+    {
+      "run_id": 38,
+      "parameter": {
+        "cost_basis": "source (等效单价由 calibration 导出，公式见 bench.rs)",
+        "est_profile": {
+          "est_in": "chars*0.6",
+          "est_out_cold_start": 750
+        },
+        "hit_rate": "all-zero (红线)",
+        "policy": {
+          "min_capability_tier": 1,
+          "weights": "cost .5 / quality .4 / latency .1 (default)"
+        },
+        "pool": {
+          "mid": "zero_one_ai_yi_34b_chat",
+          "strong": "gpt_4_1106_preview",
+          "weak": "mistralai_mistral_7b_chat"
+        },
+        "quality_override": false,
+        "quality_score_source": "calibration global mean (注册冷启动先验)",
+        "soft_gate_penalty": null,
+        "weak_nominal_tier": 1
+      },
+      "n": 1000,
+      "error_counts": {
+        "optimal": 478,
+        "blocked_weak": 434,
+        "under_routing": 88
+      },
+      "weak_oracle_equivalent_total": 434,
+      "weak_blocking_rate": 0.434,
+      "weak_recall": 0.0,
+      "weak_precision": null,
+      "cost_regret_mean": 0.002062,
+      "cost_regret_p50": 0.000719,
+      "cost_regret_p95": 0.009064,
+      "examples": {
+        "blocked_weak": [
+          {
+            "dataset_id": "rb0shot_gsm8k_v1",
+            "sample_id": "rb0_gsm8k_grade-school-math.dev.1014",
+            "band": "hard"
+          },
+          {
+            "dataset_id": "rb0shot_gsm8k_v1",
+            "sample_id": "rb0_gsm8k_grade-school-math.dev.104",
+            "band": "hard"
+          },
+          {
+            "dataset_id": "rb0shot_gsm8k_v1",
+            "sample_id": "rb0_gsm8k_grade-school-math.dev.1053",
+            "band": "hard"
+          }
+        ]
+      }
+    },
+    {
+      "run_id": 40,
+      "parameter": {
+        "cost_basis": "source (等效单价由 calibration 导出，公式见 bench.rs)",
+        "est_profile": {
+          "est_in": "chars*0.6",
+          "est_out_cold_start": 750
+        },
+        "hit_rate": "all-zero (红线)",
+        "policy": {
+          "min_capability_tier": 1,
+          "weights": "cost .5 / quality .4 / latency .1 (default)"
+        },
+        "pool": {
+          "mid": "zero_one_ai_yi_34b_chat",
+          "strong": "gpt_4_1106_preview",
+          "weak": "mistralai_mistral_7b_chat"
+        },
+        "quality_override": false,
+        "quality_score_source": "calibration global mean (注册冷启动先验)",
+        "soft_gate_penalty": 0.0,
+        "weak_nominal_tier": 2
+      },
+      "n": 1000,
+      "error_counts": {
+        "optimal": 449,
+        "blocked_weak": 331,
+        "under_routing": 40,
+        "correct_weak": 103,
+        "risky_weak": 77
+      },
+      "weak_oracle_equivalent_total": 434,
+      "weak_blocking_rate": 0.331,
+      "weak_recall": 0.2373,
+      "weak_precision": 0.5722,
+      "cost_regret_mean": 0.002042,
+      "cost_regret_p50": 0.000719,
+      "cost_regret_p95": 0.009064,
+      "examples": {
+        "blocked_weak": [
+          {
+            "dataset_id": "rb0shot_gsm8k_v1",
+            "sample_id": "rb0_gsm8k_grade-school-math.dev.1014",
+            "band": "hard"
+          },
+          {
+            "dataset_id": "rb0shot_gsm8k_v1",
+            "sample_id": "rb0_gsm8k_grade-school-math.dev.104",
+            "band": "hard"
+          },
+          {
+            "dataset_id": "rb0shot_gsm8k_v1",
+            "sample_id": "rb0_gsm8k_grade-school-math.dev.1053",
+            "band": "hard"
+          }
+        ]
+      }
+    }
+  ],
+  "class_definitions": {
+    "blocked_weak": "weak oracle-equivalent 但 gate 未放行（修 gate）",
+    "missed_weak": "有资格但未选中（修 scoring/query-suitability）",
+    "correct_weak": "选中 weak 且 oracle-equivalent",
+    "risky_weak": "选中 weak 但非 oracle-equivalent",
+    "optimal": "选中模型 ∈ oracle-equivalent",
+    "under_routing": "选中模型 ∉ oracle-equivalent"
+  }
+}

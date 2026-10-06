@@ -303,8 +303,20 @@ pub fn est_in_tokens(prompt: &str) -> i64 {
 }
 
 /// 池 → 内存 Model 三元 + PriceSpec 表（等效单价，input=output 同价；price_source=bench_calibration）。
-pub fn build_pool_models(pool: &BenchPool, stats: &CalibrationStats) -> (Vec<Model>, HashMap<(String, String), PriceSpec>) {
-    let tiers = [(&pool.weak, 1), (&pool.mid, 2), (&pool.strong, 3)];
+///
+/// `weak_nominal_tier`：Soft Gate 的**candidate eligibility** 通道（13-v2 §10.3）——把 weak 的
+/// nominal tier 抬到 2 使 medium band 门槛放行（hard 仍被 tier_req=3 天然拒绝）；TRUE tier 仍为 1，
+/// 由 `soft_gate` penalty 在 quality_override 通道补偿。production `score_all()` 不动。
+pub fn build_pool_models_gated(
+    pool: &BenchPool,
+    stats: &CalibrationStats,
+    weak_nominal_tier: i64,
+) -> (Vec<Model>, HashMap<(String, String), PriceSpec>) {
+    let tiers = [
+        (&pool.weak, weak_nominal_tier.max(1)),
+        (&pool.mid, 2),
+        (&pool.strong, 3),
+    ];
     let mut models = Vec::new();
     let mut specs = HashMap::new();
     for (id, tier) in tiers {
@@ -362,11 +374,15 @@ pub struct ReplayCtx {
     pub use_calibration: bool,
     /// λ sweep：LLooM 策略的 cost/quality 权重（None = 生产 default 0.5/0.4）
     pub weights: Option<(f64, f64)>,
+    /// Soft Gate penalty（13-v2 §10.5）：Some(p) 时对因 nominal tier 抬升而入池的 weak，
+    /// 质量估计减 p×tier_gap（gap=band_req−true_tier；v1 只有 medium 放行 → gap 恒 1）。
+    /// 走 quality_override 通道，production 公式不动。注意 penalty 会被 quality_weight 缩放。
+    pub soft_gate: Option<f64>,
 }
 
 impl ReplayCtx {
     pub fn new(pool: BenchPool, models: Vec<Model>, specs: HashMap<(String, String), PriceSpec>, stats: CalibrationStats) -> Self {
-        Self { pool, models, specs, zones: ZoneResolver::new(), stats, use_calibration: false, weights: None }
+        Self { pool, models, specs, zones: ZoneResolver::new(), stats, use_calibration: false, weights: None, soft_gate: None }
     }
 
     fn policy_for(&self, task_type: &str) -> RoutingPolicy {
@@ -431,6 +447,8 @@ pub enum Strategy {
     Random,
     BestSingle,
     Oracle,
+    /// 消融变体（非 8 基线）：band→tier→model 直接映射，隔离 band 门槛贡献（13-v2 §九 V1）
+    BandOnly,
 }
 
 impl Strategy {
@@ -455,10 +473,15 @@ impl Strategy {
             Strategy::Random => "random",
             Strategy::BestSingle => "best_single",
             Strategy::Oracle => "oracle",
+            Strategy::BandOnly => "band_only",
         }
     }
 
     pub fn parse(s: &str) -> Option<Strategy> {
+        // BandOnly 是消融变体，不进 ALL 基线集，但 --strategy 可显式指定
+        if s == "band_only" {
+            return Some(Strategy::BandOnly);
+        }
         Strategy::ALL.iter().copied().find(|st| st.name() == s)
     }
 }
@@ -523,6 +546,17 @@ pub fn replay(
                 let m = ids[rng.below(3) as usize].to_string();
                 (m, json!({ "strategy": strategy.name(), "seed": RANDOM_SEED, "rule": "uniform" }))
             }
+            Strategy::BandOnly => {
+                // V1 消融：band 直接映射模型（easy→weak / medium→mid / hard→strong），无评分
+                let band = router::band_for(&inst.task_type, &inst.prompt);
+                let m = match band {
+                    "easy" => ctx.pool.weak.clone(),
+                    "medium" => ctx.pool.mid.clone(),
+                    _ => ctx.pool.strong.clone(),
+                };
+                (m, json!({ "strategy": strategy.name(), "band": band,
+                            "rule": "band→tier→model direct map (no scoring)" }))
+            }
             Strategy::BestSingle => {
                 let m = best_single_cache
                     .entry(inst.dataset_id.clone())
@@ -559,18 +593,41 @@ pub fn replay(
             }
             Strategy::Lloom => {
                 let policy = ctx.policy_for(&inst.task_type);
-                let q = ctx.quality_override(&inst.task_type);
+                let band = router::band_for(&inst.task_type, &inst.prompt);
+                let mut q = ctx.quality_override(&inst.task_type);
+                if let Some(p) = ctx.soft_gate {
+                    // Soft Gate 质量折减：weak 经 nominal tier 抬升进入 medium（true tier 1，gap=1）；
+                    // easy 带原生合格（gap=0）、hard 带未放行，均不折减。
+                    if band == "medium" {
+                        let base = q.get(&ctx.pool.weak).copied().unwrap_or_else(|| {
+                            ctx.models
+                                .iter()
+                                .find(|m| m.name == ctx.pool.weak)
+                                .map(|m| m.quality_score)
+                                .unwrap_or(0.5)
+                        });
+                        q.insert(ctx.pool.weak.clone(), (base - p).clamp(0.0, 1.0));
+                    }
+                }
                 let input = ctx.build_plan_input(inst, &policy, &q, &empty_hit);
                 let outcome = router::plan(&input).map_err(|e| {
                     AppError::InvalidRequest(format!("plan() 失败 @ {}: {e}", inst.sample_id))
                 })?;
+                let weak_nominal = ctx
+                    .models
+                    .iter()
+                    .find(|m| m.name == ctx.pool.weak)
+                    .map(|m| m.capability_tier)
+                    .unwrap_or(1);
                 let decision = json!({
                     "strategy": strategy.name(),
                     "task_type": inst.task_type,
-                    "band": router::band_for(&inst.task_type, &inst.prompt),
+                    "band": band,
                     "est_in_tokens": est_in_tokens(&inst.prompt),
                     "est_out_tokens": EST_OUT_COLD_START,
                     "quality_override": ctx.use_calibration,
+                    "soft_gate_penalty": ctx.soft_gate,
+                    "weak_nominal_tier": weak_nominal,
                     "cost_weight": ctx.weights.map(|w| w.0),
                     "quality_weight": ctx.weights.map(|w| w.1),
                     "candidates": outcome.candidates.iter().map(|c| json!({
@@ -786,10 +843,14 @@ mod tests {
     }
 
     fn ctx() -> ReplayCtx {
+        ctx_with(1)
+    }
+
+    fn ctx_with(weak_nominal_tier: i64) -> ReplayCtx {
         let m = matrix_fixture();
         let calib = vec![instance("s1", "math_logic"), instance("s2", "math_logic"), instance("s3", "math_logic")];
         let stats = calibration_stats(&m, &pool(), &calib);
-        let (models, specs) = build_pool_models(&pool(), &stats);
+        let (models, specs) = build_pool_models_gated(&pool(), &stats, weak_nominal_tier);
         ReplayCtx::new(pool(), models, specs, stats)
     }
 
@@ -864,6 +925,56 @@ mod tests {
             assert!((b.score - p.score).abs() < 1e-12);
             assert!((b.est_cost - p.est_cost).abs() < 1e-12);
         }
+    }
+
+    /// Soft Gate / BandOnly 消融语义（13-v2 §九/§十）：
+    /// V0 无 gate 放行 → medium 无 weak；V2 soft gate(0.0) → medium 有 weak、hard 仍拒；
+    /// penalty 单调折减 weak 质量估计；BandOnly = band 直接映射。
+    #[test]
+    fn soft_gate_and_band_only_semantics() {
+        let m = matrix_fixture();
+        let general = vec![instance("s1", "general"), instance("s2", "general"), instance("s3", "general")];
+
+        // V0：weak nominal tier 1，medium（tier_req=2）把 weak 拒之门外
+        let c0 = ctx_with(1);
+        let v0 = replay(&c0, &m, &general, Strategy::Lloom).unwrap();
+        let d0: Value = serde_json::from_str(&v0[0].decision_json).unwrap();
+        assert!(!d0["candidates"].as_array().unwrap().iter().any(|x| x["model"] == "weak_m"));
+
+        // V2：soft gate Some(0.0) → weak nominal tier 2 进 medium；hard（complex_reasoning）仍拒
+        let mut c2 = ctx_with(2);
+        c2.soft_gate = Some(0.0);
+        let v2 = replay(&c2, &m, &general, Strategy::Lloom).unwrap();
+        let d2: Value = serde_json::from_str(&v2[0].decision_json).unwrap();
+        assert!(d2["candidates"].as_array().unwrap().iter().any(|x| x["model"] == "weak_m"));
+        let hard = vec![instance("s1", "complex_reasoning")];
+        let vh = replay(&c2, &m, &hard, Strategy::Lloom).unwrap();
+        let dh: Value = serde_json::from_str(&vh[0].decision_json).unwrap();
+        assert!(!dh["candidates"].as_array().unwrap().iter().any(|x| x["model"] == "weak_m"));
+
+        // penalty 单调折减 weak 的质量估计（fixture weak calibration 均分 1/3）
+        let mut cp = ctx_with(2);
+        cp.soft_gate = Some(0.2);
+        let vp = replay(&cp, &m, &general, Strategy::Lloom).unwrap();
+        let dp: Value = serde_json::from_str(&vp[0].decision_json).unwrap();
+        let qw = |d: &Value| {
+            d["candidates"].as_array().unwrap().iter()
+                .find(|x| x["model"] == "weak_m").map(|x| x["quality"].as_f64().unwrap())
+        };
+        let q2 = qw(&d2).expect("V2 应含 weak 候选");
+        let qp = qw(&dp).expect("penalty 版应含 weak 候选");
+        assert!((q2 - 1.0 / 3.0).abs() < 1e-9);
+        assert!((qp - (1.0 / 3.0 - 0.2)).abs() < 1e-9);
+
+        // BandOnly：band 直接映射（general→medium→mid；simple_qa→easy→weak；complex→hard→strong）
+        let cb = ctx_with(1);
+        let b1 = replay(&cb, &m, &general, Strategy::BandOnly).unwrap();
+        assert!(b1.iter().all(|i| i.selected_model == "mid_m"));
+        let easy = vec![instance("s1", "simple_qa")];
+        let b2 = replay(&cb, &m, &easy, Strategy::BandOnly).unwrap();
+        assert_eq!(b2[0].selected_model, "weak_m");
+        let b3 = replay(&cb, &m, &hard, Strategy::BandOnly).unwrap();
+        assert_eq!(b3[0].selected_model, "strong_m");
     }
 
     /// Oracle=hindsight 上界；Cheapest 不看分数（仅 calibration 单价）；Random 确定性。
