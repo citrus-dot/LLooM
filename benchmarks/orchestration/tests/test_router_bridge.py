@@ -40,7 +40,7 @@ class TestForward(unittest.TestCase):
         self.assertEqual(len(queries), 4)
         self.assertEqual({q["split"] for q in queries}, {"test"})
         self.assertEqual([q["task_type"] for q in queries], [n["task_type"] for n in self.wf["nodes"]])
-        self.assertIn("根目标", queries[0]["prompt"])
+        self.assertIn(self.wf["root_goal"], queries[0]["prompt"])
         self.assertIn(self.wf["nodes"][0]["description"], queries[0]["prompt"])
 
 
