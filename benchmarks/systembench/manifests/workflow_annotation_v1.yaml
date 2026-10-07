@@ -1,0 +1,82 @@
+# workflow_annotation_v1.yaml — Semantic Workflow 标注规范 v1（23 号 §六 S12-A）
+# 本规范是 Semantic Workflow v0.2 的标注契约；词表/字段变化 = 新 spec version = 新 benchmark identity。
+# 标注产物通过 validate.py（结构）+ annotate.py（本规范语义）双重校验后才可进入 v0.2 set。
+
+version: 1
+
+## ── semantic_role：节点职责词表（初版 10 项；扩展必须 versioned）──
+semantic_role_enum:
+  - retrieval        # 检索/查找已有信息
+  - search           # 生成式探索（多方案枚举）
+  - extraction       # 从输入中抽取结构化信息
+  - classification   # 分类/判定/合规检查
+  - calculation      # 确定性计算（数学/规则推导）
+  - transformation   # 格式/内容转换（翻译、改写、汇总格式化）
+  - reasoning        # 多步推理（规划、权衡、因果分析）
+  - verification     # 校验/对账/一致性检查
+  - synthesis        # 多源合并成最终产出
+  - execution        # 执行性动作（生成可运行产物/调度指令）
+
+semantic_role_rules:
+  - "每 node 恰好一个主 role；复合职责拆成多 node（见 atomicity）"
+  - "calculation 与 reasoning 的区分：可确定性重放=calculation，需模型判断=reasoning"
+
+## ── atomicity：节点原子性 ──
+atomicity:
+  rule: "一个 node 只承担一个明确职责；描述中出现并列动词（且/并/再/然后）即违反"
+  check: "人工标注时逐节点判定 atomic_ok: true/false + 理由"
+  on_violation: "拆分节点后重新标注；不允许保留复合节点进 v0.2 headline"
+
+## ── dependency_semantics：三值枚举（19 号 §三十三 → 23 号 §七 扩展）──
+dependency_semantics_enum:
+  - independent        # 输出自包含，L1 严格 counterfactual 可用
+  - artifact_dependent # 输入依赖上游 artifact（L2 replay 范围）
+  - state_dependent    # 输入依赖环境/工具状态（L3 范围）
+
+## ── artifact_contract：produces/consumes 类型词表（初版；扩展 versioned）──
+artifact_types:
+  - facts              # 事实清单/数据点
+  - code_patch         # 代码片段/补丁
+  - calculation        # 计算结果/数值
+  - plan_outline       # 计划/步骤/排程
+  - analysis           # 分析结论/权衡
+  - structured_record  # 表格/结构化记录
+  - draft_content      # 草稿文本（方案/文案）
+  - verification_report # 校验结论/问题清单
+
+artifact_contract_rules:
+  - "produces/consumes 条目 = {type, required: bool}；consumes 额外带 from: [node_id]"
+  - "consumes.type 必须在某上游 node 的 produces.type 中可满足（contract 一致性校验项）"
+  - "edges.from→to 与 consumes.from 必须一致（边是 contract 的投影）"
+  - "independent 节点 consumes=[]"
+
+## ── completion_condition（19 号 §十四 三层质量的 L1 落地）──
+completion_condition:
+  required_nodes: []        # 缺省=全部 nodes；显式列出 optional 节点
+  optional_nodes: []
+  success_condition: "workflow_completion"   # v0.2 沿用 L1 语义（19 号 §十四）
+  aggregation_condition: "synthesis 节点存在时以其完成为准；否则 all required"
+
+## ── case 级字段 ──
+case_level:
+  semantic_domain: []       # research/coding/data/planning/content/tool（23 号 §十六 覆盖要求）
+  complexity_bucket: []     # simple(1-2)/medium(3-5)/complex(6-8)——按 node_count + depth 联合定
+  group_id: ""              # 同一模板变体整组切分（23 号 §十五 workflow isolation）
+  provenance: ""            # s11_seed / manual / hybrid（来源可追溯）
+
+## ── Band Coverage Gate（23 号 §六 S12-C）──
+band_coverage_gate:
+  report_fields:
+    - band_distribution          # easy/medium/hard 节点占比（production band_for 现算）
+    - eligible_model_count_dist  # 每节点合格模型数分布
+    - strong_only_node_rate
+    - weak_eligible_node_rate
+    - mid_eligible_node_rate
+  gate: "routing-relevant case 需 ≥1 个 weak/mid-eligible 节点；全 strong-only case 进 diagnostic 不进 routing headline"
+  note: "目标是让真实 semantic workflow 中自然出现多模型可行性，不是人为制造 easy"
+
+## ── 校验链 ──
+validation_chain:
+  - validate.py（结构：schema/环/波次）
+  - annotate.py（本规范：role 词表/atomicity/contract 一致性/completion）
+  - builder（exact binding 不破坏：artifact_contract 标注不改 node prompt）

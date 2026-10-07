@@ -1,0 +1,1737 @@
+{
+  "generated_at": "2026-10-07T08:46:16+00:00",
+  "spec_version": "workflow_annotation_v1",
+  "n_seeds": 15,
+  "n_nodes": 65,
+  "role_distribution": {
+    "unclassified": 28,
+    "calculation": 13,
+    "verification": 7,
+    "execution": 5,
+    "search": 5,
+    "extraction": 4,
+    "reasoning": 3
+  },
+  "workflows_needing_manual": 13,
+  "audits": [
+    {
+      "sample_id": "ob_pb_0000",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 4,
+        "max_width": 1,
+        "dependency_density": 1.0
+      },
+      "needs_manual": true,
+      "unclassified_count": 1,
+      "annotations": [
+        {
+          "node_id": "nsubtask_1",
+          "semantic_role": "calculation",
+          "role_confidence": 0.67,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "解析所有任务与车辆基础数据，提取站点名称拼音首音、计算'拼音首音为sh'的站点中第二字简体笔画总和；完成载重/车型/线路"
+        },
+        {
+          "node_id": "nsubtask_2",
+          "semantic_role": "calculation",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "calculation",
+                "from": [
+                  "nsubtask_1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于优先级规则（主目标：T5紧急→T1/T2 A类→其余；次目标：最小化原计划T1-T4被替换数→出发时刻改动数→总偏差"
+        },
+        {
+          "node_id": "nsubtask_3",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "calculation",
+                "from": [
+                  "nsubtask_2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "在subtask_2筛选出的主目标最优方案集中，依据次目标排序准则选出唯一最优解；据此生成最终调度表（T1-T5的承运车"
+        },
+        {
+          "node_id": "nsubtask_4",
+          "semantic_role": "calculation",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nsubtask_1",
+                  "nsubtask_3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "执行规则核对：①列出所有'拼音首音sh'站点（山口、石桥、松溪）→取第二字（口、桥、溪）→查简体笔画（口=3、桥=10、"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0031",
+      "case_class_suggest": "complex",
+      "structure": {
+        "depth": 5,
+        "max_width": 2,
+        "dependency_density": 1.33
+      },
+      "needs_manual": true,
+      "unclassified_count": 4,
+      "annotations": [
+        {
+          "node_id": "nA",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "判断原D10完成50台试产（任务L）是否可行：检查所有硬约束（人员、设备、前置依赖、预算、里程碑）是否允许L在D10执行"
+        },
+        {
+          "node_id": "nB",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nA"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "从全部约束中识别并分类硬约束（不可妥协）与软约束（可权衡），至少各2条，并按项目目标优先级排序（如M3>D10交付>成本"
+        },
+        {
+          "node_id": "nC",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.0,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nA",
+                  "nB"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于硬约束排布D1–D12每日任务：为每个任务分配唯一日期，满足人员排班（含缺席期）、设备窗口、前置依赖、整日连续、不超"
+        },
+        {
+          "node_id": "nD",
+          "semantic_role": "calculation",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nC"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "推导M1（E完成日）、M2（H完成日）、M3（L完成日）的实际日期，计算各较原目标（D3/D7/D10）延迟天数，并追踪"
+        },
+        {
+          "node_id": "nE",
+          "semantic_role": "reasoning",
+          "role_confidence": 0.67,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "calculation",
+                "from": [
+                  "nC",
+                  "nD"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "解释3个关键决策点：①为何放弃F-out（尽管省1天）；②为何将J（包装稿冻结）前置至D6而非更晚；③为何D5全天空闲—"
+        },
+        {
+          "node_id": "nF",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nA",
+                  "nC"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "针对任务B（BLE SDK集成与连通性自测）设计保守执行方案：明确其最早/最晚可开始日、必须完成日；指出v2.6回退样机"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0062",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 5,
+        "max_width": 1,
+        "dependency_density": 0.8
+      },
+      "needs_manual": true,
+      "unclassified_count": 4,
+      "annotations": [
+        {
+          "node_id": "n1",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.0,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "判断在给定硬约束（时间窗、天气、拼音打卡规则、午休、步行上限、高铁车次、景点强制时段、预算上限）下，是否存在至少一个满足"
+        },
+        {
+          "node_id": "n2",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "n1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于酒店A与酒店B的入房时间、交通耗时、早餐包含情况、寄存政策及与各强制景点的可达性，结合周六需12:30前入住（因10"
+        },
+        {
+          "node_id": "n3",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "n2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "在选定酒店前提下，枚举去程高铁（G7002/G7014/G7120）与返程高铁（G7151/G7157/G7165）组合"
+        },
+        {
+          "node_id": "n4",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "n3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "在可行方案中，按软约束优先级（留园优先→高铁时效最优→少换乘/少露天→成本最低）进行排序，选出唯一最优解；计算该方案下全"
+        },
+        {
+          "node_id": "n5",
+          "semantic_role": "verification",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "n4"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "针对周日14:30后仍下雨的确定性场景（非‘视情况’），基于已选酒店和主行程，仅启用苏州丝绸博物馆作为唯一合规室内候补（"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0093",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 4,
+        "max_width": 1,
+        "dependency_density": 1.5
+      },
+      "needs_manual": false,
+      "unclassified_count": 0,
+      "annotations": [
+        {
+          "node_id": "n1",
+          "semantic_role": "execution",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "执行拼音筛选：从6个SKU中识别首字拼音为'ch'声母、'eng'韵母、第二声（即'橙'字标准读音 chéng）的SKU"
+        },
+        {
+          "node_id": "n2",
+          "semantic_role": "search",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "structured_record",
+                "from": [
+                  "n1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于硬约束（A区仅容橙组、纸杯箱堆高限制、常温奶箱必须置C2、死角位C1/C2禁放日均出库≥8的SKU）、区域容量（面积"
+        },
+        {
+          "node_id": "n3",
+          "semantic_role": "verification",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "facts",
+                "from": [
+                  "n1",
+                  "n2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "在确定的最优最终布局基础上，结合当前状态、T0缓冲位规则（10:00前清空、容量限制）、叉车时序约束（09:00–10:"
+        },
+        {
+          "node_id": "n4",
+          "semantic_role": "calculation",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "verification_report",
+                "from": [
+                  "n1",
+                  "n2",
+                  "n3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "对最终布局和时序方案进行全维度核验：逐项计算A区/B区/C区/全仓的总面积、总体积、最高堆高是否超限；检查C1/C2是否"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0124",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 4,
+        "max_width": 1,
+        "dependency_density": 1.0
+      },
+      "needs_manual": false,
+      "unclassified_count": 0,
+      "annotations": [
+        {
+          "node_id": "n1",
+          "semantic_role": "search",
+          "role_confidence": 0.5,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "解析所有硬性约束（人员可用时间、会议室资源状态、会议形式/设备要求、依赖顺序、容量限制），构建可排会议的合法时间-空间-"
+        },
+        {
+          "node_id": "n2",
+          "semantic_role": "calculation",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "facts",
+                "from": [
+                  "n1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于旧草案，计算每场会议在新约束下的‘是否仍合法’状态；对不合法项标记冲突类型（如M1原R2但R2在09:30-10:3"
+        },
+        {
+          "node_id": "n3",
+          "semantic_role": "verification",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "calculation",
+                "from": [
+                  "n1",
+                  "n2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "在满足全部硬约束前提下，搜索最小改动成本的可行排期：按优化优先级（①总改动成本最小 → ②最晚结束时间最小 → ③ID升"
+        },
+        {
+          "node_id": "n4",
+          "semantic_role": "execution",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "verification_report",
+                "from": [
+                  "n3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "对最终方案执行五类显式核对：①每人时间窗覆盖（例：周惟在M2/M4/M5中均需14:00–17:00内出席）；②R1/R"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0155",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 4,
+        "max_width": 1,
+        "dependency_density": 1.5
+      },
+      "needs_manual": true,
+      "unclassified_count": 3,
+      "annotations": [
+        {
+          "node_id": "nsubtask_1",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.0,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "基于时间约束、场地容量、动线规则和分组固定性，推导出唯一可行的3轮×3站团建闯关轮换方案（含每轮各站点的2个18人小组）"
+        },
+        {
+          "node_id": "nsubtask_2",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.0,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nsubtask_1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "将所有环节（签到暖场、CEO致辞、3轮闯关+转场、晚宴、节目秀、颁奖抽奖、合影）严格排入15:30–20:30时间窗，满"
+        },
+        {
+          "node_id": "nsubtask_3",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nsubtask_1",
+                  "nsubtask_2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "根据确定的时间表与场地分配，逐项核算预算：计算Hall A/B/Lawn场地费、便携音箱（仅S1和Lawn需，共1台）、"
+        },
+        {
+          "node_id": "nsubtask_4",
+          "semantic_role": "execution",
+          "role_confidence": 0.5,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nsubtask_1",
+                  "nsubtask_2",
+                  "nsubtask_3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "生成最终执行总表（含时间、地点、参与对象、形式、设备/道具/奖品数量）、闯关轮换表（3轮×3站，每站2组颜色）、预算表（"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0186",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 5,
+        "max_width": 1,
+        "dependency_density": 0.8
+      },
+      "needs_manual": true,
+      "unclassified_count": 2,
+      "annotations": [
+        {
+          "node_id": "ntask_1",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "明确并形式化所有硬约束与软约束，按优先级分层归类；定义H/P/C/F指标的计算逻辑；确立方案比选的字典序规则（H→P→C"
+        },
+        {
+          "node_id": "ntask_2",
+          "semantic_role": "verification",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "ntask_1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "在严格满足全部硬约束前提下，为B1–B3时间区块生成唯一可行的共用排班前缀：逐区块验证岗位人数、资质（经验/英语/急救/"
+        },
+        {
+          "node_id": "ntask_3",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.0,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "verification_report",
+                "from": [
+                  "ntask_2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于task_2输出的共用前缀，分别构建B4–B5的两套完整延伸方案（方案A与方案B），确保：①不回溯修改B1–B3；②"
+        },
+        {
+          "node_id": "ntask_4",
+          "semantic_role": "calculation",
+          "role_confidence": 0.67,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "ntask_3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "对共用前缀+方案A、共用前缀+方案B两套完整方案，分别计算四项核心指标：H（硬约束违例数）、P（备注罚分总和）、C（跨点"
+        },
+        {
+          "node_id": "ntask_5",
+          "semantic_role": "execution",
+          "role_confidence": 0.5,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "calculation",
+                "from": [
+                  "ntask_4"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "依据task_4计算结果，执行字典序比选（H→P→C→F→…），输出最终推荐方案；明确说明：08:00–12:50必须执"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0217",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 4,
+        "max_width": 1,
+        "dependency_density": 1.0
+      },
+      "needs_manual": true,
+      "unclassified_count": 2,
+      "annotations": [
+        {
+          "node_id": "nt1",
+          "semantic_role": "extraction",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "解析所有输入约束：班次有效工时、订单交期与原料约束、旧计划内容、产线规则（单线/拆单限制/清线规则/班次最多2单/排序逻"
+        },
+        {
+          "node_id": "nt2",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "facts",
+                "from": [
+                  "nt1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于硬性约束（交期+有效工时+原料可用性）构建可行排产初解：重点处理O105急单（S2前交付，需在S1或S2完成），校验"
+        },
+        {
+          "node_id": "nt3",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.0,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nt1",
+                  "nt2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "在初解基础上，按六级优先级逐层优化：先刚性满足交期和工时；再最小化改动条目数（对比旧计划《班次-订单-数量》三元组）；再"
+        },
+        {
+          "node_id": "nt4",
+          "semantic_role": "calculation",
+          "role_confidence": 0.5,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nt3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于最终排产方案，逐班生成A部分排产表：明确每班订单顺序、各单产量、清线标识（如‘→SKU-X’）、消耗有效工时（=产量"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0248",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 5,
+        "max_width": 1,
+        "dependency_density": 1.0
+      },
+      "needs_manual": true,
+      "unclassified_count": 2,
+      "annotations": [
+        {
+          "node_id": "nT1",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "解析拼音微专题A/B/C的筛选规则，对易错字表逐字标注拼音、声母、韵母、声调，统计各专题命中字数并确定前2名（含并列处理"
+        },
+        {
+          "node_id": "nT2",
+          "semantic_role": "search",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nT1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "根据硬约束（时段强度限制、模块依赖顺序、固定位置L3、H5时限、H1<H2<L1、H4<L2、K/E/B0/B1/C类日"
+        },
+        {
+          "node_id": "nT3",
+          "semantic_role": "calculation",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "facts",
+                "from": [
+                  "nT2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "对T2生成的所有可行方案，按主目标（加权总收益 = Σ(基础收益 × 类别日期系数)）精确计算得分，并识别全局最优值；若"
+        },
+        {
+          "node_id": "nT4",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "calculation",
+                "from": [
+                  "nT3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "从T3选出的最优解中提取最终时间表（D1晚A…D5晚B），严格比对旧计划，逐时段标记是否改动，计算总改动成本（含互换计为"
+        },
+        {
+          "node_id": "nT5",
+          "semantic_role": "verification",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nT3",
+                  "nT4"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "校验最终计划是否满足：①每日总时长≤180min（即每时段90min×2）；②所有依赖关系（H1<H2<L1等）；③高低"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0279",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 4,
+        "max_width": 2,
+        "dependency_density": 1.4
+      },
+      "needs_manual": true,
+      "unclassified_count": 3,
+      "annotations": [
+        {
+          "node_id": "n1",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "解析并验证所有必须遵守的硬性规则（截止时间、依赖顺序、人员能力、病假约束、B连续性、环境故障规避、拼音筛选准入）"
+        },
+        {
+          "node_id": "n2",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "执行拼音筛选：对X1/X2/X3/Y1/Y2/Y3六项缺陷，按声母（zh/ch/sh）、韵母（严格为ang）、声调（第四"
+        },
+        {
+          "node_id": "n3",
+          "semantic_role": "verification",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "n1",
+                  "n2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于初始排班、新增合规缺陷、韩岳周二病假、周三上午环境故障等约束，重构8格×4人主排班表；确保所有硬规则满足，并优化S1"
+        },
+        {
+          "node_id": "n4",
+          "semantic_role": "calculation",
+          "role_confidence": 0.67,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "verification_report",
+                "from": [
+                  "n3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "对比新旧排班，统计改动格数（任意人员任一半天内容变更即+1）；识别陈澈是否启用及占用格数；计算四核心人员（林乔/韩岳/许"
+        },
+        {
+          "node_id": "n5",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.0,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "calculation",
+                "from": [
+                  "n1",
+                  "n2",
+                  "n3",
+                  "n4"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "在韩岳病假延长至周三上午的新异常场景下，仅做最小必要调整（优先复用原方案未冲突格子，禁用周三上午E/F，允许陈澈周三上午"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0310",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 3,
+        "max_width": 2,
+        "dependency_density": 0.75
+      },
+      "needs_manual": true,
+      "unclassified_count": 2,
+      "annotations": [
+        {
+          "node_id": "n1",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "根据P类判定规则（首字拼音声母为zh/sh且第四声），对6个业务系统（搜索、支付、账务、视频、网关、质检）及新增项‘核心"
+        },
+        {
+          "node_id": "n2",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "n1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于P类结果、人员资质约束（周工必须全程参与所有P类任务）、热修固定时段（00:00–01:00）、依赖关系（热修→支付"
+        },
+        {
+          "node_id": "n3",
+          "semantic_role": "calculation",
+          "role_confidence": 0.5,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "n2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "计算该唯一方案的变动成本：统计原计划中起始时段变更的任务数（每项+1分）和执行人变更的任务数（每项+1分）；新增热修不计"
+        },
+        {
+          "node_id": "n4",
+          "semantic_role": "calculation",
+          "role_confidence": 0.5,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "n2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "计算该方案的风险总分：对每个时段内执行的任务，取其风险权重 × 该时段风险倍率；若存在并行任务，风险分叠加；P类任务若缺"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0341",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 3,
+        "max_width": 1,
+        "dependency_density": 0.67
+      },
+      "needs_manual": true,
+      "unclassified_count": 1,
+      "annotations": [
+        {
+          "node_id": "nsubtask_1",
+          "semantic_role": "execution",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "生成满足全部硬性约束（时间窗、前置依赖、资源上限、设备容量、预算、固件负载均衡）的可行调度方案，输出T1~T11与B1~"
+        },
+        {
+          "node_id": "nsubtask_2",
+          "semantic_role": "extraction",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "structured_record",
+                "from": [
+                  "nsubtask_1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "从所有可行方案中筛选出T11完成日最早者；若多解，则按成本升序→起始日序列字典序升序→FW-A优先分配固件任务的规则确定"
+        },
+        {
+          "node_id": "nsubtask_3",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "facts",
+                "from": [
+                  "nsubtask_2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于subtask_2选定的唯一方案，提取并结构化输出A块（重排表）、B块（M1/M2/M3达成状态 + 关键路径链）、"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0372",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 4,
+        "max_width": 1,
+        "dependency_density": 1.0
+      },
+      "needs_manual": true,
+      "unclassified_count": 1,
+      "annotations": [
+        {
+          "node_id": "nsubtask_1",
+          "semantic_role": "extraction",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "解析所有约束条件与硬性规则：诊室可用性（R1禁T7/T8；R2禁T7/T8）、医生时隙可用性、患者锁定要求（如P01必须"
+        },
+        {
+          "node_id": "nsubtask_2",
+          "semantic_role": "search",
+          "role_confidence": 0.67,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "facts",
+                "from": [
+                  "nsubtask_1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "构建可行排程候选空间：枚举所有患者在合法诊室-医生-时隙组合下的可行起始时隙（考虑时长、连续性、就绪/最晚限制），特别标"
+        },
+        {
+          "node_id": "nsubtask_3",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.0,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "facts",
+                "from": [
+                  "nsubtask_1",
+                  "nsubtask_2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "按字典序优化目标（M1→M2→M3→M4）求解最优排程：使用约束满足+加权排序策略，优先保障L1/L2不违约（M1=0）"
+        },
+        {
+          "node_id": "nsubtask_4",
+          "semantic_role": "verification",
+          "role_confidence": 0.5,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nsubtask_3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "计算三方案（正式+草案甲+草案乙）的M1/M2/M3/M4指标值，并生成患者校验表与排程时间表；验证M3是否≤15、R2"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0403",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 4,
+        "max_width": 1,
+        "dependency_density": 0.75
+      },
+      "needs_manual": true,
+      "unclassified_count": 1,
+      "annotations": [
+        {
+          "node_id": "n1",
+          "semantic_role": "extraction",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "解析所有硬性约束与资源边界：班次结构、缓冲规则、午休换型逻辑、原料可用时间窗、换型矩阵、外协冻结点与容量、公平性约束（O"
+        },
+        {
+          "node_id": "n2",
+          "semantic_role": "search",
+          "role_confidence": 0.5,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "facts",
+                "from": [
+                  "n1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "构建可行内做排程候选集：基于优先级分层（A→B→C）、交期刚性、原料时序（如柠檬基底D1 13:00后才可用）、换型代价"
+        },
+        {
+          "node_id": "n3",
+          "semantic_role": "reasoning",
+          "role_confidence": 0.5,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "facts",
+                "from": [
+                  "n2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "对每个内做候选方案，评估外协决策空间：在D1 14:30前决定O4/O5是否外协（最多2单），计算对应外协成本、到货时间"
+        },
+        {
+          "node_id": "n4",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.0,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "analysis",
+                "from": [
+                  "n3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "按四层目标函数排序所有合法方案（含内做+外协组合）：①最小化分层逾期数（A>B>C）；②同逾期下最小化外协总成本；③同成"
+        }
+      ]
+    },
+    {
+      "sample_id": "ob_pb_0434",
+      "case_class_suggest": "medium",
+      "structure": {
+        "depth": 4,
+        "max_width": 1,
+        "dependency_density": 1.5
+      },
+      "needs_manual": true,
+      "unclassified_count": 2,
+      "annotations": [
+        {
+          "node_id": "nsubtask_1",
+          "semantic_role": "calculation",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "independent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": []
+          },
+          "description_excerpt": "执行LN6规则汉字筛选：提取所有收货点名称前两字；对首字取拼音声母，判断是否为L或N；对次字查简体常用字笔画数（按《现代"
+        },
+        {
+          "node_id": "nsubtask_2",
+          "semantic_role": "reasoning",
+          "role_confidence": 0.33,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "calculation",
+                "from": [
+                  "nsubtask_1"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "基于07:50原计划和09:20插入U1（冷链、V1专属、时间窗10:00–10:50、安全月台），结合路网、车辆资质、"
+        },
+        {
+          "node_id": "nsubtask_3",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "analysis",
+                "from": [
+                  "nsubtask_1",
+                  "nsubtask_2"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "在满足全部硬约束（准时性优先级：E/A > B；LN6分配隔离；V2/V3/V4任务数差≤1；月台/资质/载重/时间窗）"
+        },
+        {
+          "node_id": "nsubtask_4",
+          "semantic_role": "unclassified",
+          "role_confidence": 0.17,
+          "atomic_ok": "pending_manual",
+          "dependency_semantics": "artifact_dependent",
+          "artifact_contract": {
+            "produces": [
+              {
+                "type": "upstream_artifact",
+                "required": true
+              }
+            ],
+            "consumes": [
+              {
+                "type": "upstream_artifact",
+                "from": [
+                  "nsubtask_1",
+                  "nsubtask_2",
+                  "nsubtask_3"
+                ],
+                "required": true
+              }
+            ]
+          },
+          "description_excerpt": "根据subtask_3输出的最终调度表，逐项计算四段输出要求：①LN6结果（复用subtask_1）；②完整调度表（格式"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "semantic_role 为关键词启发式预标注（confidence<0.2 → unclassified 待人工）",
+    "artifact_contract.type 按上游 role 推断（初版）；consumes.from 与 edges 严格一致",
+    "dependency_semantics：有上游=artifact_dependent（L2 范围），无=independent（L1 counterfactual）",
+    "atomicity 判定 pending_manual——人工复核后回填"
+  ]
+}
