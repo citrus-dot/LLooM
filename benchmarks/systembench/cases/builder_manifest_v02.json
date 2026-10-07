@@ -1,0 +1,44 @@
+{
+  "generated_at": "2026-10-07T09:55:23+00:00",
+  "benchmark_identity": "lloom-systembench-v0.2-candidate（构建层；freeze 于 S12.7）",
+  "n_cases": 40,
+  "n_nodes": 158,
+  "by_case_role": {
+    "headline_candidate": 30,
+    "control": 10
+  },
+  "by_case_class": {
+    "complex": 27,
+    "medium": 9,
+    "simple": 4
+  },
+  "by_split": {
+    "test": 31,
+    "calibration": 9
+  },
+  "semantic_by_provenance": {
+    "s11_seed": 15,
+    "s12_expansion": 15
+  },
+  "nodes_by_dependency_semantics": {
+    "independent": 63,
+    "artifact_dependent": 95
+  },
+  "pool": {
+    "weak": "deephermes_3_llama_3_8b_preview",
+    "mid": "deepseek_r1_distill_qwen_7b",
+    "strong": "intern_s1_mini"
+  },
+  "split_rule": "workflow-group 哈希桶 sha256('lloom-sbsplit:3407:{case_id}')，20/80（v0.1 同法，case_id 已换 → 新 identity）",
+  "prompt_composition": {
+    "semantic": "root_goal + '\\n\\n---\\n## 子任务\\n' + description（frozen；artifact_dependent 节点 S12.6 stage 0 注入冻结参考产物后重算 prompt_hash）",
+    "control": "llmrb 真实 query 逐字（v0.1 同法）",
+    "production_observation": "生产 ai_client.rs:526 子任务 prompt 现状只发 description、不嵌 root_goal 数据——benchmark 层嵌入目标数据使节点可执行；是否回修生产为独立决策，不属本 builder"
+  },
+  "notes": [
+    "v0.1 Frozen 资产只读未覆写；control 使用 v0.1 未消费的 llmrb sample（无重叠）",
+    "semantic node outcome_binding.mode=semantic_matrix_exact（source_id=case/node），matrix 于 S12.6 采集、S12.7 冻结",
+    "headline 候选全部来自真实 decomposition（25 号 §五 D1-c'：Primary=Semantic Set）",
+    "case_class 按 node_count+depth（spec complexity_bucket）；所有真实 decomposition 为 3-6 节点"
+  ]
+}

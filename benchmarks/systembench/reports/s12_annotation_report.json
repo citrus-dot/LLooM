@@ -1,0 +1,394 @@
+{
+  "generated_at": "2026-10-07T10:13:14+00:00",
+  "spec_version": "workflow_annotation_v1",
+  "prelabel_model": "qwen-plus",
+  "n_workflows": 30,
+  "n_nodes": 175,
+  "role_distribution": {
+    "reasoning": 51,
+    "verification": 35,
+    "calculation": 33,
+    "extraction": 23,
+    "synthesis": 13,
+    "transformation": 9,
+    "classification": 5,
+    "search": 5,
+    "retrieval": 1
+  },
+  "heuristic_agreement": {
+    "covered": 58,
+    "agree": 28,
+    "rate": 0.483
+  },
+  "review_tiers": {
+    "mandatory_review": 2,
+    "informational_flags": 128,
+    "clean": 45
+  },
+  "atomic_false_nodes": 0,
+  "human_spotcheck_pack": {
+    "rule": "哈希排序前 20%（确定性）∪ 全部 mandatory_review；informational 不强制",
+    "n_nodes": 36,
+    "rows": [
+      {
+        "case_id": "sb_v02_sem_001",
+        "node_id": "nsubtask_2",
+        "description": "基于优先级规则（主目标：T5紧急→T1/T2 A类→其余；次目标：最小化原计划T1-T4被替换数→出发时刻改动数→总偏差），穷举/剪枝生成可行调度方案集，并对每",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['并']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_001",
+        "node_id": "nsubtask_4_s2",
+        "description": "逐项校验各运输任务的车载重合规性（如T2使用M1车型载重3.6t ≤ 4.0t上限）、H1是否未执行短线任务、J0是否未执行直送任务；输出每项校验结果（通过/不",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 nsubtask_4 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_002",
+        "node_id": "nA",
+        "description": "判断原D10完成50台试产（任务L）是否可行：检查所有硬约束（人员、设备、前置依赖、预算、里程碑）是否允许L在D10执行。",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": []
+      },
+      {
+        "case_id": "sb_v02_sem_002",
+        "node_id": "nE",
+        "description": "解释3个关键决策点：①为何放弃F-out（尽管省1天）；②为何将J（包装稿冻结）前置至D6而非更晚；③为何D5全天空闲——全部需紧扣硬约束冲突与目标权衡（如设备",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": []
+      },
+      {
+        "case_id": "sb_v02_sem_003",
+        "node_id": "n2",
+        "description": "基于酒店A与酒店B的入房时间、交通耗时、早餐包含情况、寄存政策及与各强制景点的可达性，结合周六需12:30前入住（因10:00博物馆入场且需先放行李）、周日需1",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['且', '并']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_003",
+        "node_id": "n4",
+        "description": "在可行方案中，按软约束优先级（留园优先→高铁时效最优→少换乘/少露天→成本最低）进行排序，选出唯一最优解；计算该方案下全部费用明细（高铁×2、酒店、门票、交通费",
+        "semantic_role": "synthesis",
+        "atomic_ok": true,
+        "flags": []
+      },
+      {
+        "case_id": "sb_v02_sem_006",
+        "node_id": "nsubtask_1",
+        "description": "基于时间约束、场地容量、动线规则和分组固定性，推导出唯一可行的3轮×3站团建闯关轮换方案（含每轮各站点的2个18人小组），确保6组各完成S1/S2/S3各一次、",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['且']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_006",
+        "node_id": "nsubtask_4_s1",
+        "description": "基于已确定的活动规模（108人）、场地配置（9桌）、环节设计与设备清单，生成结构化最终执行总表，包含四列：时间（精确到15分钟粒度）、地点（具体功能区）、参与对",
+        "semantic_role": "synthesis",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 nsubtask_4 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_009",
+        "node_id": "nT1_s3",
+        "description": "基于已解析的A/B/C规则（子任务0）和已标注的易错字拼音属性（子任务1），对每个字判断是否命中各专题规则；统计A/B/C各自命中的字数；按命中数降序排序，返回",
+        "semantic_role": "calculation",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 nT1 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_009",
+        "node_id": "nT3",
+        "description": "对T2生成的所有可行方案，按主目标（加权总收益 = Σ(基础收益 × 类别日期系数)）精确计算得分，并识别全局最优值；若存在多个最优解，则按次目标（最小化改动成",
+        "semantic_role": "calculation",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['并']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_014",
+        "node_id": "n4_s1",
+        "description": "基于n3输出的所有合法方案（含内做+外协组合），按四层优先级目标函数进行严格排序：①以分层逾期数（A/B/C类订单逾期数）为第一主键，按字典序升序（A>B>C）",
+        "semantic_role": "calculation",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 n4 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_015",
+        "node_id": "nsubtask_2",
+        "description": "基于07:50原计划和09:20插入U1（冷链、V1专属、时间窗10:00–10:50、安全月台），结合路网、车辆资质、月台约束、门岗复核（5min）、月台清场",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['并']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_016",
+        "node_id": "nt2",
+        "description": "基于DAG进行5分钟粒度的时间窗调度建模：枚举T1/T2起始点（仅19:00或19:05可选），穷举所有满足前置依赖、资源独占、水线互斥、人员负荷均衡的可行排程",
+        "semantic_role": "calculation",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['并']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_016",
+        "node_id": "nt3",
+        "description": "对可行解集按四层排序标准（T6/T7/T9最晚完成时间 → D1调箱数 → F1/F2作业时长差 → 字典序）进行精确打分与最优解筛选；验证备用包（1泡+1瓶+",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": []
+      },
+      {
+        "case_id": "sb_v02_sem_016",
+        "node_id": "nt4_s2",
+        "description": "对上一步生成的排程总表执行逐项核对：检查四项独立约束是否满足——（a）时间冲突（同一资源在重叠时段被多任务占用）；（b）依赖完整性（所有前置依赖ID均存在于任务",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 nt4 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_017",
+        "node_id": "n4_s3",
+        "description": "若T0无法合规替换T3，则检查C5和C6当前调度状态（资源占用、时间窗、依赖关系），判定是否因T3故障与T0介入引发其约束冲突（如资源争用、前置任务中断），并输",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 n4 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_018",
+        "node_id": "nsubtask_1",
+        "description": "解析所有硬约束（H1–H6）与任务依赖关系，构建时间-资源-物资三维度可行性图谱；明确T1/T2/T3/T4/T5/T6/T7的最早可开始时间、最晚必须结束时间",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": []
+      },
+      {
+        "case_id": "sb_v02_sem_020",
+        "node_id": "nsubtask_1",
+        "description": "解析当前库存分布、区域容量约束与新增批次约束，识别所有硬性冲突点（如R1体积已达上限但需接收F1/A2；P区当前SKU组合不满足09:30前规则；B1/B2/E",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": []
+      },
+      {
+        "case_id": "sb_v02_sem_020",
+        "node_id": "nsubtask_3",
+        "description": "在subtask_2确定的货位分配框架下，构建08:00–09:30时间窗内唯一可行的任务执行序列：精确计算每项任务（含叉车分配、D1占用、R2巷道占用、前置依",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['并']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_021",
+        "node_id": "ntask_1",
+        "description": "解析所有硬约束（H1–H4）并验证当前旧方案的违规点，明确各SKU合法可选区域、容量限制、高频/低频分类、B1准入条件、M0禁用规则及单区绑定要求。",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['并']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_021",
+        "node_id": "ntask_2",
+        "description": "基于硬约束筛选出所有可行的SKU–区域分配组合，构建满足‘单SKU仅占1正式区’的候选分配集；对每个SKU枚举其合法区域内可容纳托数（考虑有效上限与空位保留），",
+        "semantic_role": "retrieval",
+        "atomic_ok": true,
+        "flags": []
+      },
+      {
+        "case_id": "sb_v02_sem_023",
+        "node_id": "n1_s2",
+        "description": "基于提取的约束，枚举并计算所有满足步行约束（单次≤45min且≤5.5km；带行李时仅允许≤0.5km步行）与刚性时间窗口（含海洋馆抵达、东港检票、午休不可占用",
+        "semantic_role": "calculation",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 n1 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_023",
+        "node_id": "n1_s3",
+        "description": "在已计算的可行路径组合中，验证每组是否满足照看人分配规则：（1）恰好分配4个高体力段（A/B/C/D）给阿成与小婧；（2）每人各2段；（3）同一人分配的两段不连",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 n1 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_023",
+        "node_id": "n3_s2_s2",
+        "description": "从最优方案中提取所有行程节点的步行距离数据，累加总步行距离，并判断是否≤15km；同时统计A/B/C/D四类活动在4天内的分布频次，验证是否满足‘每类活动在4天",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:再拆分复核放行（s12_agent_review.json round2，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_023",
+        "node_id": "n3_s2_s3",
+        "description": "针对最优方案的时间线，逐日检查：①每日机动时间（非活动、非午休、非通勤的空闲时段总和）是否≥90分钟；②所有午休时段是否严格为12:00–13:30；③所有进站",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:再拆分复核放行（s12_agent_review.json round2，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_023",
+        "node_id": "n3_s3_s1",
+        "description": "判断船运模块是否被标记为‘停开’；若是，则基于最优方案和C约束，生成D候补方案：用同主题展厅替代原船程，并同步更新时间、地点、交通方式、费用明细、照看人信息，确",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:再拆分复核放行（s12_agent_review.json round2，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_023",
+        "node_id": "n3_s3_s2",
+        "description": "对原始四段群公告内容进行结构化重排：严格按‘标题标签→核心日程→注意事项→备选说明’顺序组织段落；为每段添加对应四级标签【行程】【预算】【提醒】【备选】；不增删",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "arbitration_needed:疑似过拆（可与同级子节点合并），人工仲裁"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_023",
+        "node_id": "n3_s3_s3",
+        "description": "在已重排并打标后的E群公告中，对每一段内部句子进行时序/逻辑校准：按时间先后（如‘9:00集合→10:30入场→14:00返程’）或逻辑优先级（如‘安全第一→携",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "arbitration_needed:疑似过拆（可与同级子节点合并），人工仲裁"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_024",
+        "node_id": "n2_s3",
+        "description": "对上一步得到的最优分值解集，按次目标排序：先计算各解在6月末的现金余额（初始余额+累计拨款−累计付款+累计回款），取余额最大者；若仍并列，应用固定规则：优先选择",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 n2 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_025",
+        "node_id": "ntask_2",
+        "description": "在满足现金流月度上限（7≤180, 8≤190, 9≤130）、季度总额≤500（含风险预留）、A1+C1+E1截至8月底≥80的前提下，枚举所有合法项目批准子",
+        "semantic_role": "calculation",
+        "atomic_ok": true,
+        "flags": []
+      },
+      {
+        "case_id": "sb_v02_sem_026",
+        "node_id": "n3",
+        "description": "在满足库存约束前提下，枚举所有合法采购单组合（含供应商选择、下单时段、采购量），遵守：建单时段仅3个、单日最多1单到货、单日收货≤80张、单字限购1单、上依赖账",
+        "semantic_role": "reasoning",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['再']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_026",
+        "node_id": "n4",
+        "description": "对最优解进行全约束核验：逐项检查建单时间冲突、供应商接单窗（A/B/C各自时段）、收货月台冲突（同日多单到货）、单日收货量超限、单字采购量超限（如A单字60张上",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:仅并列连接词、LLM 判单一职责维持（信息性，抽检可推翻）",
+          "atomicity_review:并列标记['以及']（LLM 判 atomic，请抽检确认）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_027",
+        "node_id": "n3_s2",
+        "description": "基于正式考表，对每位考生，汇总其所有参考场次的时间段；检查是否存在任一考生在相同考试时间段内被安排了两门及以上科目（即时间冲突），输出所有冲突考生ID及对应冲突",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 n3 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_029",
+        "node_id": "nt2_s1",
+        "description": "从根目标中提取通用预算池7-9月各月刚性支出明细（含工资、工单系统费、热线费、租金、8月专项审计费、各月最低夜班餐补），按月结构化为三行数据表（月份、科目、金额",
+        "semantic_role": "extraction",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 nt2 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_029",
+        "node_id": "nt2_s3",
+        "description": "检查上一步中所有刚性支出科目是否100%覆盖（即每项均完整计入当月支出，未顺延至其他月份、未拆分至多月、未以‘约’‘暂估’等模糊方式表述），输出验证结论（通过/",
+        "semantic_role": "verification",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 nt2 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      },
+      {
+        "case_id": "sb_v02_sem_030",
+        "node_id": "nC4_s2",
+        "description": "基于约束清单与上游方案候选集（来自nC1-nC3），生成唯一最优方案，并以双维度结构化输出：①资源线（按资源类型→时段→分配量表格）；②优先级线（按任务ID→优",
+        "semantic_role": "synthesis",
+        "atomic_ok": true,
+        "flags": [
+          "agent_clear:拆分组 nC4 已复核放行（s12_agent_review.json，抽检可推翻）"
+        ]
+      }
+    ]
+  },
+  "notes": [
+    "review_status=flagged_for_human 的节点需人工确认；agent_reviewed 的 informational flag 可抽查",
+    "D2-b 回退判据：抽检不一致率 >30% → 回退人工全量（24 号 §三 D2）",
+    "consumes.from 以 edges 投影为权威，LLM 不一致处已机械修正并记 flag"
+  ]
+}

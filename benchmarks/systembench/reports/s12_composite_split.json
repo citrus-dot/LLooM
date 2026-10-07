@@ -1,0 +1,865 @@
+{
+  "generated_at": "2026-10-07T10:06:52+00:00",
+  "spec_basis": "workflow_annotation_v1 §atomicity on_violation（拆分节点后重新标注）",
+  "model": "qwen-plus",
+  "n_composite_nodes": 25,
+  "n_split_ok": 25,
+  "n_split_failed": 0,
+  "semantic_nodes_after": 175,
+  "tokens": {
+    "input": 1244,
+    "output": 1773
+  },
+  "provenance_note": "拆分子节点 split_provenance.from_node 指回原 composite 节点；人工否决某拆分时以本报告 + git 历史可完整重建",
+  "splits": [
+    {
+      "node_key": "sb_v02_sem_001/nsubtask_1",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从任务与车辆基础数据中提取所有站点名称，并为每个站点名称生成其汉字拼音首音（如'上海'→'S'，'深圳'→'S'，'北京'→'B'）。",
+            "semantic_role": "extraction",
+            "task_type": "general",
+            "depends_on": [],
+            "estimated_output_tokens": 180
+          },
+          {
+            "description": "筛选出拼音首音为'SH'（注意：需区分'S'与'SH'，如'深圳'shēnzhèn → 'SH'，'上海'shànghǎi → 'SH'）的站点；对每个此类站点，计算其名称第二字的简体中文笔画数，并求所有匹配站点的第二字笔画数总和。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "基于载重、车型、线路类型等字段，执行合规性初筛：判断是否存在违规组合，包括但不限于：(1) 车型H1用于任务距离≤70km且载重＜4t；(2) 车型J0用于直送类任务（即无中转、点对点直达）。输出违规记录列表（含任务ID、车型、违规类型、依据规则）。",
+            "semantic_role": "verification",
+            "task_type": "general",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 250
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_001/nsubtask_4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从站点列表中筛选出拼音首音为'sh'的站点（山口、石桥、松溪），提取每个站点名称的第二字，查询其在简体中文中的标准笔画数，并计算总和；最后判断该总和是否等于13。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [],
+            "estimated_output_tokens": 180
+          },
+          {
+            "description": "逐项校验各运输任务的车载重合规性（如T2使用M1车型载重3.6t ≤ 4.0t上限）、H1是否未执行短线任务、J0是否未执行直送任务；输出每项校验结果（通过/不通过）及依据。",
+            "semantic_role": "verification",
+            "task_type": "general",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 150
+          },
+          {
+            "description": "评估T4任务采用中转方案（J0→R1）的可行性：计算J0与R1的总耗时（1h40m + 2h10m = 3h50m），对比直达耗时（4h10m）；检查班次衔接性——J0到达时间是否≤R1发车时间（10:10），若J0 08:20发车且耗时1h40m，则到达时间为09:00，满足衔接；最终判定中转是否可行，并列出所有超时任务（即实际耗时 > 允许耗时的任务）。",
+            "semantic_role": "reasoning",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 220
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_006/nsubtask_4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "基于已确定的活动规模（108人）、场地配置（9桌）、环节设计与设备清单，生成结构化最终执行总表，包含四列：时间（精确到15分钟粒度）、地点（具体功能区）、参与对象（组别/角色）、形式（讲解/实操/互动等）、设备/道具/奖品数量（按环节列出）。",
+            "semantic_role": "synthesis",
+            "task_type": "general",
+            "depends_on": [],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "根据3轮闯关机制与9个物理站点（编号S1–S9），分配每轮3个站点（共3×3=9站次），确保每站每轮服务2组（按红/蓝/黄/绿四色分组，取其中两色），且满足颜色轮换不重复、组别动线无交叉；输出格式为表格：轮次（1–3）×站点（S1–S9中每轮3个）→对应2组颜色。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "汇总全部环节所需物资与服务项，生成预算表（项目名称、数量、单价、小计、归属环节），并附加三项关键安排说明：① 容量刚性约束（108人/9桌→每桌12人，超6人即溢出，需明确分组锁定机制）；② 时间窗挤压应对（总时长≤180min，各环节缓冲≤5min，说明压缩点）；③ 设备复用权衡（如投影仪在A/B/C三站共享，说明切换耗时与备用方案）；最后完成约束核对：逐条验证108人适配性、9桌承载、总预算≤阈值、音视频设备无时段冲突、96→108人扩容可行性（含签到/动线/如厕冗余测算）。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 450
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_008/nt4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "基于最终排产方案，为每个班次生成A部分排产表：列出该班次内所有订单的执行顺序、对应产量、清线标识（格式为'→SKU-X'）、本单消耗的有效工时（=产量/100，保留2位小数）、以及该班次累计消耗后剩余的有效工时（初始班次工时按根目标中给定的每班标准工时计算）。",
+            "semantic_role": "transformation",
+            "task_type": "general",
+            "depends_on": [],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "基于最终排产方案与原始交付计划，对B部分进行交付核对：对每个订单，输出其实际完成班次（如'早班D3'）、是否按期（布尔值，True当且仅当完成班次 ≤ 计划交付班次），并汇总统计按期率（按期订单数/总订单数，保留3位小数）。",
+            "semantic_role": "verification",
+            "task_type": "general",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 160
+          },
+          {
+            "description": "基于最终排产方案与原始排产方案，执行C部分改动对照与D部分规则核对：（1）C部分：逐条列出所有差异项（字段级变动，如'订单O123-早班：产量由800→950'），统计差异总条目数、受影响班次集合（去重列表）及总数；（2）D部分：检查三项规则——是否存在单班有效工时超限（>标准工时）、是否存在C类物料误用于非允许订单、是否存在D类物料在S5工序前单日用量超400；对每项规则输出布尔结果及违规实例（若存在），并计算每日早班与晚班剩余有效工时绝对差值之和。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 320
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_009/nT1",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从微专题A/B/C的筛选规则文本中提取每条规则的结构化条件（如：'声母为j/q/x且韵母为ü'、'多音字且在小学课本中读第三声'），输出为JSON列表，每个元素含rule_id、condition_text、parsed_components（声母/韵母/声调/多音等字段）。",
+            "semantic_role": "extraction",
+            "task_type": "general",
+            "depends_on": [],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "对易错字表中的每个汉字，查询标准普通话读音（依据《现代汉语词典》第7版规范），逐字输出其标准拼音、声母、韵母、声调（用数字标调，如'ju1'），要求处理多音字时仅取该字在小学语文教材中最常用读音。",
+            "semantic_role": "transformation",
+            "task_type": "general",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 450
+          },
+          {
+            "description": "基于已解析的A/B/C规则（子任务0）和已标注的易错字拼音属性（子任务1），对每个字判断是否命中各专题规则；统计A/B/C各自命中的字数；按命中数降序排序，返回前2名专题名称列表（若第2名存在并列，则全部包含，如['B','A','C']当B=A>C时）。",
+            "semantic_role": "calculation",
+            "task_type": "general",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 220
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_012/nsubtask_3",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从subtask_2选定的唯一方案中，提取并结构化输出A块：重排后的表格数据（含行序号、原始字段名、重排后列顺序、映射依据说明）。",
+            "semantic_role": "extraction",
+            "task_type": "general",
+            "depends_on": [],
+            "estimated_output_tokens": 400
+          },
+          {
+            "description": "基于同一方案，识别并结构化输出B块：M1/M2/M3三项目标的当前达成状态（'达成/未达成/部分达成'），并列出支撑该判断的关键路径链（节点序列+每跳依赖类型+瓶颈环节标注）。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 500
+          },
+          {
+            "description": "逐项检查七类约束（时序、资源、逻辑、合规、接口、容错、性能）在该方案下的满足情况，对每一类输出布尔型合规性断言，并附一句可验证的依据短句（引用方案中具体参数或结构）。",
+            "semantic_role": "classification",
+            "task_type": "general",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 300
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_014/n4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "基于n3输出的所有合法方案（含内做+外协组合），按四层优先级目标函数进行严格排序：①以分层逾期数（A/B/C类订单逾期数）为第一主键，按字典序升序（A>B>C）；②逾期数相同时，以外协总成本为第二主键升序；③成本相同时，以总加班时长为第三主键升序；④三者均相同时，按预设打平规则（如ID最小优先）确定唯一最优解。仅返回该唯一最优方案的完整结构化数据（含所有决策变量：各订单分配方式、外协供应商、加班工时等）。",
+            "semantic_role": "calculation",
+            "task_type": "complex_reasoning",
+            "depends_on": [],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "基于上一步选出的唯一最优方案，生成四块独立输出内容：（1）总表：汇总全局指标（总成本、总加班、各类逾期数、外协占比等）；（2）订单表：每行一条订单，列含订单ID、类型、交付时间、计划完成时间、实际完成方式（内做/外协）、外协供应商（若适用）、加班时长；（3）核对表：逐项验证约束满足性（如产能上限、外协资质、交期硬约束），每项标注'满足'或'违反'及原因；（4）关键解释：用3句话说明为何此方案最优（对应四层目标的逐层决胜逻辑）。",
+            "semantic_role": "synthesis",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 220
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_015/nsubtask_1",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从所有收货点名称中提取前两个汉字，形成（点位ID，首字，次字）三元组列表。",
+            "semantic_role": "extraction",
+            "task_type": "simple_qa",
+            "depends_on": [],
+            "estimated_output_tokens": 250
+          },
+          {
+            "description": "对上一步提取的每个首字，查询其汉语拼音声母（仅大写首字母），判断是否为'L'或'N'；输出（点位ID，首字，声母，is_L_or_N）布尔标记列表。",
+            "semantic_role": "classification",
+            "task_type": "simple_qa",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 320
+          },
+          {
+            "description": "对上一步中is_L_or_N为True的记录，查询对应次字在《现代汉语通用字笔顺规范》中的简体标准笔画数，判断是否恰好为6画；筛选出同时满足首字声母为L/N且次字为6画的所有点位，回溯其原始任务编号与货物重量，统计满足条件的任务总数及总吨数。",
+            "semantic_role": "verification",
+            "task_type": "math_logic",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 480
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_015/nsubtask_4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "复用subtask_1的LN6计算逻辑，对subtask_3输出的最终调度表中每辆车的每段行程，重新执行LN6结果推导（输入：车辆ID、起讫点、计划出发时间；输出：LN6布尔值及依据）。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [],
+            "estimated_output_tokens": 180
+          },
+          {
+            "description": "将subtask_3输出的最终调度表结构化为两种视图：①按车辆分组（每车一个区块，含车牌、任务序列、各任务起止时间/地点）；②全局时序事件流（所有出发/到达事件按时间戳升序排列，标注事件类型、车辆、任务ID、时间）。",
+            "semantic_role": "transformation",
+            "task_type": "general",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "对比subtask_2原始调度表与subtask_3最终调度表，在T4/T5/T6/T7任务范围内：识别被重排的任务（出发时间变动≥5分钟即视为重排），对每个重排任务说明原计划时间、新时间、偏差值、重排原因（如冲突消解、V2/V3/V4资源约束触发）；最后汇总：重排总数、准时性布尔值（所有T4–T7出发时间偏差≤2分钟则为True）、V2/V3/V4任务数三元组、总影响值（定义见根目标）、T4–T7出发偏差绝对值之和、总驾驶分钟数（=Σ(单程距离km ÷ 平均车速km/h × 60) × 2，车速取40km/h）。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 350
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_016/nt4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "基于nt3输出的原始排程数据，生成结构化最终排程总表：包含两个并列子表——（1）任务时间表（字段：任务ID、名称、开始时间、结束时间、执行单元、前置依赖ID）；（2）物资流表（字段：物资ID、名称、需求数量、供应时间窗、来源仓库、去向任务ID）。所有字段严格按用户四级标题模板填充，无额外解释。",
+            "semantic_role": "transformation",
+            "task_type": "general",
+            "depends_on": [],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "对上一步生成的排程总表执行逐项核对：检查四项独立约束是否满足——（a）时间冲突（同一资源在重叠时段被多任务占用）；（b）依赖完整性（所有前置依赖ID均存在于任务时间表中且结束时间早于当前任务开始时间）；（c）库存可行性（每时刻物资累计净需求 ≤ 当前可用库存+已承诺调拨量）；（d）备用冗余与负载均衡（关键路径任务均有≥1候补单元，且各执行单元日工时方差<15%）。仅输出布尔型核对结果及失败项清单（含定位行号与错误类型）。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 190
+          },
+          {
+            "description": "基于核对结果，生成候补状态快照（JSON格式）：包含字段'backup_units'（数组，每个元素含unit_id、task_id、standby_rank、activation_condition）、'load_balance_score'（float, 0.0–1.0）、'inventory_buffer_ratio'（float, 当前安全库存/7日平均消耗量）。同时用三句自然语言总结核心结论：第一句陈述排程整体可行性（可行/存在X类不可解冲突）；第二句指出最关键瓶颈（如'物资M3在T+2日缺口达47%’或'任务T-08无合格候补单元’）；第三句给出刚性约束下最优缓解建议（如'必须延迟T-12至T+1日以释放仓库W2’）。",
+            "semantic_role": "synthesis",
+            "task_type": "general",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 170
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_017/n4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "基于已固定的s1–s3配送路径（不可逆），在T3发生故障且T0启用的突发异常场景下，计算各时段剩余可用物资总量及对应可用时段集合（考虑库存、运输延迟、T0接管能力约束）。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "依据物资可用性与时序约束，判断T0是否能在合规性要求（如时效性、最小覆盖量、资质匹配）下完全替代T3执行原分配任务；若不可行，明确不合规项（如时段缺口、物资类型缺失、超载）。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "若T0无法合规替换T3，则检查C5和C6当前调度状态（资源占用、时间窗、依赖关系），判定是否因T3故障与T0介入引发其约束冲突（如资源争用、前置任务中断），并输出需重调度的具体对象（C5、C6或两者）及简要依据。",
+            "semantic_role": "reasoning",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 350
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_020/nsubtask_4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "基于subtask_2输出的最终货位方案和subtask_3输出的执行计划，统计需搬移的托盘总数：遍历所有SKU-批次在搬移前后的货位分配，识别货位变更的托盘（同一托盘ID对应货位编号变化），累加其数量。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [],
+            "estimated_output_tokens": 180
+          },
+          {
+            "description": "基于subtask_2的货位坐标映射（含每货位x/y坐标）和subtask_3的逐动作搬移序列，计算所有搬移动作的曼哈顿距离之和：对每个搬移动作，取源货位与目标货位的|x₁−x₂|+|y₁−y₂|，累加得总距离点数；同时计算明日作业点数：解析执行计划中‘上架’‘拣选’‘补货’三类动作的频次总和。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "基于subtask_2的最终货位方案（含货位编号、占用状态、SKU/批次信息、面积占比），计算三项稳定性指标：①货位编号变更数（对比subtask_1初始方案与当前方案中货位ID使用差异）；②新批次连续性得分（统计同一批次托盘在物理相邻货位中的最长连续段长度）；③最大连续空位段长度（按货位编号升序扫描，记录最长连续未占用货位数）；并计算总空间利用率 = Σ(各货位已用面积) / 39.6㎡；最后，独立核对六类规则冲突（时间窗重叠、AGV资源超配、单货位超容、前置依赖未满足、FEFO过期、布局禁入区占用），仅输出冲突类型列表及触发项示例（不修复）。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 310
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_023/n1",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从根目标中提取所有交通方式选项（公交/地铁/打车/步行）、各景点坐标与开放时间、刚性时间约束（海洋馆10:00前达、东港16:20前检票、午休14:30–15:40）、步行能力参数（姥姥单次≤45min/日≤5.5km；行李限制→步行≤0.5km）及照看人规则基础条款（阿成&小婧各承担2段高体力段ABCD、不连续、同方案下阿成拼音优先）。",
+            "semantic_role": "extraction",
+            "task_type": "simple_qa",
+            "depends_on": [],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "基于提取的约束，枚举并计算所有满足步行约束（单次≤45min且≤5.5km；带行李时仅允许≤0.5km步行）与刚性时间窗口（含海洋馆抵达、东港检票、午休不可占用）的去程、返程及每日景点间通勤路径组合；对每条路径标注涉及的交通方式、耗时、步行距离、起止时间及是否触发高体力段（ABCD）。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 320
+          },
+          {
+            "description": "在已计算的可行路径组合中，验证每组是否满足照看人分配规则：（1）恰好分配4个高体力段（A/B/C/D）给阿成与小婧；（2）每人各2段；（3）同一人分配的两段不连续；（4）当存在多解时，优先将首段高体力段分配给阿成（拼音'a' < 'x'）。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 250
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_023/n3",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "根据最优方案，生成A行程表：包含每日每时段的时间、地点、交通方式、预估费用、主照看人，确保时间连续、地点可达、费用合理、照看人不冲突。",
+            "semantic_role": "transformation",
+            "task_type": "general",
+            "depends_on": [],
+            "estimated_output_tokens": 320
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_023/n3_s2",
+      "status": "split_ok",
+      "split": {
+        "subtasks": [
+          {
+            "description": "基于n3_s1输出的最优方案，分别计算交通、餐饮、门票、物料、应急五类分项的B预算金额，并求和得出B预算总计支出；再结合初始总预算数值，计算结余金额。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "从最优方案中提取所有行程节点的步行距离数据，累加总步行距离，并判断是否≤15km；同时统计A/B/C/D四类活动在4天内的分布频次，验证是否满足‘每类活动在4天内均衡分配’（即每类活动出现天数≥3天且每日同类活动数波动≤1）。",
+            "semantic_role": "verification",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "针对最优方案的时间线，逐日检查：①每日机动时间（非活动、非午休、非通勤的空闲时段总和）是否≥90分钟；②所有午休时段是否严格为12:00–13:30；③所有进站动作（如地铁进闸、景区入园）的发生时间是否均早于对应活动开始时间至少45分钟。",
+            "semantic_role": "verification",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 350
+          }
+        ],
+        "rationale": "原节点n3_s2混杂了三项正交职责：(1) B预算的数值计算与结余推导（纯算术聚合与差值），属calculation；(2) 总步行距离上限与四类活动时间均衡性验证，需结构化提取+条件判断，属verification；(3) 多维度刚性时间约束（机动时长、午休固化、进站提前量）的逐日合规性核查，逻辑独立且验证粒度更细，亦属verification但不可与前一verification合并——因输入数据源（距离序列 vs 时间区间序列）、校验逻辑（累加阈值 vs 分布统计 vs 逐点偏移检查）完全解耦。三者均可独立执行、单独验证，且无嵌套依赖，故拆为三个并行可验证子任务；为保持执行顺序清晰，全部依赖n3_s1（即0号上游节点），不引入跨子任务依赖。"
+      },
+      "raw_output": "{\n  \"subtasks\": [\n    {\n      \"description\": \"基于n3_s1输出的最优方案，分别计算交通、餐饮、门票、物料、应急五类分项的B预算金额，并求和得出B预算总计支出；再结合初始总预算数值，计算结余金额。\",\n      \"semantic_role\": \"calculation\",\n      \"task_type\": \"math_logic\",\n      \"depends_on\": [0],\n      \"estimated_output_tokens\": 220\n    },\n    {\n      \"description\": \"从最优方案中提取所有行程节点的步行距离数据，累加总步行距离，并判断是否≤15km；同时统计A/B/C/D四类活动在4天内的分布频次，验证是否满足‘每类活动在4天内均衡分配’（即每类活动出现天数≥3天且每日同类活动数波动≤1）。\",\n      \"semantic_role\": \"verification\",\n      \"task_type\": \"math_logic\",\n      \"depends_on\": [0],\n      \"estimated_output_tokens\": 280\n    },\n    {\n      \"description\": \"针对最优方案的时间线，逐日检查：①每日机动时间（非活动、非午休、非通勤的空闲时段总和）是否≥90分钟；②所有午休时段是否严格为12:00–13:30；③所有进站动作（如地铁进闸、景区入园）的发生时间是否均早于对应活动开始时间至少45分钟。\",\n      \"semantic_role\": \"verification\",\n      \"task_type\": \"math_logic\",\n      \"depends_on\": [0],\n      \"estimated_output_tokens\": 350\n    }\n  ],\n  \"rationale\": \"原节点n3_s2混杂了三项正交职责：(1) B预算的数值计算与结余推导（纯算术聚合与差值），属calculation；(2) 总步行距离上限与四类活动时间均衡性验证，需结构化提取+条件判断，属verification；(3) 多维度刚性时间约束（机动时长、午休固化、进站提前量）的逐日合规性核查，逻辑独立且验证粒度更细，亦属verification但不可与前一verification合并——因输入数据源（距离序列 vs 时间区间序列）、校验逻辑（累加阈值 vs 分布统计 vs 逐点偏移检查）完全解耦。三者均可独立执行、单独验证，且无嵌套依赖，故拆为三个并行可验证子任务；为保持执行顺序清晰，全部依赖n3_s1（即0号上游节点），不引入跨子任务依赖。\"\n}",
+      "prompt_tokens": 402,
+      "completion_tokens": 578
+    },
+    {
+      "node_key": "sb_v02_sem_023/n3_s3",
+      "status": "split_ok",
+      "split": {
+        "subtasks": [
+          {
+            "description": "判断船运模块是否被标记为‘停开’；若是，则基于最优方案和C约束，生成D候补方案：用同主题展厅替代原船程，并同步更新时间、地点、交通方式、费用明细、照看人信息，确保所有更新后字段仍满足C约束条件。",
+            "semantic_role": "reasoning",
+            "task_type": "complex_reasoning",
+            "depends_on": [],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "对原始四段群公告内容进行结构化重排：严格按‘标题标签→核心日程→注意事项→备选说明’顺序组织段落；为每段添加对应四级标签【行程】【预算】【提醒】【备选】；不增删内容，仅调整段落顺序与标签。",
+            "semantic_role": "transformation",
+            "task_type": "general",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 130
+          },
+          {
+            "description": "在已重排并打标后的E群公告中，对每一段内部句子进行时序/逻辑校准：按时间先后（如‘9:00集合→10:30入场→14:00返程’）或逻辑优先级（如‘安全第一→携带证件→建议穿运动鞋’）重新排序句序，保持原意不变。",
+            "semantic_role": "reordering",
+            "task_type": "general",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 150
+          }
+        ],
+        "rationale": "原node承担两个正交职责：(1) 条件性方案生成（含约束验证与多字段协同更新），属复杂推理；(2) 公告文本的结构重组与精细化编辑（含段落排序、标签注入、句内重序）。二者输入源不同（前者依赖最优方案+C约束，后者仅依赖原始四段文本），输出目标独立（D方案 vs E公告），且无共享中间状态。故拆为三个原子子任务：① 先完成带条件触发与约束保障的D方案生成（reasoning）；② 再执行E公告的段级结构化（transformation）；③ 最后细化段内句序（reordering，语义角色细粒度优于general transformation）。每个子任务职责单一、可独立验证：①可校验C约束满足性；②可比对段落顺序与标签准确性；③可验证每段内句子是否符合时间/逻辑序。"
+      },
+      "raw_output": "{\n  \"subtasks\": [\n    {\n      \"description\": \"判断船运模块是否被标记为‘停开’；若是，则基于最优方案和C约束，生成D候补方案：用同主题展厅替代原船程，并同步更新时间、地点、交通方式、费用明细、照看人信息，确保所有更新后字段仍满足C约束条件。\",\n      \"semantic_role\": \"reasoning\",\n      \"task_type\": \"complex_reasoning\",\n      \"depends_on\": [],\n      \"estimated_output_tokens\": 220\n    },\n    {\n      \"description\": \"对原始四段群公告内容进行结构化重排：严格按‘标题标签→核心日程→注意事项→备选说明’顺序组织段落；为每段添加对应四级标签【行程】【预算】【提醒】【备选】；不增删内容，仅调整段落顺序与标签。\",\n      \"semantic_role\": \"transformation\",\n      \"task_type\": \"general\",\n      \"depends_on\": [0],\n      \"estimated_output_tokens\": 130\n    },\n    {\n      \"description\": \"在已重排并打标后的E群公告中，对每一段内部句子进行时序/逻辑校准：按时间先后（如‘9:00集合→10:30入场→14:00返程’）或逻辑优先级（如‘安全第一→携带证件→建议穿运动鞋’）重新排序句序，保持原意不变。\",\n      \"semantic_role\": \"reordering\",\n      \"task_type\": \"general\",\n      \"depends_on\": [1],\n      \"estimated_output_tokens\": 150\n    }\n  ],\n  \"rationale\": \"原node承担两个正交职责：(1) 条件性方案生成（含约束验证与多字段协同更新），属复杂推理；(2) 公告文本的结构重组与精细化编辑（含段落排序、标签注入、句内重序）。二者输入源不同（前者依赖最优方案+C约束，后者仅依赖原始四段文本），输出目标独立（D方案 vs E公告），且无共享中间状态。故拆为三个原子子任务：① 先完成带条件触发与约束保障的D方案生成（reasoning）；② 再执行E公告的段级结构化（transformation）；③ 最后细化段内句序（reordering，语义角色细粒度优于general transformation）。每个子任务职责单一、可独立验证：①可校验C约束满足性；②可比对段落顺序与标签准确性；③可验证每段内句子是否符合时间/逻辑序。\"\n}",
+      "prompt_tokens": 421,
+      "completion_tokens": 574
+    },
+    {
+      "node_key": "sb_v02_sem_024/n2",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从初版预算输入中提取所有可选项目列表（含ID、分值、各期付款金额、付款窗口起止月份）、已知资金流（4-6月拨款与5-6月回款）及时间约束（M1-M5），结构化为表格或字典格式。",
+            "semantic_role": "extraction",
+            "task_type": "simple_qa",
+            "depends_on": [],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "基于提取的项目数据与资金流，构建整数规划模型（变量：项目是否入选；目标：最大化6月底前完成项目的总分值；约束：每月净现金流≥0、项目仅在付款窗口内支付、所有项目必须在M5前完成），求解满足全部硬约束的最优分值解集（允许多解）。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "对上一步得到的最优分值解集，按次目标排序：先计算各解在6月末的现金余额（初始余额+累计拨款−累计付款+累计回款），取余额最大者；若仍并列，应用固定规则：优先选择付款时序更‘后置’（即付款集中在6月而非4/5月）且项目ID编号字典序更小的解，输出唯一初版方案（含入选项目ID列表、各期付款计划、6月底余额、总分值）。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 350
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_027/n3",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从任务2输出的正式考表中，提取所有被调整科目的记录，逐条列出每门科目对应的旧时间、新时间、旧考场、新考场。",
+            "semantic_role": "extraction",
+            "task_type": "simple_qa",
+            "depends_on": [],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "基于正式考表，对每位考生，汇总其所有参考场次的时间段；检查是否存在任一考生在相同考试时间段内被安排了两门及以上科目（即时间冲突），输出所有冲突考生ID及对应冲突科目对列表。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "基于正式考表，枚举全部相邻场次组合（T1-T2, T2-T3, T3-T4, T4-T5）；对每组，识别同时修读任意两门高强度课（E1/E2/E3/E4）的学生，统计人数；判断各组合统计值是否均为全局最小可能值（需说明最小值基准及验证逻辑）。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 280
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_028/nt1",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从订单集合O1-O9中提取每个订单的时效等级（S/A/B）、时间窗结束时间、订单号、车辆编号，并显式标注O5对O4的依赖关系（即O5必须排在O4之后）。",
+            "semantic_role": "extraction",
+            "task_type": "simple_qa",
+            "depends_on": [],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "基于提取的字段，按四层优先级规则计算临时排序分值：第一层按时效等级映射为数值（S=0, A=1, B=2）；第二层按时间窗结束时间升序归一化为[0,1)区间值；第三层按订单号字典序转整数哈希；第四层按车辆编号升序；将四层分值加权组合（权重递减）生成可比排序键。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 280
+          },
+          {
+            "description": "将O5强制后置于O4（无论计算分值如何），再对全部9个订单按排序键升序排列，输出最终全序列表O1-O9的顺序（如[O4, O5, O1, ...]），确保满足所有层级规则及依赖约束。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 250
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_028/nt2",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "根据车辆约束（V2仅可送N2、V3不可送N2、V1全通）和O6强制绑定V2、O9必须由V1承载（因V2/V3无余量且V2受限于N2无法兼顾E9）等硬性规则，为全部9个订单（O1–O9）完成初始车辆分配；输出每订单对应的唯一承运车辆（V1/V2/V3），不涉及路径或时间安排。",
+            "semantic_role": "classification",
+            "task_type": "complex_reasoning",
+            "depends_on": [],
+            "estimated_output_tokens": 180
+          },
+          {
+            "description": "在已知车辆-订单分配结果基础上，结合容量限制（基线：V1/V2/V3均为6件；O9生效后：V1=8件，V2=V3=6件）与各订单服务时间窗、O5必须晚于O4服务结束+10分钟、所有订单须在12:00前完成等时序约束，为每辆车生成满足约束的订单服务序列（即TSP-like排序），并验证该序列在容量与时序上是否可行；输出三车各自的订单服务顺序列表（如V1: [O1,O4,O9,...]），附简要可行性说明。",
+            "semantic_role": "reasoning",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 250
+          },
+          {
+            "description": "基于前序确定的每车订单序列、各站点地理关系（隐含于t1优先序及路径时长）、标准服务时长（默认2min/单，O9含特殊处理+1min）、车辆平均速度与路段时长数据，为V1/V2/V3分别计算完整执行表：包括分段路径（A→B→C…）、各站到达时间、开始服务时间、结束服务时间、服务后剩余载货件数；特别输出两个快照：①08:30基线装车方案（仅O1–O8，按基线容量预装，不含O9）；②09:10 O9确认后的最终执行表（含O9，按更新后容量）；所有时间精确到分钟，确保终了时间≤12:00。",
+            "semantic_role": "transformation",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 320
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_028/nt4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "基于O9在09:10未确认的事实，计算V1原计划预留装O9的2件货物需释放；据此，在满足所有已排定订单O1–O8时效约束（即各站点最晚到达/服务时间不变）的前提下，找出可接收这2件货物的其他车辆集合，并对每个候选车辆验证：接收后其总负载与当前车队平均负载的绝对差 ≤2。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "识别所有路径中包含W2→W3路段的车辆（即受封路直接影响的车辆）；给定W2→W3封路起始时间为10:05、绕行新增耗时23分钟，对每辆受影响车辆，重规划其W2之后的子路径（含W2→W3→W4等后续段），确保不改变其已服务站点顺序与时序，且仅调整未执行部分；输出每辆受影响车辆的新路径及关键时间节点（出发/到达W2、离开W2、到达W3、离开W3等）。",
+            "semantic_role": "transformation",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 260
+          },
+          {
+            "description": "在完成W2→W3封路下的车辆重规划后，评估O8的到达时间与服务时间变化；若O8新到达时间晚于原计划，则检查是否可通过微调其前序节点（如缩短W1→W2行驶缓冲、优化W2处停留）将延迟控制在最小化范围内（目标：延迟≤3分钟）；输出O8最终到达与服务时间、调整动作及是否满足时效容差。",
+            "semantic_role": "verification",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 180
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_029/nt2",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从根目标中提取通用预算池7-9月各月刚性支出明细（含工资、工单系统费、热线费、租金、8月专项审计费、各月最低夜班餐补），按月结构化为三行数据表（月份、科目、金额），确保所有条目来源明确、无估算或模糊表述。",
+            "semantic_role": "extraction",
+            "task_type": "simple_qa",
+            "depends_on": [],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "基于上一步提取的刚性支出明细和给定的当月可用预算（7月10.7万、8月12.2万、9月10.4万），逐月计算总刚性支出，与可用预算比对，输出三行结果：月份、总刚性支出、可用预算、差额（正为结余，负为缺口）、是否超支（布尔值）。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 180
+          },
+          {
+            "description": "检查上一步中所有刚性支出科目是否100%覆盖（即每项均完整计入当月支出，未顺延至其他月份、未拆分至多月、未以‘约’‘暂估’等模糊方式表述），输出验证结论（通过/不通过）及不通过项清单（含科目、问题类型、原始描述）。",
+            "semantic_role": "verification",
+            "task_type": "simple_qa",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 260
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_029/nt3",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "基于t2提供的各月刚性支出明细（工单系统、热线费、租金、夜班餐补），逐月验证其是否满足‘全部刚性覆盖’前提；若某月任一刚性项未达最低要求，标记该月不可压缩，并输出刚性缺口汇总表。",
+            "semantic_role": "verification",
+            "task_type": "math_logic",
+            "depends_on": [],
+            "estimated_output_tokens": 220
+          },
+          {
+            "description": "对所有通过刚性验证的月份，按固定保护顺序（工单系统→热线费→租金→夜班餐补最低）计算当月最大可压缩空间（即：当月总预算 − 刚性支出实际发生额之和）；输出各月可压缩空间数值表（含月份、刚性支出合计、总预算、可压缩空间）。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 180
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    },
+    {
+      "node_key": "sb_v02_sem_029/nt3_s3",
+      "status": "split_ok",
+      "split": {
+        "subtasks": [
+          {
+            "description": "根据可压缩空间约束、发生月份限制，以及三类非刚性支出的月度上限（招聘广告≤0.8万/月、新人培训≤0.5万/月、客诉差旅≤0.6万/月），在零核算规则（每项分配值 ∈ {0, 0.1, 0.2, ..., 上限}）下，求解一组满足总可压缩预算约束的合法月度分配方案；输出唯一可行解（若多解则取字典序最小的三元组），格式为：{'recruitment_ad': X, 'onboarding_training': Y, 'complaint_travel': Z}。",
+            "semantic_role": "calculation",
+            "task_type": "math_logic",
+            "depends_on": [],
+            "estimated_output_tokens": 180
+          },
+          {
+            "description": "基于上一步输出的分配方案，校验专项池1.2万元采购是否已全额执行（即分配方案中三类支出之和是否等于1.2），并验证结余是否精确为0.3万元（即1.2 − (X+Y+Z) == 0.3）；输出布尔结果对：{'procurement_fully_executed': true/false, 'balance_exactly_0p3': true/false}，及简要校验依据（含计算过程）。",
+            "semantic_role": "verification",
+            "task_type": "math_logic",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 120
+          },
+          {
+            "description": "整合前两步结果，生成结构化输出：包含分配方案（JSON对象）、校验结果（JSON对象）、以及一句自然语言结论（如'分配合规且专项池结余准确'或指出具体违规项）；确保所有数值保留一位小数，无科学计数法。",
+            "semantic_role": "synthesis",
+            "task_type": "general",
+            "depends_on": [
+              0,
+              1
+            ],
+            "estimated_output_tokens": 150
+          }
+        ],
+        "rationale": "原节点承担了三个不可分割的职责：(1) 在多重约束下求解合法分配（核心计算），(2) 对专项池执行与结余进行数值验证（独立验证动作），(3) 将计算与验证结果融合为用户可读交付物（信息合成）。三者语义角色分明（calculation → verification → synthesis），且各自输出可单独验证：子任务0输出可代入约束式验证可行性；子任务1输入确定、逻辑封闭、结果布尔可判定；子任务3不引入新计算，仅格式化与归因。拆分后每个node职责单一、无歧义、可测试，符合‘一个node一个可验证职责’规范。"
+      },
+      "raw_output": "{\n  \"subtasks\": [\n    {\n      \"description\": \"根据可压缩空间约束、发生月份限制，以及三类非刚性支出的月度上限（招聘广告≤0.8万/月、新人培训≤0.5万/月、客诉差旅≤0.6万/月），在零核算规则（每项分配值 ∈ {0, 0.1, 0.2, ..., 上限}）下，求解一组满足总可压缩预算约束的合法月度分配方案；输出唯一可行解（若多解则取字典序最小的三元组），格式为：{'recruitment_ad': X, 'onboarding_training': Y, 'complaint_travel': Z}。\",\n      \"semantic_role\": \"calculation\",\n      \"task_type\": \"math_logic\",\n      \"depends_on\": [],\n      \"estimated_output_tokens\": 180\n    },\n    {\n      \"description\": \"基于上一步输出的分配方案，校验专项池1.2万元采购是否已全额执行（即分配方案中三类支出之和是否等于1.2），并验证结余是否精确为0.3万元（即1.2 − (X+Y+Z) == 0.3）；输出布尔结果对：{'procurement_fully_executed': true/false, 'balance_exactly_0p3': true/false}，及简要校验依据（含计算过程）。\",\n      \"semantic_role\": \"verification\",\n      \"task_type\": \"math_logic\",\n      \"depends_on\": [0],\n      \"estimated_output_tokens\": 120\n    },\n    {\n      \"description\": \"整合前两步结果，生成结构化输出：包含分配方案（JSON对象）、校验结果（JSON对象）、以及一句自然语言结论（如'分配合规且专项池结余准确'或指出具体违规项）；确保所有数值保留一位小数，无科学计数法。\",\n      \"semantic_role\": \"synthesis\",\n      \"task_type\": \"general\",\n      \"depends_on\": [0, 1],\n      \"estimated_output_tokens\": 150\n    }\n  ],\n  \"rationale\": \"原节点承担了三个不可分割的职责：(1) 在多重约束下求解合法分配（核心计算），(2) 对专项池执行与结余进行数值验证（独立验证动作），(3) 将计算与验证结果融合为用户可读交付物（信息合成）。三者语义角色分明（calculation → verification → synthesis），且各自输出可单独验证：子任务0输出可代入约束式验证可行性；子任务1输入确定、逻辑封闭、结果布尔可判定；子任务3不引入新计算，仅格式化与归因。拆分后每个node职责单一、无歧义、可测试，符合‘一个node一个可验证职责’规范。\"\n}",
+      "prompt_tokens": 421,
+      "completion_tokens": 621
+    },
+    {
+      "node_key": "sb_v02_sem_030/nC4",
+      "status": "split_ok_from_case_state",
+      "split": {
+        "subtasks": [
+          {
+            "description": "从上游输入中提取并结构化列出所有显式与隐式约束条件，每条约束标注类型（如硬约束/软约束）、来源节点（nC1/nC2/nC3）及适用范围（全局/任务级/资源级），形成带编号的约束清单。",
+            "semantic_role": "extraction",
+            "task_type": "general",
+            "depends_on": [],
+            "estimated_output_tokens": 450
+          },
+          {
+            "description": "基于约束清单与上游方案候选集（来自nC1-nC3），生成唯一最优方案，并以双维度结构化输出：①资源线（按资源类型→时段→分配量表格）；②优先级线（按任务ID→优先级值→排序依据说明）。",
+            "semantic_role": "synthesis",
+            "task_type": "complex_reasoning",
+            "depends_on": [
+              0
+            ],
+            "estimated_output_tokens": 800
+          },
+          {
+            "description": "对已确定的唯一最优方案执行四类验证：①计算并比对成本、完工时间、需求满足率、SA-1闲置率四项关键指标；②执行显式冲突检查（时间重叠、资源超配、容量越界、逻辑依赖断裂），逐项标注是否通过及失效位置。",
+            "semantic_role": "verification",
+            "task_type": "general",
+            "depends_on": [
+              1
+            ],
+            "estimated_output_tokens": 850
+          }
+        ],
+        "rationale": "(raw_output 未存档——报告曾被覆盖；拆分结果以 case 文件为准，split_provenance 可追溯)"
+      },
+      "note": "由 case 状态重建；LLM raw_output/rationale 未存档（诚实边界）"
+    }
+  ],
+  "consolidation_note": "2026-10-07 整合：22 组原始 raw_output 因报告覆盖未存档（工具缺陷已修复：报告改为按 node_key 累积合并），拆分结果自 case 文件重建；3 组再拆分记录带 raw_output"
+}

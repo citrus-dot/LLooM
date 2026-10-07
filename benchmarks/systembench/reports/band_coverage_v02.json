@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-10-07T10:15:00+00:00",
+  "seam": "bench::route_single → router::plan()（policy_id=routerbench_v02_p2，soft_gate=0）",
+  "views": {
+    "full_prompt": {
+      "semantic_nodes": {
+        "n_nodes": 175,
+        "band_distribution": {
+          "hard": 0.9143,
+          "medium": 0.0857
+        },
+        "eligible_model_count_dist": {
+          "1_models": 0.9143,
+          "3_models": 0.0857
+        },
+        "strong_only_node_rate": 0.9143,
+        "weak_eligible_node_rate": 0.0857,
+        "mid_eligible_node_rate": 0.0857,
+        "multi_model_eligible_rate": 0.0857,
+        "selected_model_distribution": {
+          "deephermes_3_llama_3_8b_preview": 15,
+          "intern_s1_mini": 160
+        },
+        "winner_entropy_bits": 0.422
+      },
+      "control_nodes": {
+        "n_nodes": 32,
+        "band_distribution": {
+          "hard": 1.0
+        },
+        "eligible_model_count_dist": {
+          "1_models": 1.0
+        },
+        "strong_only_node_rate": 1.0,
+        "weak_eligible_node_rate": 0.0,
+        "mid_eligible_node_rate": 0.0,
+        "multi_model_eligible_rate": 0.0,
+        "selected_model_distribution": {
+          "intern_s1_mini": 32
+        },
+        "winner_entropy_bits": -0.0
+      },
+      "case_gate_all": {
+        "n_cases": 40,
+        "routing_relevant": 11,
+        "strong_only_diagnostic": 29,
+        "routing_relevant_semantic": 11,
+        "strong_only_semantic": 19,
+        "strong_only_case_ids": [
+          "sb_v02_sem_001",
+          "sb_v02_sem_002",
+          "sb_v02_sem_003",
+          "sb_v02_sem_006",
+          "sb_v02_sem_007",
+          "sb_v02_sem_008",
+          "sb_v02_sem_011",
+          "sb_v02_sem_012",
+          "sb_v02_sem_013",
+          "sb_v02_sem_014",
+          "sb_v02_sem_016",
+          "sb_v02_sem_017",
+          "sb_v02_sem_018",
+          "sb_v02_sem_019",
+          "sb_v02_sem_020",
+          "sb_v02_sem_021",
+          "sb_v02_sem_022",
+          "sb_v02_sem_025",
+          "sb_v02_sem_030",
+          "sb_v02_ctl_001",
+          "sb_v02_ctl_002",
+          "sb_v02_ctl_003",
+          "sb_v02_ctl_004",
+          "sb_v02_ctl_005",
+          "sb_v02_ctl_006",
+          "sb_v02_ctl_007",
+          "sb_v02_ctl_008",
+          "sb_v02_ctl_009",
+          "sb_v02_ctl_010"
+        ]
+      },
+      "case_gate_semantic_only": {
+        "n_cases": 30,
+        "routing_relevant": 11,
+        "strong_only_diagnostic": 19,
+        "routing_relevant_semantic": 11,
+        "strong_only_semantic": 19,
+        "strong_only_case_ids": [
+          "sb_v02_sem_001",
+          "sb_v02_sem_002",
+          "sb_v02_sem_003",
+          "sb_v02_sem_006",
+          "sb_v02_sem_007",
+          "sb_v02_sem_008",
+          "sb_v02_sem_011",
+          "sb_v02_sem_012",
+          "sb_v02_sem_013",
+          "sb_v02_sem_014",
+          "sb_v02_sem_016",
+          "sb_v02_sem_017",
+          "sb_v02_sem_018",
+          "sb_v02_sem_019",
+          "sb_v02_sem_020",
+          "sb_v02_sem_021",
+          "sb_v02_sem_022",
+          "sb_v02_sem_025",
+          "sb_v02_sem_030"
+        ]
+      }
+    },
+    "description_only": {
+      "semantic_nodes": {
+        "n_nodes": 175,
+        "band_distribution": {
+          "easy": 0.0743,
+          "hard": 0.56,
+          "medium": 0.3657
+        },
+        "eligible_model_count_dist": {
+          "1_models": 0.56,
+          "3_models": 0.44
+        },
+        "strong_only_node_rate": 0.56,
+        "weak_eligible_node_rate": 0.44,
+        "mid_eligible_node_rate": 0.44,
+        "multi_model_eligible_rate": 0.44,
+        "selected_model_distribution": {
+          "deephermes_3_llama_3_8b_preview": 77,
+          "intern_s1_mini": 98
+        },
+        "winner_entropy_bits": 0.9896
+      },
+      "case_gate_semantic_only": {
+        "n_cases": 30,
+        "routing_relevant": 29,
+        "strong_only_diagnostic": 1,
+        "routing_relevant_semantic": 29,
+        "strong_only_semantic": 1,
+        "strong_only_case_ids": [
+          "sb_v02_sem_003"
+        ]
+      },
+      "note": "贴近生产 ai_client.rs:526 子任务 routing 现状（不发 root_goal）；headline 口径决策留 Nironta"
+    }
+  },
+  "honesty_notes": [
+    "band 基于当前冻结 prompt 文本现算（band_for 语义，S9a parity 同源）",
+    "artifact_dependent 节点 S12.6 stage 0 注入冻结参考产物后 prompt 变长 → S12.6 花钱前需零成本重测 band（gate 复核）",
+    "spec 阈值为工程判断非统计定理：multi_model_eligible_rate <20% → diagnostic only（25 号 §8.2）"
+  ]
+}

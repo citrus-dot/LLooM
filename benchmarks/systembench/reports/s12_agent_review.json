@@ -1,0 +1,81 @@
+{
+  "generated_at": "2026-10-07",
+  "reviewer": "ZCode (agent first-pass review, D2-b 流程第 2 步)",
+  "scope": "s12_composite_split 全部 22 组拆分（65 子节点）",
+  "criteria": [
+    "子描述并集覆盖原职责",
+    "每子节点单一可验证职责",
+    "role 词表合法",
+    "无越界编造内容"
+  ],
+  "cleared_groups": [
+    "sb_v02_sem_001/nsubtask_1",
+    "sb_v02_sem_001/nsubtask_4",
+    "sb_v02_sem_006/nsubtask_4",
+    "sb_v02_sem_008/nt4",
+    "sb_v02_sem_009/nT1",
+    "sb_v02_sem_012/nsubtask_3",
+    "sb_v02_sem_014/n4",
+    "sb_v02_sem_015/nsubtask_1",
+    "sb_v02_sem_015/nsubtask_4",
+    "sb_v02_sem_016/nt4",
+    "sb_v02_sem_017/n4",
+    "sb_v02_sem_020/nsubtask_4",
+    "sb_v02_sem_023/n1",
+    "sb_v02_sem_024/n2",
+    "sb_v02_sem_027/n3",
+    "sb_v02_sem_028/nt1",
+    "sb_v02_sem_028/nt2",
+    "sb_v02_sem_028/nt4",
+    "sb_v02_sem_029/nt2",
+    "sb_v02_sem_030/nC4"
+  ],
+  "disputed": [
+    {
+      "node_key": "sb_v02_sem_023/n3_s2",
+      "reason": "残留复合：预算计算+约束核对两动作（agent 判定）",
+      "action": "re_split"
+    },
+    {
+      "node_key": "sb_v02_sem_023/n3_s3",
+      "reason": "残留复合：候补方案生成+群公告整理两动作（agent 判定）",
+      "action": "re_split"
+    },
+    {
+      "node_key": "sb_v02_sem_029/nt3_s3",
+      "reason": "非法 role=allocation_and_verification + 残留复合（agent 判定；role 已由脚本修正为 reasoning）",
+      "action": "re_split"
+    }
+  ],
+  "notes": "cleaned 20/22 组；3 个争议子节点置 atomic_ok=false 走 spec §atomicity 再拆分循环；最终裁决权在 Nironta 抽检",
+  "round2": {
+    "reviewed_at": "2026-10-07",
+    "scope": "3 组再拆分（9 子节点）",
+    "cleared_nodes": [
+      "sb_v02_sem_023/n3_s2_s1",
+      "sb_v02_sem_023/n3_s2_s2",
+      "sb_v02_sem_023/n3_s2_s3",
+      "sb_v02_sem_023/n3_s3_s1",
+      "sb_v02_sem_029/nt3_s3_s1",
+      "sb_v02_sem_029/nt3_s3_s2",
+      "sb_v02_sem_029/nt3_s3_s3",
+      "sb_v02_sem_023/n3_s1",
+      "sb_v02_sem_029/nt3_s1",
+      "sb_v02_sem_029/nt3_s2"
+    ],
+    "disputed_nodes": [
+      {
+        "node_key": "sb_v02_sem_023/n3_s3_s2",
+        "reason": "疑似过拆：段落级重排（s2）与句内级重排（s3）可合并为一个 transformation 职责；非复合，role 已修正，保留 headline 资格待仲裁",
+        "action": "human_arbitration"
+      },
+      {
+        "node_key": "sb_v02_sem_023/n3_s3_s3",
+        "reason": "同上（与 s2 配对仲裁）",
+        "action": "human_arbitration"
+      }
+    ],
+    "notes": "round2 判定：7/9 放行；2 节点属『过拆』而非『复合』——不触发再拆分循环，升级人工仲裁；023/n3_s1、029/nt3_s1/s2 系 round1 组审已判合格（争议仅涉同组兄弟节点），补入放行"
+  },
+  "atomicity_policy": "仅含并列连接词（且/并/再/然后/同时）而 LLM 判定单一职责的节点：连接词本身不构成复合证据（spec §atomicity 的复合 = 多个无法用一个 role 概括的独立动作），agent 复核降级为信息性 flag；覆盖于 20% 抽检样本内，Nironta 抽检可推翻本政策"
+}
