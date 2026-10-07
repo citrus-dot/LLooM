@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-10-06",
+  "gates": {
+    "S-0_identity": {
+      "pass": true,
+      "evidence": "routerbench v0.2 manifest_hash cbebcefd… / workflow.schema v1（18号冻结）/ system.yaml+source_registry.yaml 落盘"
+    },
+    "S-1_parity": {
+      "pass": true,
+      "evidence": "RouterBench 138 测试未动；orchestration 54 测试+全 self-check PASS（合并验收 2026-10-06）；SystemBench 引用不复制"
+    },
+    "S-2_binding": {
+      "pass": true,
+      "evidence": "327 节点 100% llmrouterbench_exact（verify_binding 全过）；binding mode 封闭枚举；无 nearest/similarity/guessing"
+    },
+    "S-3_split": {
+      "pass": true,
+      "evidence": "workflow-group 哈希桶（unit=system_case，seed 3407，20/80）——builder 分组落盘"
+    },
+    "S-4_replay": {
+      "pass": true,
+      "evidence": "L1 determinism 自检 PASS（双跑 identical）+ counterfactual 冒烟（成本差异验证）"
+    },
+    "S-5_baselines": {
+      "pass": "partial",
+      "evidence": "B2/B3/B4/O1/O0 ✅；B5/B6/B7（LLooM planner 维）缺真 decomposition——Shadow online pilot 后补（19 号 §六：planning 维 v0.1 N/A 是设计而非缺陷）"
+    },
+    "S-6_attribution": {
+      "pass": "partial",
+      "evidence": "primary_error（execution/recovery/goal 优先级）+ skipped 传播链 ✅；完整传播图（root_cause→propagation_edges）→ Shadow"
+    },
+    "S-7_statistics": {
+      "pass": true,
+      "evidence": "workflow-group paired bootstrap B=10k seed=3407：routing_d_cost −14.96% [−26.59,−5.16] 不含 0；completion_delta_o1_vs_b4 +12.31pp [4.62,20.00]"
+    },
+    "S-8_honesty": {
+      "pass": true,
+      "evidence": "L1≠live 声明（README+report honesty_notes）；policy_id=routerbench_v02_p2 与 production 分离；Oracle=fixed workflow 上界声明"
+    }
+  },
+  "shadow_parity": {
+    "pass": true,
+    "evidence": "284 节点 production seam == benchmark replay 零失配；band 分布 hard 92%/medium 8%，medium 26 节点 100% 落 weak（P2 soft gate 生效语义验证）"
+  },
+  "blocking": [
+    "S-5/S-6 转 ✅ 需要 S9b 真 LLM decomposition pilot（花钱，$0.05 量级，需 API key 可用）"
+  ],
+  "shadow_parity_detail": {
+    "band_distribution": {
+      "hard": 301,
+      "medium": 26,
+      "easy": 0
+    },
+    "medium_all_weak": true,
+    "note": "P2 soft gate 生效语义验证：medium 26 节点 100% 分派 weak（deephermes），hard 301 节点 100% strong——production seam 在真实 workflow 节点上的决策形态与 benchmark 语义一致"
+  }
+}
