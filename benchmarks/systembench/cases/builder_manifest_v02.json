@@ -40,5 +40,13 @@
     "semantic node outcome_binding.mode=semantic_matrix_exact（source_id=case/node），matrix 于 S12.6 采集、S12.7 冻结",
     "headline 候选全部来自真实 decomposition（25 号 §五 D1-c'：Primary=Semantic Set）",
     "case_class 按 node_count+depth（spec complexity_bucket）；所有真实 decomposition 为 3-6 节点"
-  ]
+  ],
+  "dependency_fix_2026_10_07": {
+    "script": "s12_5_dep_consistency.py --fix",
+    "sem_upgraded": 18,
+    "dangling_remapped": 14,
+    "edge_no_consumes_flagged": 0,
+    "rule": "consumes.from 非空→artifact_dependent；dangling 父引用→拆分链末子节点",
+    "note": "hash 以 S12.7 freeze 快照为准"
+  }
 }

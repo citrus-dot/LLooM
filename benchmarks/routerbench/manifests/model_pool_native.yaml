@@ -1,38 +1,54 @@
 # model_pool_native.yaml — Native Track 三层同系池（决策 2a，2026-10-05 冻结池结构）
-# ⚠️ 价格为转述值（10 号 §3.2 引官方页），已拍板 Day 6 自采前从官方页面重录 diff（决策 P2）；
+# 价格已于 2026-10-07 按官方页重录（决策 P2 执行完毕）：华北2（北京）地域，
+#   flash/plus 取 输入≤256k 档、max-preview 取 输入≤128k 档（本轮全部 prompt <4k tokens，
+#   恒落最低档）。换算率 7.25 CNY/USD（与原转述隐含率一致），USD 值为换算记录值，
+#   计费以 CNY 官方价为准。来源：
+#   https://help.aliyun.com/zh/model-studio/qwen3-6-flash
+#   https://help.aliyun.com/zh/model-studio/qwen3-6-plus
+#   https://help.aliyun.com/zh/model-studio/qwen3-6-max
+# 与 provisional 转述 diff：flash/plus <0.5%（换算舍入），max-preview -4.5%（原转述偏高）。
 #    重录后任何价格变化 = 新 cost_basis_hash = 新 benchmark_version，本文件随之修订。
 #    池结构（模型 id / tier / context_window）本轮冻结，变更 = 新 pool_id。
 pool_id: native_qwen36_3tier_v1
-version: 1
+version: 2
 track: native_core
 cost_basis: provider_official_usd_per_1m_tokens
-price_status: provisional_transcribed   # Day 6 前重录（P2 拍板 2026-10-05）
+price_status: official_verified_2026-10-07   # P2 重录完成（原 provisional_transcribed）
+price_source_region: cn-beijing
+fx_rate_cny_per_usd: 7.25
 frozen_at: "2026-10-05"
+reverified_at: "2026-10-07"
 models:
   - role: weak
     lloom_model_id: qwen3.6-flash
     provider_model_id: qwen3.6-flash
     capability_tier: 1
     context_window: 1000000
+    price_tier: input_le_256k
+    price_cny_per_million: { input: 1.2, output: 7.2 }
     price:
-      input_usd_per_million: 0.165
-      output_usd_per_million: 0.99
+      input_usd_per_million: 0.1655
+      output_usd_per_million: 0.9931
   - role: mid
     lloom_model_id: qwen3.6-plus
     provider_model_id: qwen3.6-plus
     capability_tier: 2
     context_window: 1000000
+    price_tier: input_le_256k
+    price_cny_per_million: { input: 2.0, output: 12.0 }
     price:
-      input_usd_per_million: 0.276
-      output_usd_per_million: 1.651
+      input_usd_per_million: 0.2759
+      output_usd_per_million: 1.6552
   - role: strong
     lloom_model_id: qwen3.6-max-preview
     provider_model_id: qwen3.6-max-preview
     capability_tier: 3
     context_window: 262144
+    price_tier: input_le_128k
+    price_cny_per_million: { input: 9.0, output: 54.0 }
     price:
-      input_usd_per_million: 1.30
-      output_usd_per_million: 7.80
+      input_usd_per_million: 1.2414
+      output_usd_per_million: 7.4483
 freeze_rules:
   - "Any model id change creates a new model_pool_id."
   - "Any capability_tier change creates a new model_pool_id."

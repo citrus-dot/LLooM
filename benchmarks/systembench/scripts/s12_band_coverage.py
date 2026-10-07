@@ -141,39 +141,58 @@ def collect() -> None:
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "seam": "bench::route_single → router::plan()（policy_id=routerbench_v02_p2，soft_gate=0）",
+        "naming": "27 号决策 ①：R1=description-only（headline，production-faithful）；"
+                  "R2=full_prompt（diagnostic）。schema 分离见 manifests/routing_input_contract_v1.yaml。",
+        "routing_context_compression": None,  # 下方计算（Eligible(R2)/Eligible(R1)）
         "views": {
-            "full_prompt": {
+            "R1_description_only_headline": {
+                "routing_input_mode": "description",
+                "role": "headline（production-faithful，27 号决策 ①）",
+                "semantic_nodes": view_metrics(sem_desc),
+                "case_gate_semantic_only": case_gate(sem_desc, node_meta),
+            },
+            "R2_full_prompt_diagnostic": {
+                "routing_input_mode": "root_goal_plus_description",
+                "role": "diagnostic（生产当前不可见 root_goal）",
                 "semantic_nodes": view_metrics(sem_full),
                 "control_nodes": view_metrics(ctl_full),
                 "case_gate_all": case_gate(sem_full + ctl_full, node_meta),
                 "case_gate_semantic_only": case_gate(sem_full, node_meta),
             },
-            "description_only": {
-                "semantic_nodes": view_metrics(sem_desc),
-                "case_gate_semantic_only": case_gate(sem_desc, node_meta),
-                "note": "贴近生产 ai_client.rs:526 子任务 routing 现状（不发 root_goal）；headline 口径决策留 Nironta",
-            },
         },
         "honesty_notes": [
             "band 基于当前冻结 prompt 文本现算（band_for 语义，S9a parity 同源）",
-            "artifact_dependent 节点 S12.6 stage 0 注入冻结参考产物后 prompt 变长 → S12.6 花钱前需零成本重测 band（gate 复核）",
+            "artifact_dependent 节点 stage 0 注入冻结参考产物后 prompt 变长 → 花钱前需零成本重测 band（gate 复核）",
             "spec 阈值为工程判断非统计定理：multi_model_eligible_rate <20% → diagnostic only（25 号 §8.2）",
+            "R2 仅 diagnostic：headline 统计、Oracle/Tax/frontier 一律 R1 口径（27 号决策 ①）",
         ],
+    }
+    # Routing Context Compression（仅 diagnostic，27 号决策 ①）
+    # = Eligible(R2) / Eligible(R1)，Eligible(x) = multi_model_eligible_node_rate
+    r1 = report["views"]["R1_description_only_headline"]["semantic_nodes"]["multi_model_eligible_rate"]
+    r2 = report["views"]["R2_full_prompt_diagnostic"]["semantic_nodes"]["multi_model_eligible_rate"]
+    report["routing_context_compression"] = {
+        "definition": "Eligible(R2)/Eligible(R1)，Eligible = multi_model_eligible_node_rate",
+        "eligible_r2": r2, "eligible_r1": r1,
+        "ratio": round(r2 / r1, 4) if r1 else None,
+        "scope": "diagnostic-only；headline 统计不受影响",
     }
     OUT_REPORT.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    for view in ("full_prompt", "description_only"):
+    for view in ("R1_description_only_headline", "R2_full_prompt_diagnostic"):
         m = report["views"][view]["semantic_nodes"]
         print(f"[{view}] semantic: band={m['band_distribution']} "
               f"eligible_dist={m['eligible_model_count_dist']} "
               f"multi_model={m['multi_model_eligible_rate']:.1%} entropy={m['winner_entropy_bits']}bits "
               f"dist={m['selected_model_distribution']}")
-    g = report["views"]["full_prompt"]["case_gate_semantic_only"]
-    gd = report["views"]["description_only"]["case_gate_semantic_only"]
+    g = report["views"]["R2_full_prompt_diagnostic"]["case_gate_semantic_only"]
+    gd = report["views"]["R1_description_only_headline"]["case_gate_semantic_only"]
     print(f"Gate(full_prompt): relevant={g['routing_relevant']}/{g['n_cases']} "
           f"(semantic {g['routing_relevant_semantic']} rele / {g['strong_only_semantic']} diag)")
     print(f"Gate(desc_only):   relevant={gd['routing_relevant']}/{gd['n_cases']} "
           f"(semantic {gd['routing_relevant_semantic']} rele / {gd['strong_only_semantic']} diag)")
+    c = report["routing_context_compression"]
+    print(f"Routing Context Compression: {c['eligible_r2']:.1%} / {c['eligible_r1']:.1%} = {c['ratio']}")
     print(f"✓ {OUT_REPORT}")
 
 

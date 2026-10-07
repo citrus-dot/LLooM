@@ -1,0 +1,80 @@
+# routing_input_contract_v1.yaml — S12.5.1 Routing/Execution Input Contract Freeze
+# （27 号决策 ①：schema 正式分离 routing_input / execution_input，各带 mode/text/hash）
+#
+# 口径定义：
+#   R1 (routing_input, mode=description)            —— headline 路由口径。
+#      依据 production-faithful：生产 plan_decision 现状为 task_type 信号，
+#      description 是其严格更强的同源信号（生产子任务执行 ai_client.rs:526 只发 description）。
+#   R2 (routing_input, mode=root_goal_plus_description) —— diagnostic 路由口径。
+#      上下文更富但生产当前不可见；仅用于 Routing Context Compression 等诊断指标。
+#   execution_input —— 节点执行口径（与路由无关）：independent 节点 = base_text；
+#      artifact_dependent 节点 = base_text + 冻结 artifacts 注入（S12.5.2 stage 0 /
+#      S12.6 全量回填 final_text/final_hash）。
+#
+# Routing Context Compression（仅 diagnostic）= Eligible(R2) / Eligible(R1)，
+#   其中 Eligible(x) = multi_model_eligible_node_rate（P2 band 口径，soft-gate 0）。
+#   v0.2 candidate 实测 ≈ 8.6% / 44.0% ≈ 19.5%。
+#
+# 执行协议（3 层池统一，production 子任务分支同款参数 + 一项显式偏差）：
+#   system_prompt  "你是一个专业的AI助手。请认真完成以下任务。"（ai_client.rs 子任务分支原文）
+#   temperature    0.3（生产同款）
+#   max_tokens     节点 estimated_output_tokens（生产同款）
+#   enable_thinking false ★显式偏差（DashScope compatible 扩展参数；生产 ai_client 不传）
+#     偏差依据（S12.5.0 Provider Probe 实测，reports/s12_5_provider_probe.json）：
+#       (a) qwen3.6 三层默认开 thinking，reasoning tokens 不受 max_tokens 约束，
+#           content 恒被截断（三模型 finish_reason=length，输出即"截断协议"）；
+#       (b) latency 44-144s（关后 3-5s），不可用于编排子任务；
+#       (c) completion tokens 7.4k-9.4k vs 216-233（≈15-19 倍），采集成本超出授权量级。
+#     thinking-on 口径保留为 sensitivity 记录，不采正式矩阵；如需该口径重评，
+#     S12.5.2 全部 cells 按协议重采（~$3 量级）。
+#   ★ production finding（本仓生产侧候选回修，另行决策）：生产 OpenAI-compatible
+#     适配器对 qwen3.6 系列不传 enable_thinking → 用户配置该系列做编排子任务时
+#     会得到截断输出（finish=length）+ 分钟级 latency。
+#
+# Judge 协议：qwen-plus（不在采集池内，避免自评偏差）、temp=0、严格 JSON
+#   {"score": <0-1>, "reason": str}；frozen rubric 见 evaluator（S12.5.2 起生效）。
+#
+# 分层衔接：independent 节点 cells → L1 Matrix；artifact_dependent 节点 cells
+#   → L2 Conditional Matrix（cell 带 upstream_artifact_hashes/artifact_schema_hash/
+#   execution_input_hash；两者分开统计，L2 冻结产物不冒充 end-to-end live）。
+
+contract_id: sb_v02_routing_input_contract_v1
+version: 1
+frozen_at: "2026-10-07"
+binding: system_cases_v02.jsonl + routing_inputs_v02.jsonl (sidecar)
+
+routing_input:
+  R1_headline:
+    mode: description
+    text_template: "{description}"
+  R2_diagnostic:
+    mode: root_goal_plus_description
+    text_template: "{root_goal}\n\n---\n## 子任务\n{description}"
+  hash_rule: sha256(text)
+
+execution_input:
+  independent:
+    mode: root_goal_plus_description
+    text_template: "{root_goal}\n\n---\n## 子任务\n{description}"   # == node.prompt (base_text)
+  artifact_dependent:
+    mode: root_goal_plus_description_plus_artifacts
+    text_template: "{root_goal}\n\n---\n## 前置任务结果\n{artifact_block}\n\n## 子任务\n{description}"
+    artifact_block_entry: "[子任务{node_id}] {artifact_text}"
+    artifact_order: 拓扑序（consumes.from 投影序）
+  reference_model: qwen3.6-plus          # stage 0 参考执行（冻结 artifacts 的来源）
+  execution_protocol:
+    system_prompt: "你是一个专业的AI助手。请认真完成以下任务。"
+    temperature: 0.3
+    max_tokens: node.estimated_output_tokens
+    enable_thinking: false               # ★ 显式偏差，依据见文件头（probe 实测）
+  hash_rule: sha256(final_text)
+
+judge_protocol:
+  model: qwen-plus
+  temperature: 0.0
+  output: strict JSON {score: float 0-1, reason: str}
+  independence: judge 不在采集池内
+
+splits_discipline:
+  - "Routing Context Compression 与 Pool Audit 只读 calibration split；test split read-only。"
+  - "headline 口径 = R1；R2 仅 diagnostic，二者 schema 分离、不混算。"

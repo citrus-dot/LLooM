@@ -1,0 +1,295 @@
+{
+  "phase": "S12.5.0 Provider Probe",
+  "generated_at": "2026-10-07T15:09:03.475420+00:00",
+  "pool_id": "native_qwen36_3tier_v1 (v2, official_verified_2026-10-07)",
+  "probe_case": "sb_v02_sem_006",
+  "non_matrix": true,
+  "calls": [
+    {
+      "model": "qwen3.6-flash",
+      "latency_s": 44.5,
+      "checks": {
+        "reachability": {
+          "pass": true
+        },
+        "model_identity": {
+          "pass": true,
+          "echo": "qwen3.6-flash",
+          "requested": "qwen3.6-flash"
+        },
+        "schema_stability": {
+          "pass": true,
+          "finish_reason": "length",
+          "content_type": "str",
+          "usage": {
+            "prompt_tokens": 1953,
+            "completion_tokens": 7838,
+            "total_tokens": 9791,
+            "completion_tokens_details": {
+              "reasoning_tokens": 7414,
+              "text_tokens": 7838
+            },
+            "prompt_tokens_details": {
+              "text_tokens": 1953
+            }
+          }
+        },
+        "cost_recording": {
+          "pass": true
+        }
+      },
+      "retries_used": 0,
+      "http_status": 200,
+      "response_model": "qwen3.6-flash",
+      "has_reasoning_content": true,
+      "reasoning_chars": 19773,
+      "output_excerpt": "### 一、最终执行总表\n| 时间段 | 地点 | 参与对象 | 形式/布局 | 使用的设备/道具/奖品 |\n|:---|:---|:---|:---|:---|\n| 15:40-16:00 | Ballroom入口内侧 | 全体108人 ",
+      "n_output_chars": 602,
+      "cost_usd": 0.008107,
+      "cost_status": "known",
+      "tier": "weak",
+      "node_id": "nsubtask_1",
+      "node_sem": "independent",
+      "non_matrix": true
+    },
+    {
+      "model": "qwen3.6-flash",
+      "latency_s": 52.12,
+      "checks": {
+        "reachability": {
+          "pass": true
+        },
+        "model_identity": {
+          "pass": true,
+          "echo": "qwen3.6-flash",
+          "requested": "qwen3.6-flash"
+        },
+        "schema_stability": {
+          "pass": true,
+          "finish_reason": "length",
+          "content_type": "str",
+          "usage": {
+            "prompt_tokens": 2014,
+            "completion_tokens": 9424,
+            "total_tokens": 11438,
+            "completion_tokens_details": {
+              "reasoning_tokens": 8837,
+              "text_tokens": 9424
+            },
+            "prompt_tokens_details": {
+              "text_tokens": 2014
+            }
+          }
+        },
+        "cost_recording": {
+          "pass": true
+        }
+      },
+      "retries_used": 0,
+      "http_status": 200,
+      "response_model": "qwen3.6-flash",
+      "has_reasoning_content": true,
+      "reasoning_chars": 20512,
+      "output_excerpt": "一、最终执行总表\n| 开始-结束时间 | 地点 | 参与对象 | 桌型/站点形式 | 使用的设备/道具/奖品数量 |\n|---|---|---|---|---|\n| 15:30-15:50 | Ballroom入口及内部 | 全体108人 ",
+      "n_output_chars": 867,
+      "cost_usd": 0.009692,
+      "cost_status": "known",
+      "tier": "weak",
+      "node_id": "nsubtask_2",
+      "node_sem": "artifact_dependent_base_prompt",
+      "non_matrix": true
+    },
+    {
+      "model": "qwen3.6-plus",
+      "latency_s": 144.16,
+      "checks": {
+        "reachability": {
+          "pass": true
+        },
+        "model_identity": {
+          "pass": true,
+          "echo": "qwen3.6-plus",
+          "requested": "qwen3.6-plus"
+        },
+        "schema_stability": {
+          "pass": true,
+          "finish_reason": "length",
+          "content_type": "str",
+          "usage": {
+            "prompt_tokens": 1953,
+            "completion_tokens": 8438,
+            "total_tokens": 10391,
+            "completion_tokens_details": {
+              "reasoning_tokens": 8014,
+              "text_tokens": 8438
+            },
+            "prompt_tokens_details": {
+              "text_tokens": 1953
+            }
+          }
+        },
+        "cost_recording": {
+          "pass": true
+        }
+      },
+      "retries_used": 0,
+      "http_status": 200,
+      "response_model": "qwen3.6-plus",
+      "has_reasoning_content": true,
+      "reasoning_chars": 18184,
+      "output_excerpt": "### 一、最终执行总表\n\n| 时间 | 环节 | 地点 | 参与对象 | 形式/布局 | 设备/道具/奖品 |\n|:---|:---|:---|:---|:---|:---|\n| 15:40-16:00 | 签到暖场 | Ballroom",
+      "n_output_chars": 602,
+      "cost_usd": 0.014505,
+      "cost_status": "known",
+      "tier": "mid",
+      "node_id": "nsubtask_1",
+      "node_sem": "independent",
+      "non_matrix": true
+    },
+    {
+      "model": "qwen3.6-plus",
+      "latency_s": 126.59,
+      "checks": {
+        "reachability": {
+          "pass": true
+        },
+        "model_identity": {
+          "pass": true,
+          "echo": "qwen3.6-plus",
+          "requested": "qwen3.6-plus"
+        },
+        "schema_stability": {
+          "pass": true,
+          "finish_reason": "length",
+          "content_type": "str",
+          "usage": {
+            "prompt_tokens": 2014,
+            "completion_tokens": 7412,
+            "total_tokens": 9426,
+            "completion_tokens_details": {
+              "reasoning_tokens": 6826,
+              "text_tokens": 7412
+            },
+            "prompt_tokens_details": {
+              "text_tokens": 2014
+            }
+          }
+        },
+        "cost_recording": {
+          "pass": true
+        }
+      },
+      "retries_used": 0,
+      "http_status": 200,
+      "response_model": "qwen3.6-plus",
+      "has_reasoning_content": true,
+      "reasoning_chars": 16475,
+      "output_excerpt": "### 一、最终执行总表\n\n| 时间 | 地点 | 参与对象 | 环节/形式 | 使用设备/道具/奖品 |\n|:---|:---|:---|:---|:---|\n| 15:40-16:00 | Ballroom入口内侧 | 全员108人 |",
+      "n_output_chars": 842,
+      "cost_usd": 0.012824,
+      "cost_status": "known",
+      "tier": "mid",
+      "node_id": "nsubtask_2",
+      "node_sem": "artifact_dependent_base_prompt",
+      "non_matrix": true
+    },
+    {
+      "model": "qwen3.6-max-preview",
+      "latency_s": 93.57,
+      "checks": {
+        "reachability": {
+          "pass": true
+        },
+        "model_identity": {
+          "pass": true,
+          "echo": "qwen3.6-max-preview",
+          "requested": "qwen3.6-max-preview"
+        },
+        "schema_stability": {
+          "pass": true,
+          "finish_reason": "length",
+          "content_type": "str",
+          "usage": {
+            "prompt_tokens": 1953,
+            "completion_tokens": 7685,
+            "total_tokens": 9638,
+            "completion_tokens_details": {
+              "reasoning_tokens": 7258
+            },
+            "prompt_tokens_details": {}
+          }
+        },
+        "cost_recording": {
+          "pass": true
+        }
+      },
+      "retries_used": 0,
+      "http_status": 200,
+      "response_model": "qwen3.6-max-preview",
+      "has_reasoning_content": true,
+      "reasoning_chars": 17567,
+      "output_excerpt": "一、最终执行总表\n| 时间 | 环节 | 地点 | 参与对象 | 桌型/站点形式 | 使用设备/道具/奖品 |\n|:---|:---|:---|:---|:---|:---|\n| 15:40-16:00 | 签到暖场 | Ballroom入",
+      "n_output_chars": 603,
+      "cost_usd": 0.059665,
+      "cost_status": "known",
+      "tier": "strong",
+      "node_id": "nsubtask_1",
+      "node_sem": "independent",
+      "non_matrix": true
+    },
+    {
+      "model": "qwen3.6-max-preview",
+      "latency_s": 98.17,
+      "checks": {
+        "reachability": {
+          "pass": true
+        },
+        "model_identity": {
+          "pass": true,
+          "echo": "qwen3.6-max-preview",
+          "requested": "qwen3.6-max-preview"
+        },
+        "schema_stability": {
+          "pass": true,
+          "finish_reason": "length",
+          "content_type": "str",
+          "usage": {
+            "prompt_tokens": 2014,
+            "completion_tokens": 8196,
+            "total_tokens": 10210,
+            "completion_tokens_details": {
+              "reasoning_tokens": 7612
+            },
+            "prompt_tokens_details": {}
+          }
+        },
+        "cost_recording": {
+          "pass": true
+        }
+      },
+      "retries_used": 0,
+      "http_status": 200,
+      "response_model": "qwen3.6-max-preview",
+      "has_reasoning_content": true,
+      "reasoning_chars": 17899,
+      "output_excerpt": "# 一、最终执行总表\n\n| 时间 | 环节 | 地点 | 参与对象 | 桌型/站点形式 | 使用设备/道具/奖品 |\n|:---|:---|:---|:---|:---|:---|\n| 15:40-16:00 | 签到暖场 | Ballro",
+      "n_output_chars": 797,
+      "cost_usd": 0.063546,
+      "cost_status": "known",
+      "tier": "strong",
+      "node_id": "nsubtask_2",
+      "node_sem": "artifact_dependent_base_prompt",
+      "non_matrix": true
+    }
+  ],
+  "judge_check": {
+    "model": "qwen-plus",
+    "json_valid": true,
+    "score": 1.0,
+    "raw_excerpt": "{\"score\": 1.0, \"reason\": \"助手准确列出1个颜色'红色'，完全符合任务要求。\"}",
+    "pass": true
+  },
+  "critical_failures": [],
+  "verdict": "PASS",
+  "probe_cost_usd_est": 0.168339
+}
