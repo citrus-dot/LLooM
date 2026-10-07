@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-10-07T06:50:28+00:00",
+  "n_cases": 20,
+  "n_nodes": 72,
+  "by_split": {
+    "test": 17,
+    "calibration": 3
+  },
+  "by_template": {
+    "chain2": 4,
+    "fanout3": 4,
+    "diamond": 4,
+    "chain3": 4,
+    "mixed5": 4
+  },
+  "binding_modes": [
+    "llmrouterbench_exact"
+  ],
+  "exact_binding_rate": 1.0,
+  "pool": {
+    "weak": "deephermes_3_llama_3_8b_preview",
+    "mid": "deepseek_r1_distill_qwen_7b",
+    "strong": "intern_s1_mini"
+  },
+  "split_rule": "workflow-group 哈希桶 sha256('lloom-sbsplit:3407:{case_id}')，20/80（19 号 §二十）",
+  "notes": [
+    "node prompt = llmrb 真实 query（逐字），outcome 为 R7 池 frozen 结果——headline 100% exact-bound（Gate S-2）",
+    "workflow 结构为形态模板（chain/fanout/diamond/mixed，参考 PlanBench 形态分布）；结构本身 synthetic，已如实标注",
+    "dependency_semantics=independent：node prompt 自包含；严格 counterfactual 的科学边界（19 号 §三十三）",
+    "仅收 accuracy 类 dataset（0/1 量纲）→ workflow_completion 语义干净；judge 类 diagnostic 后置"
+  ]
+}

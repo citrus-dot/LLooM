@@ -98,6 +98,27 @@ enum BenchCmd {
         #[arg(long)]
         strong_budget: Option<f64>,
     },
+    /// SystemBench seam：批量单 query 路由分派（调 bench::route_single，P2/任意 soft gate）
+    RouteBatch {
+        /// 输入 jsonl：{"query_id", "task_type", "prompt"}（SystemCase 节点行）
+        #[arg(long)]
+        input: std::path::PathBuf,
+        /// 输出 jsonl：{"query_id", "selected_model", "band"}
+        #[arg(long)]
+        output: std::path::PathBuf,
+        /// 临时池三元 model_id（weak mid strong）
+        #[arg(long, num_args = 3)]
+        models: Vec<String>,
+        /// 冻结矩阵目录（取 calibration 侧统计：质量先验/等效单价）
+        #[arg(long, default_value = "benchmarks/routerbench/normalized/llmrouterbench")]
+        normalized: std::path::PathBuf,
+        /// Soft Gate penalty（给值即启用；SystemBench P2 = 0.0）
+        #[arg(long)]
+        soft_gate: Option<f64>,
+        /// cost 权重（缺省 0.5 生产 default）
+        #[arg(long)]
+        cost_weight: Option<f64>,
+    },
     /// λ sweep：LLooM cost 权重 0→1 步进 0.1，产出 Pareto 点集（10 号 §十四）
     Sweep {
         #[arg(long, num_args = 3)]
@@ -286,6 +307,7 @@ use lloom_core::bench::{self, BenchPool, Strategy};
 async fn cmd_bench(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         BenchCmd::Replay { .. } => cmd_bench_replay(cmd).await,
+        BenchCmd::RouteBatch { .. } => cmd_bench_route_batch(cmd).await,
         BenchCmd::Sweep { .. } => cmd_bench_sweep(cmd).await,
     }
 }
@@ -498,6 +520,63 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
             );
         }
     }
+    Ok(())
+}
+
+/// SystemBench seam：批量单 query 路由（一次子进程调用分派全部节点，无 per-node 开销）
+async fn cmd_bench_route_batch(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let BenchCmd::RouteBatch {
+        input,
+        output,
+        models,
+        normalized,
+        soft_gate,
+        cost_weight,
+    } = cmd
+    else {
+        unreachable!()
+    };
+    use lloom_core::bench::{self, BenchPool};
+
+    if models.len() != 3 {
+        eprintln!("✗ --models 需恰好 3 个 model_id（weak mid strong）");
+        std::process::exit(1);
+    }
+    let pool = BenchPool {
+        weak: bench::slugify(&models[0]),
+        mid: bench::slugify(&models[1]),
+        strong: bench::slugify(&models[2]),
+    };
+
+    // calibration 侧统计（质量先验/等效单价真源；llmrb calibration 不承载 headline，只作先验）
+    let queries: Vec<Value> = std::fs::read_to_string(&input)?
+        .split("\n")
+        .filter(|l| !l.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()?;
+    let (_test_insts, calib_insts, matrix) = bench::load_frozen(&normalized, None)?;
+    let stats = bench::calibration_stats(&matrix, &pool, &calib_insts);
+
+    let out_path = output.clone();
+    let mut out = std::io::BufWriter::new(std::fs::File::create(&out_path)?);
+    use std::io::Write;
+    for q in &queries {
+        let query_id = q["query_id"].as_str().unwrap_or_default();
+        let task_type = q["task_type"].as_str().unwrap_or("general");
+        let prompt = q["prompt"].as_str().unwrap_or_default();
+        let (selected, band) = bench::route_single(&pool, &stats, soft_gate, cost_weight, task_type, prompt)
+            .unwrap_or_else(|e| {
+                eprintln!("✗ route_single 失败 @ {query_id}: {e}");
+                std::process::exit(1);
+            });
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({ "query_id": query_id, "selected_model": selected, "band": band })
+        )?;
+    }
+    out.flush()?;
+    println!("✓ route-batch: {} queries → {}", queries.len(), out_path.display());
     Ok(())
 }
 

@@ -220,6 +220,7 @@ pub fn policy_with_weights(task_type: &str, cost_weight: f64, quality_weight: f6
 }
 
 /// calibration 统计包：等效单价 p_m + per (dataset, model) 校准均分 + (model, task_type) 质量先验。
+#[derive(Clone)]
 pub struct CalibrationStats {
     /// model_id → 等效综合单价（USD/token，input=output 同价）
     pub unit_price: HashMap<String, f64>,
@@ -765,6 +766,39 @@ pub fn replay(
         });
     }
     Ok(items)
+}
+
+/// SystemBench seam（19 号 §二十三：调用生产函数，不复制公式）：
+/// 对单个 query 在给定池上执行 P2 policy 的模型分派。
+/// 组合 = build_pool_models_gated（nominal tier eligibility）+ policy_for 权重
+/// + quality_override（soft gate penalty 通道）+ router::plan()——与 bench replay 同一决策真源。
+pub fn route_single(
+    pool: &BenchPool,
+    stats: &CalibrationStats,
+    soft_gate: Option<f64>,
+    cost_weight: Option<f64>,
+    task_type: &str,
+    prompt: &str,
+) -> Result<(String, String)> {
+    let weak_nominal = if soft_gate.is_some() { 2 } else { 1 };
+    let (models, specs) = build_pool_models_gated(pool, stats, weak_nominal);
+    let mut ctx = ReplayCtx::new(pool.clone(), models, specs, stats.clone());
+    ctx.soft_gate = soft_gate;
+    ctx.weights = cost_weight.map(|cw| (cw, 0.9 - cw));
+    let inst = BenchInstance {
+        dataset_id: String::new(),
+        sample_id: String::new(),
+        task_type: task_type.to_string(),
+        prompt: prompt.to_string(),
+    };
+    let policy = ctx.policy_for(task_type);
+    let q = ctx.quality_override(task_type);
+    let empty_hit: HashMap<String, f64> = HashMap::new();
+    let input = ctx.build_plan_input(&inst, &policy, &q, &empty_hit);
+    let outcome = router::plan(&input).map_err(|e| {
+        AppError::InvalidRequest(format!("route_single plan() 失败: {e}"))
+    })?;
+    Ok((outcome.primary, router::band_for(task_type, prompt).to_string()))
 }
 
 /// 单条回放结果（bench_run_items 行）。

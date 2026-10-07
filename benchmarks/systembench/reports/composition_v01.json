@@ -1,0 +1,3268 @@
+{
+  "generated_at": "2026-10-07T06:55:21+00:00",
+  "policy_id": "routerbench_v02_p2",
+  "n_test_cases": 17,
+  "summary": {
+    "B2_workflow_strong_seq": {
+      "n_cases": 17,
+      "completion_rate": 0.0588,
+      "quality_node_mean": 0.625,
+      "cost_per_workflow_mean": 0.004923,
+      "strong_share_mean": 1.0,
+      "makespan_ms_mean": 1882.4,
+      "coordination_tax": null
+    },
+    "B3_workflow_strong_par": {
+      "n_cases": 17,
+      "completion_rate": 0.0588,
+      "quality_node_mean": 0.625,
+      "cost_per_workflow_mean": 0.004923,
+      "strong_share_mean": 1.0,
+      "makespan_ms_mean": 500.0,
+      "coordination_tax": null
+    },
+    "B4_workflow_p2_par": {
+      "n_cases": 17,
+      "completion_rate": 0.0588,
+      "quality_node_mean": 0.625,
+      "cost_per_workflow_mean": 0.004101,
+      "strong_share_mean": 0.9029,
+      "makespan_ms_mean": 500.0,
+      "coordination_tax": null
+    },
+    "O1_node_oracle_par": {
+      "n_cases": 17,
+      "completion_rate": 0.6471,
+      "quality_node_mean": 0.9062,
+      "cost_per_workflow_mean": 4.5e-05,
+      "strong_share_mean": 0.0,
+      "makespan_ms_mean": 500.0,
+      "coordination_tax": null
+    }
+  },
+  "routing_gain_b4_vs_b3": {
+    "d_cost_pct": -16.7,
+    "d_quality_pp": 0.0,
+    "d_strong_share_pp": -9.71
+  },
+  "honesty_notes": [
+    "v0.1 Frozen 的 planning 维 N/A（无真实 LLM decomposition）——B5/B6/B7 留 Shadow track（19 号 §六）",
+    "B0 Flat-Strong 仅形态参考：goal-level frozen outcome 不存在，不进 headline 对比（19 号 §十四 禁伪装）",
+    "O1 Node Oracle 是 hindsight 上界（per-node argmax quality），Oracle = upper bound under fixed workflow（§四十三）",
+    "routing assignment 全 strong 时 B3≡B4 属预期（llmrb 长 prompt → is_complex → hard 带）——band 门槛主导的第三次独立复现，routing gain 的真实验场在短 query/Shadow"
+  ],
+  "per_case": {
+    "B2_workflow_strong_seq": [
+      {
+        "system_case_id": "sb_v01_chain2_000",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.00453,
+        "strong_share": 1.0,
+        "makespan_ms": 1000,
+        "wave_count": 2,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.9205e-05,
+            "duration_ms": 1130.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004440614,
+            "duration_ms": 63956.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_001",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.000376,
+        "strong_share": 1.0,
+        "makespan_ms": 2000,
+        "wave_count": 4,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 9.2476e-05,
+            "duration_ms": 1114.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.715100000000001e-05,
+            "duration_ms": 1004.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.9307e-05,
+            "duration_ms": 1168.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000117041,
+            "duration_ms": 1574.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_002",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.001064,
+        "strong_share": 1.0,
+        "makespan_ms": 2000,
+        "wave_count": 4,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0008326370000000001,
+            "duration_ms": 11948.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 3.5181e-05,
+            "duration_ms": 414.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000105212,
+            "duration_ms": 1398.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 9.1374e-05,
+            "duration_ms": 1026.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_chain3_003",
+        "split": "test",
+        "n_nodes": 3,
+        "structure_template": "chain3",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.004826,
+        "strong_share": 1.0,
+        "makespan_ms": 1500,
+        "wave_count": 3,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1000,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00014422000000000003,
+            "duration_ms": 2010.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000255791,
+            "duration_ms": 3594.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004426297000000001,
+            "duration_ms": 63678.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_004",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.013622,
+        "strong_share": 1.0,
+        "makespan_ms": 2500,
+        "wave_count": 5,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 2000,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.3543e-05,
+            "duration_ms": 972.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004506122,
+            "duration_ms": 65228.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 5.8648e-05,
+            "duration_ms": 712.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004502516999999999,
+            "duration_ms": 65158.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004481505,
+            "duration_ms": 64750.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_chain2_005",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.000499,
+        "strong_share": 1.0,
+        "makespan_ms": 1000,
+        "wave_count": 2,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000341535,
+            "duration_ms": 4860.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00015786400000000002,
+            "duration_ms": 2156.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_006",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.004869,
+        "strong_share": 1.0,
+        "makespan_ms": 2000,
+        "wave_count": 4,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00021775199999999998,
+            "duration_ms": 3028.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 9.022600000000001e-05,
+            "duration_ms": 564.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000138113,
+            "duration_ms": 1432.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004422898000000001,
+            "duration_ms": 63612.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_007",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.00516,
+        "strong_share": 1.0,
+        "makespan_ms": 2000,
+        "wave_count": 4,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004503135000000001,
+            "duration_ms": 65170.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 3.156e-05,
+            "duration_ms": 360.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 6.6134e-05,
+            "duration_ms": 786.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0005588110000000001,
+            "duration_ms": 7944.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_009",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.010545,
+        "strong_share": 1.0,
+        "makespan_ms": 2500,
+        "wave_count": 5,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 2000,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004492011000000001,
+            "duration_ms": 64954.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0007721140000000001,
+            "duration_ms": 10626.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000144508,
+            "duration_ms": 1512.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004501590000000001,
+            "duration_ms": 65140.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0006349160000000001,
+            "duration_ms": 9084.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_011",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.004888,
+        "strong_share": 1.0,
+        "makespan_ms": 2000,
+        "wave_count": 4,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.547900000000001e-05,
+            "duration_ms": 1146.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000160743,
+            "duration_ms": 2252.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00014221900000000002,
+            "duration_ms": 1526.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004499324000000001,
+            "duration_ms": 65096.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_012",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.006241,
+        "strong_share": 1.0,
+        "makespan_ms": 2000,
+        "wave_count": 4,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00449129,
+            "duration_ms": 64940.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000127025,
+            "duration_ms": 1740.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0015307600000000002,
+            "duration_ms": 22050.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 9.222700000000001e-05,
+            "duration_ms": 1258.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_chain3_013",
+        "split": "test",
+        "n_nodes": 3,
+        "structure_template": "chain3",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.001042,
+        "strong_share": 1.0,
+        "makespan_ms": 1500,
+        "wave_count": 3,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1000,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 8.078100000000001e-05,
+            "duration_ms": 944.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000798681,
+            "duration_ms": 11394.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00016250000000000002,
+            "duration_ms": 2280.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_014",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.004957,
+        "strong_share": 1.0,
+        "makespan_ms": 2500,
+        "wave_count": 5,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 2000,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004488097000000001,
+            "duration_ms": 64878.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00011909100000000002,
+            "duration_ms": 1624.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00010001500000000001,
+            "duration_ms": 1310.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.4176e-05,
+            "duration_ms": 384.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000165989,
+            "duration_ms": 1906.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_chain2_015",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.004583,
+        "strong_share": 1.0,
+        "makespan_ms": 1000,
+        "wave_count": 2,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.778e-05,
+            "duration_ms": 900.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004505401,
+            "duration_ms": 65214.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_016",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "sequential",
+        "workflow_completion": true,
+        "workflow_cost": 0.000494,
+        "strong_share": 1.0,
+        "makespan_ms": 2000,
+        "wave_count": 4,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.7366e-05,
+            "duration_ms": 334.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00012843000000000002,
+            "duration_ms": 1700.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 9.1174e-05,
+            "duration_ms": 1226.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00019654900000000002,
+            "duration_ms": 2426.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_017",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.006144,
+        "strong_share": 1.0,
+        "makespan_ms": 2000,
+        "wave_count": 4,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 1500,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 7.3235e-05,
+            "duration_ms": 860.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0008251,
+            "duration_ms": 11680.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0007451520000000001,
+            "duration_ms": 10708.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004500972000000001,
+            "duration_ms": 65128.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_019",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "sequential",
+        "workflow_completion": false,
+        "workflow_cost": 0.009843,
+        "strong_share": 1.0,
+        "makespan_ms": 2500,
+        "wave_count": 5,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 2000,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00042362100000000006,
+            "duration_ms": 5934.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.0045036500000000005,
+            "duration_ms": 65180.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004496234,
+            "duration_ms": 65036.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00025636,
+            "duration_ms": 2920.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00016302300000000001,
+            "duration_ms": 2282.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B2_workflow_strong_seq"
+      }
+    ],
+    "B3_workflow_strong_par": [
+      {
+        "system_case_id": "sb_v01_chain2_000",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.00453,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.9205e-05,
+            "duration_ms": 1130.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004440614,
+            "duration_ms": 63956.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_001",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.000376,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 9.2476e-05,
+            "duration_ms": 1114.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.715100000000001e-05,
+            "duration_ms": 1004.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.9307e-05,
+            "duration_ms": 1168.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000117041,
+            "duration_ms": 1574.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_002",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.001064,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0008326370000000001,
+            "duration_ms": 11948.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 3.5181e-05,
+            "duration_ms": 414.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000105212,
+            "duration_ms": 1398.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 9.1374e-05,
+            "duration_ms": 1026.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain3_003",
+        "split": "test",
+        "n_nodes": 3,
+        "structure_template": "chain3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.004826,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00014422000000000003,
+            "duration_ms": 2010.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000255791,
+            "duration_ms": 3594.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004426297000000001,
+            "duration_ms": 63678.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_004",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.013622,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.3543e-05,
+            "duration_ms": 972.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004506122,
+            "duration_ms": 65228.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 5.8648e-05,
+            "duration_ms": 712.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004502516999999999,
+            "duration_ms": 65158.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004481505,
+            "duration_ms": 64750.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain2_005",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.000499,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000341535,
+            "duration_ms": 4860.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00015786400000000002,
+            "duration_ms": 2156.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_006",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.004869,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00021775199999999998,
+            "duration_ms": 3028.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 9.022600000000001e-05,
+            "duration_ms": 564.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000138113,
+            "duration_ms": 1432.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004422898000000001,
+            "duration_ms": 63612.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_007",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.00516,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004503135000000001,
+            "duration_ms": 65170.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 3.156e-05,
+            "duration_ms": 360.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 6.6134e-05,
+            "duration_ms": 786.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0005588110000000001,
+            "duration_ms": 7944.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_009",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.010545,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004492011000000001,
+            "duration_ms": 64954.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0007721140000000001,
+            "duration_ms": 10626.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000144508,
+            "duration_ms": 1512.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004501590000000001,
+            "duration_ms": 65140.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0006349160000000001,
+            "duration_ms": 9084.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_011",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.004888,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.547900000000001e-05,
+            "duration_ms": 1146.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000160743,
+            "duration_ms": 2252.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00014221900000000002,
+            "duration_ms": 1526.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004499324000000001,
+            "duration_ms": 65096.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_012",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.006241,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00449129,
+            "duration_ms": 64940.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000127025,
+            "duration_ms": 1740.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0015307600000000002,
+            "duration_ms": 22050.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 9.222700000000001e-05,
+            "duration_ms": 1258.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain3_013",
+        "split": "test",
+        "n_nodes": 3,
+        "structure_template": "chain3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.001042,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 8.078100000000001e-05,
+            "duration_ms": 944.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000798681,
+            "duration_ms": 11394.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00016250000000000002,
+            "duration_ms": 2280.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_014",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.004957,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004488097000000001,
+            "duration_ms": 64878.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00011909100000000002,
+            "duration_ms": 1624.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00010001500000000001,
+            "duration_ms": 1310.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.4176e-05,
+            "duration_ms": 384.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000165989,
+            "duration_ms": 1906.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain2_015",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.004583,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.778e-05,
+            "duration_ms": 900.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004505401,
+            "duration_ms": 65214.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_016",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.000494,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.7366e-05,
+            "duration_ms": 334.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00012843000000000002,
+            "duration_ms": 1700.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 9.1174e-05,
+            "duration_ms": 1226.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00019654900000000002,
+            "duration_ms": 2426.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_017",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.006144,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 7.3235e-05,
+            "duration_ms": 860.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0008251,
+            "duration_ms": 11680.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0007451520000000001,
+            "duration_ms": 10708.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004500972000000001,
+            "duration_ms": 65128.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_019",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.009843,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00042362100000000006,
+            "duration_ms": 5934.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.0045036500000000005,
+            "duration_ms": 65180.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004496234,
+            "duration_ms": 65036.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00025636,
+            "duration_ms": 2920.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00016302300000000001,
+            "duration_ms": 2282.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B3_workflow_strong_par"
+      }
+    ],
+    "B4_workflow_p2_par": [
+      {
+        "system_case_id": "sb_v01_chain2_000",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.00453,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.9205e-05,
+            "duration_ms": 1130.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004440614,
+            "duration_ms": 63956.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_001",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.000376,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 9.2476e-05,
+            "duration_ms": 1114.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.715100000000001e-05,
+            "duration_ms": 1004.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.9307e-05,
+            "duration_ms": 1168.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000117041,
+            "duration_ms": 1574.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_002",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.001064,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0008326370000000001,
+            "duration_ms": 11948.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 3.5181e-05,
+            "duration_ms": 414.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000105212,
+            "duration_ms": 1398.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 9.1374e-05,
+            "duration_ms": 1026.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain3_003",
+        "split": "test",
+        "n_nodes": 3,
+        "structure_template": "chain3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.004826,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00014422000000000003,
+            "duration_ms": 2010.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000255791,
+            "duration_ms": 3594.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004426297000000001,
+            "duration_ms": 63678.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_004",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.013622,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.3543e-05,
+            "duration_ms": 972.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004506122,
+            "duration_ms": 65228.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 5.8648e-05,
+            "duration_ms": 712.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004502516999999999,
+            "duration_ms": 65158.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004481505,
+            "duration_ms": 64750.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain2_005",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.000167,
+        "strong_share": 0.5,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "deephermes_3_llama_3_8b_preview",
+            "score": 0.0,
+            "cost": 9.25e-06,
+            "duration_ms": 106.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00015786400000000002,
+            "duration_ms": 2156.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_006",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.004869,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00021775199999999998,
+            "duration_ms": 3028.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 9.022600000000001e-05,
+            "duration_ms": 564.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000138113,
+            "duration_ms": 1432.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004422898000000001,
+            "duration_ms": 63612.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_007",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.00516,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004503135000000001,
+            "duration_ms": 65170.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 3.156e-05,
+            "duration_ms": 360.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 6.6134e-05,
+            "duration_ms": 786.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0005588110000000001,
+            "duration_ms": 7944.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_009",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.006052,
+        "strong_share": 0.8,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004492011000000001,
+            "duration_ms": 64954.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0007721140000000001,
+            "duration_ms": 10626.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000144508,
+            "duration_ms": 1512.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "deephermes_3_llama_3_8b_preview",
+            "score": 0.0,
+            "cost": 8.21e-06,
+            "duration_ms": 74.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0006349160000000001,
+            "duration_ms": 9084.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_011",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.004735,
+        "strong_share": 0.75,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.547900000000001e-05,
+            "duration_ms": 1146.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "deephermes_3_llama_3_8b_preview",
+            "score": 1.0,
+            "cost": 8.12e-06,
+            "duration_ms": 98.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00014221900000000002,
+            "duration_ms": 1526.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004499324000000001,
+            "duration_ms": 65096.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_012",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.006241,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00449129,
+            "duration_ms": 64940.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000127025,
+            "duration_ms": 1740.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0015307600000000002,
+            "duration_ms": 22050.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 9.222700000000001e-05,
+            "duration_ms": 1258.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain3_013",
+        "split": "test",
+        "n_nodes": 3,
+        "structure_template": "chain3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.001042,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 8.078100000000001e-05,
+            "duration_ms": 944.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000798681,
+            "duration_ms": 11394.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00016250000000000002,
+            "duration_ms": 2280.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_014",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.004957,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004488097000000001,
+            "duration_ms": 64878.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00011909100000000002,
+            "duration_ms": 1624.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00010001500000000001,
+            "duration_ms": 1310.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 8.4176e-05,
+            "duration_ms": 384.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.000165989,
+            "duration_ms": 1906.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain2_015",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 9.1e-05,
+        "strong_share": 0.5,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.778e-05,
+            "duration_ms": 900.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "deephermes_3_llama_3_8b_preview",
+            "score": 0.0,
+            "cost": 1.37e-05,
+            "duration_ms": 194.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_016",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.000494,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 7.7366e-05,
+            "duration_ms": 334.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00012843000000000002,
+            "duration_ms": 1700.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 9.1174e-05,
+            "duration_ms": 1226.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00019654900000000002,
+            "duration_ms": 2426.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_017",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.006144,
+        "strong_share": 1.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 7.3235e-05,
+            "duration_ms": 860.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0008251,
+            "duration_ms": 11680.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.0007451520000000001,
+            "duration_ms": 10708.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004500972000000001,
+            "duration_ms": 65128.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_019",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.005346,
+        "strong_share": 0.8,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00042362100000000006,
+            "duration_ms": 5934.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "deephermes_3_llama_3_8b_preview",
+            "score": 1.0,
+            "cost": 6.96e-06,
+            "duration_ms": 66.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.004496234,
+            "duration_ms": 65036.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "intern_s1_mini",
+            "score": 0.0,
+            "cost": 0.00025636,
+            "duration_ms": 2920.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "intern_s1_mini",
+            "score": 1.0,
+            "cost": 0.00016302300000000001,
+            "duration_ms": 2282.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "B4_workflow_p2_par"
+      }
+    ],
+    "O1_node_oracle_par": [
+      {
+        "system_case_id": "sb_v01_chain2_000",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "mimo_7b_rl_0530",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 1300.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "minicpm4_1_8b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 35866.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_001",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 0.0,
+            "cost": 0.0,
+            "duration_ms": 478.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 334.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 572.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 982.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_002",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 20228.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "minicpm4_1_8b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 1330.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "minicpm4_1_8b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 6898.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 0.0,
+            "cost": 0.0,
+            "duration_ms": 406.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain3_003",
+        "split": "test",
+        "n_nodes": 3,
+        "structure_template": "chain3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 736.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 14792.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 0.0,
+            "cost": 0.0,
+            "duration_ms": 850.0,
+            "succeeded": false,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_004",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.000773,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 330.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen3_8b",
+            "score": 1.0,
+            "cost": 0.000772984,
+            "duration_ms": 11156.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 434.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 530.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "minicpm4_1_8b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 4778.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain2_005",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 906.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 14286.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_006",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "glm_4_9b_chat",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 1282.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 8.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 482.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 218.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_007",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 4470.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 214.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 408.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 1372.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_009",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 12950.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 476.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 654.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 0.0,
+            "cost": 0.0,
+            "duration_ms": 900.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 9554.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_011",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 336.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 436.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "glm_4_9b_chat",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 28.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 12054.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_012",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 7354.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 616.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 27864.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 326.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain3_013",
+        "split": "test",
+        "n_nodes": 3,
+        "structure_template": "chain3",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 0.0,
+            "cost": 0.0,
+            "duration_ms": 636.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 736.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 508.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_014",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 734.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 516.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 7166.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "minicpm4_1_8b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 1318.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 15086.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_chain2_015",
+        "split": "test",
+        "n_nodes": 2,
+        "structure_template": "chain2",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 8.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 1026.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_fanout3_016",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "fanout3",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 8.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 744.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 550.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 366.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_diamond_017",
+        "split": "test",
+        "n_nodes": 4,
+        "structure_template": "diamond",
+        "schedule_policy": "reference",
+        "workflow_completion": true,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 6874.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 1568.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 12348.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "minicpm4_1_8b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 28236.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      },
+      {
+        "system_case_id": "sb_v01_mixed5_019",
+        "split": "test",
+        "n_nodes": 5,
+        "structure_template": "mixed5",
+        "schedule_policy": "reference",
+        "workflow_completion": false,
+        "workflow_cost": 0.0,
+        "strong_share": 0.0,
+        "makespan_ms": 500,
+        "wave_count": 1,
+        "critical_path_ms": 500,
+        "sequentialization_waste_ms": 0,
+        "node_results": {
+          "n1": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 1836.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n2": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 782.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n3": {
+            "model": "openthinker3_7b",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 14626.0,
+            "succeeded": true,
+            "injected_failure": false
+          },
+          "n4": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 0.0,
+            "cost": 0.0,
+            "duration_ms": 496.0,
+            "succeeded": false,
+            "injected_failure": false
+          },
+          "n5": {
+            "model": "qwen2_5_coder_7b_instruct",
+            "score": 1.0,
+            "cost": 0.0,
+            "duration_ms": 828.0,
+            "succeeded": true,
+            "injected_failure": false
+          }
+        },
+        "policy": "O1_node_oracle_par"
+      }
+    ]
+  }
+}

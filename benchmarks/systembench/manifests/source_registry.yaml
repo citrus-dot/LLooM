@@ -1,0 +1,42 @@
+# source_registry.yaml — SystemBench 的 source 资产登记（19 号 §二十四：下层数据不复制）
+# 每个 binding 的 source_benchmark/source_sample_id 必须能在本表登记的资产中解析。
+sources:
+  - id: llmrouterbench
+    role: node_outcome_source          # node 的 frozen (score, cost, tokens) 来源
+    normalized_dir: benchmarks/routerbench/normalized/llmrouterbench
+    source_manifest: benchmarks/routerbench/normalized/llmrouterbench/source_manifest.json
+    cost_basis: llmrouterbench_source
+    models_in_use:                     # R7 池（与 system.yaml routing_policy 一致）
+      - deephermes_3_llama_3_8b_preview
+      - deepseek_r1_distill_qwen_7b
+      - intern_s1_mini
+    integrity:
+      tar_sha256: b79f8cde1a6f029c2efa663a3a3b6f7748defb22341fe59f328cebef6648c8f1
+      gate: "import_llmrouterbench.py --expect-sha256；矩阵重建确定性（12 号 §二.2）"
+
+  - id: routerbench0shot
+    role: reserved                     # v0.1 未用（模型集与 R7 池不相交）；登记备查
+    normalized_dir: benchmarks/routerbench/normalized
+    source_manifest: benchmarks/routerbench/normalized/source_manifest.json
+    cost_basis: routerbench_source
+
+  - id: planbench_structure
+    role: workflow_shape_reference     # DAG 形态分布参考（chain 深度/分支），结构不复制
+    db: benchmarks/orchestration/orchbench.db
+    table: bench_workflows
+    license: MIT
+    note: "node prompt 不取自 PlanBench（其 goal atom 无 frozen outcome）；仅 depth/width 分布作 case 形态依据"
+
+  - id: orchestration_simulator
+    role: schedule_engine              # L1 replay 的调度引擎（复用不重写，19 号 §三）
+    module: benchmarks/orchestration/schedule.py
+    strategies: [reference, sequential, greedy_ready_queue, lloom_waves]
+
+binding_modes:                        # 19 号 §八：mode 枚举封闭，禁止模糊 lookup
+  - llmrouterbench_exact              # node.prompt == source sample.prompt（prompt_hash 验证）★headline 唯一准入
+  - routerbench_exact                 # 预留
+  - historical_artifact               # L2 阶段
+  - synthetic_fixture                  # 仅 diagnostic
+  - live_only                         # S4 阶段
+forbidden:
+  - "nearest query / embedding similarity / guessing outcome —— 出现即 Gate S-2 不通过"

@@ -1,0 +1,44 @@
+# system.yaml — SystemBench v0.1 namespace 与 policy identity（19 号 §二十一/§四十二）
+# 冻结规则：任何被引用 manifest 的变化自动传播（引用而非复制）；本文件字段变化 = 新 systembench identity。
+systembench_id: lloom-systembench-v0.1
+version: 1
+created: "2026-10-06"
+replay_level: L1            # 19 号 §二缺口 C：v0.1 以 L1 Outcome Replay 为主（L2/L3 后置）
+track_scope: frozen_composition
+
+# ── 下游冻结资产引用（§二十二：引用而非复制）──
+sources:
+  routerbench_v02:
+    manifest: benchmarks/routerbench/manifests/frozen_manifest_v02.json
+    benchmark_id: lloom-routerbench-v0.2
+    manifest_hash: cbebcefd05b14057deb789449cc0512944733dc1696d43b9d30b2a142dc9db5a
+    role: routing_policy_and_outcome_source
+  workflow_track:
+    root: benchmarks/orchestration
+    workflow_schema: manifests/workflow.schema.json   # v1 冻结（18 号 §六.2）
+    note: "结构形态参考源（PlanBench blocksworld 形态分布）；canonical schema 不复制，validator 复用"
+
+# ── Routing policy identity（§四十二：bench variant 与生产 policy 绝不混写）──
+routing_policy:
+  policy_id: routerbench_v02_p2        # 冻结的 benchmark variant，headline 专用
+  pool_id: llmrb_tournament_r7_v1
+  pool_models:                          # weak / mid / strong（llmrb slug）
+    weak: deephermes_3_llama_3_8b_preview
+    mid: deepseek_r1_distill_qwen_7b
+    strong: intern_s1_mini
+  family: P2_softgate0                  # weak nominal tier 2 / penalty=0 / default 权重
+  production_policy_id: null            # Live 阶段才填 production_v2_<commit>
+  note: "P2 是 bench variant（penalty 语义与生产 soft gate 有差，12 号诚实边界#3）；Live 前必须换 policy_id"
+
+# ── 成功语义（§十四：L1 明示 completion 语义，不包装 semantic quality）──
+success_semantics:
+  primary: workflow_completion          # all required nodes succeeded AND deps satisfied AND aggregation_valid
+  node_success_rule: score >= 1.0       # v0.1 headline 只收 accuracy 类 dataset（0/1 分量纲）
+  note: "judge 类 dataset 的 node 只作 diagnostic（连续分无统一 success 阈值），不进 completion headline"
+
+# ── split（§二十：workflow-group split）──
+split:
+  unit: system_case                     # 同 case 的全部节点永不分家
+  calibration_ratio: 0.2
+  seed: 3407
+  method: "哈希桶 sha256('lloom-sbsplit:{seed}:{case_id}')（与 RouterBench 同法；重切=新 identity）"
