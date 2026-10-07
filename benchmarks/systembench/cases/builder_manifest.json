@@ -1,22 +1,18 @@
 {
-  "generated_at": "2026-10-07T06:50:28+00:00",
-  "n_cases": 20,
-  "n_nodes": 72,
+  "generated_at": "2026-10-07T07:03:15+00:00",
+  "n_cases": 80,
+  "n_nodes": 327,
   "by_split": {
-    "test": 17,
-    "calibration": 3
+    "test": 65,
+    "calibration": 15
   },
-  "by_template": {
-    "chain2": 4,
-    "fanout3": 4,
-    "diamond": 4,
-    "chain3": 4,
-    "mixed5": 4
+  "by_class": {
+    "simple": 20,
+    "medium": 30,
+    "complex": 20,
+    "failure": 10
   },
-  "binding_modes": [
-    "llmrouterbench_exact"
-  ],
-  "exact_binding_rate": 1.0,
+  "failure_cases": 10,
   "pool": {
     "weak": "deephermes_3_llama_3_8b_preview",
     "mid": "deepseek_r1_distill_qwen_7b",

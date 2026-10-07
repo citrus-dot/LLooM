@@ -53,11 +53,15 @@ def verify_binding(case: dict) -> None:
 
 
 def replay_case(case: dict, assignments: dict[str, str], outcomes: dict,
-                schedule_policy: str = "reference", failure_nodes: dict | None = None) -> dict:
+                schedule_policy: str = "reference", failure_nodes: dict | None = None,
+                recovery: bool = False, pool_order: list[str] | None = None) -> dict:
     """单 case L1 replay：分派 → frozen outcome 查表 → evaluate_schedule → completion/cost。
 
     assignments: node_id -> model_id
-    failure_nodes: node_id -> failure kind（F1-F7；命中节点本 replay 判 failed——recovery 细粒度归 diagnose.py）
+    failure_nodes: node_id -> failure kind（F1-F7；命中节点 primary model outcome 不可用）
+    recovery: True 时 failed 节点按 pool_order（原分派优先级之外的池序）fallback 重查 frozen
+              outcome——recovered 计入 succeeded_recovered；False 直接 failed 并向下游传播。
+    传播语义（L1，independent 前提）：节点 failed/skipped → 其下游全部 skipped（依赖未满足）。
     """
     verify_binding(case)
     nodes = case["nodes"]
@@ -66,22 +70,68 @@ def replay_case(case: dict, assignments: dict[str, str], outcomes: dict,
         if e["from"] not in node_ids or e["to"] not in node_ids:
             raise SystemExit(f"✗ 边引用未知节点: {case['system_case_id']} {e}")
 
+    deps: dict[str, list[str]] = {n["node_id"]: [] for n in nodes}
+    for e in case["edges"]:
+        deps[e["to"]].append(e["from"])
+
+    fallback_order = pool_order or ["intern_s1_mini", "deepseek_r1_distill_qwen_7b", "deephermes_3_llama_3_8b_preview"]
     node_results = {}
     wf_nodes = []
-    for n in nodes:
+    propagated: set[str] = set()
+
+    def resolve(n) -> dict:
         sid = n["outcome_binding"]["source_sample_id"]
         model = assignments[n["node_id"]]
+        kind = (failure_nodes or {}).get(n["node_id"])
+        # F2：primary model outcome 不可用 → recovery 时按池序 fallback 重查
+        if kind == "F2_model_unavailable":
+            if recovery:
+                for alt in fallback_order:
+                    if alt != model and outcomes.get(sid, {}).get(alt):
+                        oc = outcomes[sid][alt]
+                        return {"model": alt, "score": oc["score"], "cost": oc["cost"],
+                                "duration_ms": (oc.get("completion_tokens") or 500) * DURATION_PER_TOKEN_MS,
+                                "succeeded": oc["score"] >= 1.0, "injected_failure": True,
+                                "recovered": True, "fallback_from": model}
+            return {"model": model, "score": 0.0, "cost": 0.0, "duration_ms": 0.0,
+                    "succeeded": False, "injected_failure": True, "recovered": False,
+                    "fallback_from": model}
         oc = outcomes.get(sid, {}).get(model)
         if oc is None:
             raise SystemExit(f"✗ outcome 缺失: {sid}/{model}（Gate S-2 覆盖破损）")
-        failed = bool(failure_nodes and n["node_id"] in failure_nodes)
-        dur = (oc.get("completion_tokens") or 500) * DURATION_PER_TOKEN_MS
-        node_results[n["node_id"]] = {
-            "model": model, "score": oc["score"], "cost": oc["cost"],
-            "duration_ms": dur, "succeeded": (oc["score"] >= 1.0) and not failed,
-            "injected_failure": failed,
-        }
-        wf_nodes.append({"id": n["node_id"], "duration_ms": dur})
+        return {"model": model, "score": oc["score"], "cost": oc["cost"],
+                "duration_ms": (oc.get("completion_tokens") or 500) * DURATION_PER_TOKEN_MS,
+                "succeeded": (oc["score"] >= 1.0) and not bool(kind),
+                "injected_failure": bool(kind), "recovered": False}
+
+    # 依赖序解析（传播：上游 failed/skipped → 下游 skipped）
+    status: dict[str, str] = {}
+    order_stack = []
+    def visit(nid: str):
+        if nid in status:
+            return
+        for d in deps[nid]:
+            visit(d)
+        order_stack.append(nid)
+        status[nid] = "pending"
+    for n in nodes:
+        visit(n["node_id"])
+
+    for n in nodes:
+        nid = n["node_id"]
+        upstream_failed = any(status[d] in ("failed", "skipped") for d in deps[nid])
+        if upstream_failed:
+            status[nid] = "skipped"
+            node_results[nid] = {"model": assignments[nid], "score": 0.0, "cost": 0.0,
+                                 "duration_ms": 0.0, "succeeded": False,
+                                 "injected_failure": False, "recovered": False, "skipped": True}
+            wf_nodes.append({"id": nid, "duration_ms": 0.0})
+            continue
+        r = resolve(n)
+        r["skipped"] = False
+        status[nid] = "succeeded" if r["succeeded"] else ("recovered" if r.get("recovered") else "failed")
+        node_results[nid] = r
+        wf_nodes.append({"id": nid, "duration_ms": r["duration_ms"]})
 
     wf = {
         "workflow_id": case["system_case_id"],
@@ -98,12 +148,24 @@ def replay_case(case: dict, assignments: dict[str, str], outcomes: dict,
     strong_id = "intern_s1_mini"
     strong_share = sum(1 for r in node_results.values() if r["model"] == strong_id) / len(nodes)
 
+    # primary error（19 号 §十九 priority：execution → recovery → goal；本 replay 无 planning/routing 注入）
+    primary_error = None
+    if not completion:
+        if any(r.get("injected_failure") and not r.get("recovered") for r in node_results.values()):
+            primary_error = "execution"
+        elif any(r.get("skipped") for r in node_results.values()):
+            primary_error = "recovery"
+        else:
+            primary_error = "goal"
+
     return {
         "system_case_id": case["system_case_id"],
+        "case_class": case["case_class"],
         "split": case["split"],
         "n_nodes": len(nodes),
         "structure_template": case["structure_template"],
         "schedule_policy": schedule_policy,
+        "recovery": recovery,
         "workflow_completion": completion,
         "workflow_cost": round(total_cost, 6),
         "strong_share": round(strong_share, 4),
@@ -112,6 +174,7 @@ def replay_case(case: dict, assignments: dict[str, str], outcomes: dict,
         "critical_path_ms": round(sched["critical_path_ms"], 1),
         "sequentialization_waste_ms": round(sched["sequentialization_waste_ms"], 1),
         "node_results": node_results,
+        "primary_error": primary_error,
     }
 
 

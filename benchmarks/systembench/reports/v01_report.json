@@ -1,0 +1,125 @@
+{
+  "generated_at": "2026-10-07T07:10:25+00:00",
+  "systembench_id": "lloom-systembench-v0.1",
+  "manifest_hash": "24705b50118fbd641edf46672f9aaef201096b8933efd4a209ea56148f89076e",
+  "n_cases": 80,
+  "n_test": 65,
+  "summary": {
+    "B2_workflow_strong_seq": {
+      "n": 65,
+      "completion_rate": 0.1385,
+      "quality_node_mean": 0.3134,
+      "cost_per_workflow_mean": 0.002896,
+      "strong_share_mean": 1.0,
+      "makespan_ms_mean": 2184.6
+    },
+    "B3_workflow_strong_par": {
+      "n": 65,
+      "completion_rate": 0.1385,
+      "quality_node_mean": 0.3134,
+      "cost_per_workflow_mean": 0.002896,
+      "strong_share_mean": 1.0,
+      "makespan_ms_mean": 500.0
+    },
+    "B4_workflow_p2_par": {
+      "n": 65,
+      "completion_rate": 0.1385,
+      "quality_node_mean": 0.3134,
+      "cost_per_workflow_mean": 0.002463,
+      "strong_share_mean": 0.9169,
+      "makespan_ms_mean": 500.0
+    },
+    "O1_node_oracle_par": {
+      "n": 65,
+      "completion_rate": 0.2615,
+      "quality_node_mean": 0.4965,
+      "cost_per_workflow_mean": 0.00027,
+      "strong_share_mean": 0.1285,
+      "makespan_ms_mean": 500.0
+    },
+    "O0_node_min_cost": {
+      "n": 65,
+      "completion_rate": 0.0923,
+      "quality_node_mean": 0.2641,
+      "cost_per_workflow_mean": 8e-05,
+      "strong_share_mean": 0.0099,
+      "makespan_ms_mean": 500.0
+    }
+  },
+  "coordination_tax": {
+    "mean": 18.347,
+    "median": 5.1057,
+    "note": "B4 workflow cost / Σ per-node independently-min-cost − 1（19 号 §十五）；>0 = 编排比逐节点独立最优贵多少"
+  },
+  "routing_gain_b4_vs_b3": {
+    "d_cost_pct": -14.95,
+    "d_quality_pp": 0.0,
+    "d_strong_share_pp": -8.31
+  },
+  "depth_layers_b4": {
+    "1-2": {
+      "n": 12,
+      "completion_rate": 0.5,
+      "cost_mean": 0.001046,
+      "routing_gain_vs_flat_pct": -87.07
+    },
+    "3-5": {
+      "n": 35,
+      "completion_rate": 0.0857,
+      "cost_mean": 0.002831,
+      "routing_gain_vs_flat_pct": -65.04
+    },
+    "6-8": {
+      "n": 18,
+      "completion_rate": 0.0,
+      "cost_mean": 0.002693,
+      "routing_gain_vs_flat_pct": -66.74
+    }
+  },
+  "bootstrap_ci": {
+    "unit": "system_case（workflow-group，19 号 §三十五）",
+    "B": 10000,
+    "seed": 3407,
+    "routing_d_cost": {
+      "point": -0.1496,
+      "ci95_low": -0.2659,
+      "ci95_high": -0.0516
+    },
+    "completion_delta_b4_vs_b3": {
+      "point": 0.0,
+      "ci95_low": -0.0462,
+      "ci95_high": 0.0462
+    },
+    "completion_delta_o1_vs_b4": {
+      "point": 0.1231,
+      "ci95_low": 0.0462,
+      "ci95_high": 0.2
+    }
+  },
+  "failure_recovery": {
+    "recovery_off": {
+      "n": 10,
+      "completion_rate": 0.0,
+      "primary_errors": {
+        "recovery": 5,
+        "execution": 5
+      }
+    },
+    "recovery_on": {
+      "n": 10,
+      "completion_rate": 0.0,
+      "primary_errors": {
+        "recovery": 5,
+        "goal": 1,
+        "execution": 4
+      }
+    },
+    "recovered_workflows": 1
+  },
+  "honesty_notes": [
+    "L1 Outcome Replay ≠ live agent result（Gate S-8）：node outcome 为 frozen 查表，makespan 为仿真口径",
+    "planning 维 N/A（v0.1 无真实 LLM decomposition）——B5/B6/B7 留 Shadow",
+    "Oracle = upper bound under fixed workflow and replay assumptions（§四十三），非 globally optimal agent",
+    "policy_id = routerbench_v02_p2（bench variant），不写 production LLooM policy（§四十二）"
+  ]
+}

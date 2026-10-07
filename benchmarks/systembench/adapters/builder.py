@@ -42,7 +42,7 @@ ACCURACY_DATASETS_PREFIX = (
     "winogrande", "arcc",
 )  # scorer_groups.accuracy（source_manifest）
 
-# 形态模板：edges 以 0-based node 序号；name 供 manifest 审计
+# 形态模板：edges 以 0-based node 序号；name 供 manifest 审计（19 号 §十一 80-case 四类）
 SMOKE_TEMPLATES = [
     ("chain2", 2, [(0, 1)]),
     ("fanout3", 4, [(0, 1), (0, 2), (0, 3)]),
@@ -50,6 +50,49 @@ SMOKE_TEMPLATES = [
     ("chain3", 3, [(0, 1), (1, 2)]),
     ("mixed5", 5, [(0, 1), (0, 2), (1, 3), (2, 3), (3, 4)]),
 ]
+FULL_TEMPLATES = {
+    "simple": [  # 20 × 1-2 node
+        ("single1", 1, []), ("chain2", 2, [(0, 1)]),
+    ],
+    "medium": [  # 30 × 3-5 node
+        ("chain3", 3, [(0, 1), (1, 2)]),
+        ("fanout3", 4, [(0, 1), (0, 2), (0, 3)]),
+        ("diamond", 4, [(0, 1), (0, 2), (1, 3), (2, 3)]),
+        ("mixed5", 5, [(0, 1), (0, 2), (1, 3), (2, 3), (3, 4)]),
+    ],
+    "complex": [  # 20 × 5-8 node multi-wave
+        ("mixed6", 6, [(0, 1), (0, 2), (1, 3), (2, 4), (3, 5), (4, 5)]),
+        ("fanout7", 7, [(0, 1), (0, 2), (0, 3), (0, 4), (3, 5), (4, 6), (5, 6)]),
+        ("deep8", 8, [(0, 1), (0, 2), (1, 3), (2, 4), (3, 5), (4, 6), (5, 7), (6, 7)]),
+    ],
+}
+FAILURE_KINDS = ["F1_timeout", "F2_model_unavailable", "F3_malformed_output",
+                 "F4_dependency_missing", "F5_branch_failure", "F6_partial_aggregate",
+                 "F7_budget_exhausted"]
+
+
+def case_plan(full: bool) -> list[tuple[str, str, int, list]]:
+    """返回 (class_name, template_name, n_nodes, edges) 序列；failure 类只标 kind 不建新结构。"""
+    plan = []
+    if not full:
+        for i in range(20):
+            name, n, e = SMOKE_TEMPLATES[i % len(SMOKE_TEMPLATES)]
+            plan.append(("smoke", name, n, e))
+        return plan
+    # 80 = 20 simple + 30 medium + 20 complex + 10 failure（failure 复用 medium 形态 + 注入 kind）
+    for i in range(20):
+        name, n, e = FULL_TEMPLATES["simple"][i % len(FULL_TEMPLATES["simple"])]
+        plan.append(("simple", name, n, e))
+    for i in range(30):
+        name, n, e = FULL_TEMPLATES["medium"][i % len(FULL_TEMPLATES["medium"])]
+        plan.append(("medium", name, n, e))
+    for i in range(20):
+        name, n, e = FULL_TEMPLATES["complex"][i % len(FULL_TEMPLATES["complex"])]
+        plan.append(("complex", name, n, e))
+    for i in range(10):
+        name, n, e = FULL_TEMPLATES["medium"][i % len(FULL_TEMPLATES["medium"])]
+        plan.append(("failure", name, n, e))
+    return plan
 
 
 def slugify(name: str) -> str:
@@ -102,12 +145,12 @@ def load_llmrb(norm_dir: Path):
     return covered
 
 
-def build_cases(pool_samples: dict, n_smoke: int, seed: int) -> list[dict]:
+def build_cases(pool_samples: dict, n_smoke: int, seed: int, full: bool = False) -> list[dict]:
     """形态模板轮转 + sample 确定性选取（sha256 排序，无 random）。case 间不共用 sample。"""
     order = sorted(pool_samples, key=lambda s: hashlib.sha256(f"lloom-sbselect:{seed}:{s}".encode()).digest())
     it = iter(order)
     cases = []
-    per_dataset_cap = 12  # 防单 dataset 垄断（mmlupro/simpleqa 实例多；smoke 20 case 需 ~70 sample）
+    per_dataset_cap = 30  # 80-case 需 ~360 sample；16 accuracy dataset × 30 = 480 上限
     ds_count: dict[str, int] = defaultdict(int)
 
     def take():
@@ -116,10 +159,10 @@ def build_cases(pool_samples: dict, n_smoke: int, seed: int) -> list[dict]:
             if ds_count[ds] < per_dataset_cap:
                 ds_count[ds] += 1
                 return sid
-        raise SystemExit("✗ 可用 sample 耗尽（降低 --smoke 或放开 per_dataset_cap）")
+        raise SystemExit("✗ 可用 sample 耗尽（放开 per_dataset_cap 或减少 case 数）")
 
-    for i in range(n_smoke):
-        name, n_nodes, edges = SMOKE_TEMPLATES[i % len(SMOKE_TEMPLATES)]
+    f_idx = 0
+    for i, (klass, name, n_nodes, edges) in enumerate(case_plan(full)):
         nodes = []
         for k in range(n_nodes):
             sid = take()
@@ -136,9 +179,10 @@ def build_cases(pool_samples: dict, n_smoke: int, seed: int) -> list[dict]:
                 },
                 "dependency_semantics": "independent",  # prompt 自包含（19 号 §三十三）
             })
-        case_id = f"sb_v01_{name}_{i:03d}"
-        cases.append({
+        case_id = f"sb_v01_{klass}_{name}_{i:03d}"
+        case = {
             "system_case_id": case_id,
+            "case_class": klass,
             "root_goal": f"[synthetic composition] {name} over {n_nodes} exact-bound llmrb nodes",
             "structure_template": name,
             "nodes": nodes,
@@ -151,7 +195,14 @@ def build_cases(pool_samples: dict, n_smoke: int, seed: int) -> list[dict]:
                 "aggregation": "all_required_nodes",
             },
             "split": split_of(case_id, seed, 0.2),
-        })
+        }
+        if klass == "failure":
+            case["injected_failure"] = {
+                "kind": FAILURE_KINDS[f_idx % len(FAILURE_KINDS)],
+                "node_id": f"n{(f_idx % n_nodes) + 1}",  # 确定性注入位（无 random）
+            }
+            f_idx += 1
+        cases.append(case)
     return cases
 
 
@@ -166,8 +217,7 @@ def main() -> int:
     pool_samples = load_llmrb(Path(args.norm_dir))
     if len(pool_samples) < 200:
         raise SystemExit(f"✗ R7 池覆盖的 accuracy 类 sample 仅 {len(pool_samples)}，不足以构建 composition set")
-    n = 80 if args.full else args.smoke
-    cases = build_cases(pool_samples, n, args.seed)
+    cases = build_cases(pool_samples, args.smoke, args.seed, full=args.full)
 
     out_cases = Path("benchmarks/systembench/cases/system_cases.jsonl")
     out_bind = Path("benchmarks/systembench/cases/bindings.jsonl")
@@ -189,18 +239,17 @@ def main() -> int:
 
     # 汇总
     by_split = defaultdict(int)
-    by_template = defaultdict(int)
+    by_class = defaultdict(int)
     for c in cases:
         by_split[c["split"]] += 1
-        by_template[c["structure_template"]] += 1
+        by_class[c["case_class"]] += 1
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "n_cases": len(cases),
         "n_nodes": sum(len(c["nodes"]) for c in cases),
         "by_split": dict(by_split),
-        "by_template": dict(by_template),
-        "binding_modes": ["llmrouterbench_exact"],
-        "exact_binding_rate": 1.0,
+        "by_class": dict(by_class),
+        "failure_cases": sum(1 for c in cases if "injected_failure" in c),
         "pool": POOL,
         "split_rule": f"workflow-group 哈希桶 sha256('lloom-sbsplit:{args.seed}:{{case_id}}')，20/80（19 号 §二十）",
         "notes": [
@@ -214,8 +263,7 @@ def main() -> int:
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"✓ {out_cases}  ({len(cases)} cases / {sum(len(c['nodes']) for c in cases)} nodes)")
     print(f"✓ {out_bind}")
-    print(f"  split={dict(by_split)} templates={dict(by_template)}")
-    print(f"  exact_binding_rate=1.0（Gate S-2 前置满足）")
+    print(f"  split={dict(by_split)} class={dict(by_class)}")
     return 0
 
 

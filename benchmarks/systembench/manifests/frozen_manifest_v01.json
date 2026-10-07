@@ -1,0 +1,27 @@
+{
+  "systembench_id": "lloom-systembench-v0.1",
+  "track_scope": "frozen_composition_L1",
+  "frozen_at": "2026-10-07T07:10:25+00:00",
+  "manifest_hash": "24705b50118fbd641edf46672f9aaef201096b8933efd4a209ea56148f89076e",
+  "hashes": {
+    "routerbench_ref": "cbebcefd05b14057deb789449cc0512944733dc1696d43b9d30b2a142dc9db5a",
+    "workflow_schema_hash": "d3a17ff62fb3914a1bbebb5f513a7a757eb72bbdf2cd9efe9069a0af892bbde0",
+    "model_pool_hash": "f0b0c9bfc5ba572305ae5919bd7d072e3662d0e7e9535507a7ab24732f9fe7c8",
+    "routing_policy_hash": "daf3d464dddef29c170a155a4a5a830a65b90c52cee0a572a2c9b65b875ea809",
+    "scheduler_policy_hash": "dc130c6603aaf73605483f02fe16319e49441e05ad671f5067690ba797bd7ba5",
+    "failure_policy_hash": "60bab6b269b9e883f0859df9357af61829ea20b9fe9fdc57c3328f73e110a9c0",
+    "evaluator_hash": "6783b26b490dec3c3d7b4afae325f2714eb5344e3989609f0e4b3f87c5dde5a7",
+    "split_hash": "350971baee9840170a3f4112cb9dffcec3c0b940e1b73d6c8947622af000966f",
+    "cost_basis_hash": "6c217b5c0c6ef12edf055a236ee31a0d3357b4873f7cef58d2546637f119ba3d",
+    "cases_hash": "122221fc10a163455735ca2c8e3e13a802baa22c7a2b613a320ba2018b5d0fea"
+  },
+  "references": {
+    "routerbench_manifest_ref": "benchmarks/routerbench/manifests/frozen_manifest_v02.json",
+    "workflow_track_root": "benchmarks/orchestration"
+  },
+  "test_freeze": {
+    "n_test_cases": 65,
+    "n_failure_cases": 10,
+    "total_nodes": 327
+  }
+}
