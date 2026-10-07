@@ -31,3 +31,24 @@
 
 **Failure/Recovery**（10 cases）：recovery_off completion 0.0% → recovery_on 0.0%（1 workflow 恢复）；primary_error {'recovery': 5, 'execution': 5}
 
+
+---
+
+## 附录 · Phase S10 L1 Hardening（21 号 §八）
+
+| policy | completion | Q_node | cost/wf | strong | median ms | p90 ms |
+|---|---:|---:|---:|---:|---:|---:|
+| B2_workflow_strong_seq | 13.9% | 0.3134 | $0.002896 | 100.0% | 2000 | 3500 |
+| B3_workflow_strong_par | 13.9% | 0.3134 | $0.002896 | 100.0% | 500 | 500 |
+| B4_workflow_p2_par | 13.9% | 0.3134 | $0.002463 | 91.7% | 500 | 500 |
+| R1_cost_matched_random | 12.3% | 0.2993 | $0.001174 | 61.0% | 500 | 500 |
+| R2_strong_share_matched | 13.9% | 0.3063 | $0.002772 | 92.4% | 500 | 500 |
+| O1_node_oracle_par | 26.2% | 0.4965 | $0.000270 | 12.8% | 500 | 500 |
+
+- **Scheduling headline**：B2 seq median 2000ms → B3/B4 par 500ms（p90 3500→500ms）；critical path/width/waste/utilization 见 json
+- **O2 Schedule Oracle**：median 500ms —— scheduler regret=0（reference waves 已达 critical path 下界）
+- **O3 Joint Oracle**：median 500ms（≤6 节点精确枚举）——L1 下 makespan 维无 joint 增益
+- **Matched Random**：R1 cost-matched completion 12.3%（vs B4 13.9%，+1.6pp；target 截断注）｜R2 strong-share-matched 13.9% 持平、Q +0.71pp——content-aware 信号成立
+- **Recovery ablation**：R0/R1 completion 0%→0%（n=10，CI 全 0）；extra_cost $0.00000844/wf
+- **Coverage/Cost validity**：327 = test 284 + calibration 43（无未解释缺口）；R7 池 accuracy 类 cost 全 >0
+

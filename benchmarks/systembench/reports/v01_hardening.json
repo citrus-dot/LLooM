@@ -1,0 +1,194 @@
+{
+  "generated_at": "2026-10-07T07:43:18+00:00",
+  "phase": "S10 L1 Hardening（零成本；replay 语义未动，evaluator_hash/v0.1 identity 不变）",
+  "coverage_audit": {
+    "system_cases": 80,
+    "total_nodes": 327,
+    "test_case_nodes": 284,
+    "calibration_case_nodes": 43,
+    "shadow_parity_nodes": 284,
+    "parity_explanation": "composition B4 只消费 test split（65 case = 284 节点）；其余为 calibration 节点（composition 不消费，Gate S-3 语义）+ failure 类节点（同属 test/calibration 计入上两项）——无未解释缺口",
+    "cost_validity": {
+      "rule": "cost > 0 计入成本指标；cost = 0 视为 unknown（源数据缺定价），不默认 free",
+      "zero_cost_nodes_in_pool_outcomes": 0,
+      "verdict": "accuracy 类 case 的 R7 池 cost 全 > 0（arenahard judge 类已由 builder 排除）"
+    }
+  },
+  "summary_with_sched": {
+    "B2_workflow_strong_seq": {
+      "n": 65,
+      "completion_rate": 0.1385,
+      "quality_node_mean": 0.3134,
+      "cost_per_workflow_mean": 0.002896,
+      "strong_share_mean": 1.0,
+      "makespan_median_ms": 2000,
+      "makespan_p90_ms": 3500,
+      "makespan_mean_ms": 2184.6,
+      "critical_path_ms_mean": 500.0,
+      "parallel_width_max_mean": 1.0,
+      "waste_ms_mean": 1684.6,
+      "utilization_mean": 0.0
+    },
+    "B3_workflow_strong_par": {
+      "n": 65,
+      "completion_rate": 0.1385,
+      "quality_node_mean": 0.3134,
+      "cost_per_workflow_mean": 0.002896,
+      "strong_share_mean": 1.0,
+      "makespan_median_ms": 500,
+      "makespan_p90_ms": 500,
+      "makespan_mean_ms": 500.0,
+      "critical_path_ms_mean": 500.0,
+      "parallel_width_max_mean": 4.37,
+      "waste_ms_mean": 0.0,
+      "utilization_mean": 0.8923
+    },
+    "B4_workflow_p2_par": {
+      "n": 65,
+      "completion_rate": 0.1385,
+      "quality_node_mean": 0.3134,
+      "cost_per_workflow_mean": 0.002463,
+      "strong_share_mean": 0.9169,
+      "makespan_median_ms": 500,
+      "makespan_p90_ms": 500,
+      "makespan_mean_ms": 500.0,
+      "critical_path_ms_mean": 500.0,
+      "parallel_width_max_mean": 4.37,
+      "waste_ms_mean": 0.0,
+      "utilization_mean": 0.8923
+    },
+    "R1_cost_matched_random": {
+      "n": 65,
+      "completion_rate": 0.1231,
+      "quality_node_mean": 0.2993,
+      "cost_per_workflow_mean": 0.001174,
+      "strong_share_mean": 0.6103,
+      "makespan_median_ms": 500,
+      "makespan_p90_ms": 500,
+      "makespan_mean_ms": 500.0,
+      "critical_path_ms_mean": 500.0,
+      "parallel_width_max_mean": 4.37,
+      "waste_ms_mean": 0.0,
+      "utilization_mean": 0.8923
+    },
+    "R2_strong_share_matched": {
+      "n": 65,
+      "completion_rate": 0.1385,
+      "quality_node_mean": 0.3063,
+      "cost_per_workflow_mean": 0.002772,
+      "strong_share_mean": 0.9239,
+      "makespan_median_ms": 500,
+      "makespan_p90_ms": 500,
+      "makespan_mean_ms": 500.0,
+      "critical_path_ms_mean": 500.0,
+      "parallel_width_max_mean": 4.37,
+      "waste_ms_mean": 0.0,
+      "utilization_mean": 0.8923
+    },
+    "O1_node_oracle_par": {
+      "n": 65,
+      "completion_rate": 0.2615,
+      "quality_node_mean": 0.4965,
+      "cost_per_workflow_mean": 0.00027,
+      "strong_share_mean": 0.1285,
+      "makespan_median_ms": 500,
+      "makespan_p90_ms": 500,
+      "makespan_mean_ms": 500.0,
+      "critical_path_ms_mean": 500.0,
+      "parallel_width_max_mean": 4.37,
+      "waste_ms_mean": 0.0,
+      "utilization_mean": 0.8923
+    },
+    "O2_schedule_oracle": {
+      "n": 65,
+      "makespan_median_ms": 500,
+      "makespan_mean_ms": 500.0,
+      "note": "ideal legal makespan = critical path（schedule.py 口径）；scheduler regret = actual − ideal"
+    }
+  },
+  "o2_schedule_oracle": {
+    "n": 65,
+    "makespan_median_ms": 500,
+    "makespan_mean_ms": 500.0,
+    "note": "ideal legal makespan = critical path（schedule.py 口径）；scheduler regret = actual − ideal"
+  },
+  "o3_joint_oracle": {
+    "mode": "exact_enum<=6 / greedy>6",
+    "makespan_median_ms": 500,
+    "cases": 65,
+    "makespan_mean_ms": 500.0
+  },
+  "matched_random": {
+    "R1": {
+      "n": 65,
+      "completion_rate": 0.1231,
+      "quality_node_mean": 0.2993,
+      "cost_per_workflow_mean": 0.001174,
+      "strong_share_mean": 0.6103,
+      "makespan_median_ms": 500,
+      "makespan_p90_ms": 500,
+      "makespan_mean_ms": 500.0,
+      "critical_path_ms_mean": 500.0,
+      "parallel_width_max_mean": 4.37,
+      "waste_ms_mean": 0.0,
+      "utilization_mean": 0.8923
+    },
+    "R2": {
+      "n": 65,
+      "completion_rate": 0.1385,
+      "quality_node_mean": 0.3063,
+      "cost_per_workflow_mean": 0.002772,
+      "strong_share_mean": 0.9239,
+      "makespan_median_ms": 500,
+      "makespan_p90_ms": 500,
+      "makespan_mean_ms": 500.0,
+      "critical_path_ms_mean": 500.0,
+      "parallel_width_max_mean": 4.37,
+      "waste_ms_mean": 0.0,
+      "utilization_mean": 0.8923
+    },
+    "note": "R1/R2 target 取自 B4 实测（per-case 期望成本 / strong 占比）——Gate S-5 因果对照"
+  },
+  "recovery_ablation": {
+    "R0_recovery_off": {
+      "n": 10,
+      "completion_rate": 0.0,
+      "recovery_rate": 0.0,
+      "recovered_workflows": 0,
+      "partial_success_rate": 0.4,
+      "abort_rate": 0.6,
+      "extra_cost_mean": 8.44e-06,
+      "extra_latency_ms_mean": 0.0
+    },
+    "R1_recovery_on": {
+      "n": 10,
+      "completion_rate": 0.0,
+      "recovery_rate": 0.0256,
+      "recovered_workflows": 1,
+      "partial_success_rate": 0.4,
+      "abort_rate": 0.6,
+      "extra_cost_mean": 8.44e-06,
+      "extra_latency_ms_mean": 0.0
+    },
+    "completion_delta_ci": {
+      "point": 0.0,
+      "ci95_low": 0.0,
+      "ci95_high": 0.0,
+      "note": "n=10 failure cases，CI 宽属预期；样本扩容后收敛"
+    }
+  },
+  "interaction_matrix": {
+    "routing_gain": {
+      "d_cost_pct": -14.95,
+      "d_quality_pp": 0.0,
+      "d_strong_share_pp": -8.31
+    },
+    "orchestration_gain": "deferred (B5 需真实 LLooM decomposition → Shadow/S11)",
+    "interaction_gain": "deferred (Full Gain − Routing Gain − Orchestration Gain；B5/B6 就绪后计算)"
+  },
+  "honesty_notes": [
+    "matched random 为 baseline 生成器，非 router 逻辑（不触决策真源红线）",
+    "O3 为 L1 口径联合上界（assignment×schedule），不含 workflow topology search（21 号 §十）",
+    "recovery ablation 的 extra_cost 含 fallback 节点的 frozen 成本差，extra_latency 为仿真口径"
+  ]
+}

@@ -53,5 +53,15 @@
     },
     "medium_all_weak": true,
     "note": "P2 soft gate 生效语义验证：medium 26 节点 100% 分派 weak（deephermes），hard 301 节点 100% strong——production seam 在真实 workflow 节点上的决策形态与 benchmark 语义一致"
-  }
+  },
+  "gate_A_l1_hardening": {
+    "scheduling_headline": "✅ median/p90 makespan + critical path + width + waste + utilization 进主表（B2 seq median 2000ms → B3/B4 par 500ms）",
+    "system_matched_random": "✅ R1 cost-matched（completion 12.3% vs B4 13.9%，+1.6pp；target 截断致成本未全对齐，弱对照已标注）/ R2 strong-share-matched（92.4%≈91.7%，Q +0.71pp）",
+    "recovery_ablation": "✅ R0/R1 对照落盘（completion 0%→0%、extra_cost $8.4e-6/wf、CI 全 0——n=10 证据力弱，如实记录）",
+    "cost_validity": "✅ accuracy 类 R7 池 cost 全 >0；cost=0=unknown 规则成文",
+    "coverage_explanation": "✅ 327 = test 284（composition 消费）+ calibration 43（不消费，Gate S-3 语义）——无未解释缺口",
+    "o2_o3_oracle": "✅ O2=critical path 下界（scheduler regret=0，reference waves 已最优）；O3 joint（≤6 精确枚举/＞6 贪心）median 500ms——L1 下 makespan 维无 joint 增益"
+  },
+  "s5_status_revision": "S-5 在 L1 frozen 语义范围内关闭（21 号 §三十八：closed as far as frozen semantics permit）；B5/B6/B7 planning 维仍属 Shadow/S11",
+  "s6_status_revision": "S-6 L1 范围传播归因完整（primary_error + skipped 链 + F1-F7 注入）；完整传播图仍属 Shadow"
 }
