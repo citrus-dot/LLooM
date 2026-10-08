@@ -1,0 +1,121 @@
+{
+  "phase": "S12.5.5 Pool Re-audit",
+  "generated_at": "2026-10-08T14:44:02.089984+00:00",
+  "context": "S12.5.4 verdict=REVIEW（agreement 0.667）→ 双 profile 口径重审 pool 可路由性",
+  "P1536_probe24": {
+    "n_nodes": 24,
+    "quality_headroom_mean": 0.1792,
+    "nonzero_headroom_rate": 0.5417,
+    "mean_score": {
+      "weak": 0.8833,
+      "mid": 0.875,
+      "strong": 0.8458
+    },
+    "mean_cost": {
+      "weak": 0.0022,
+      "mid": 0.0034,
+      "strong": 0.0169
+    },
+    "cost_ratio_strong_over_weak": 7.68,
+    "cheap_safe_rate": 0.7917,
+    "weak_opportunity": {
+      "eligible_rate": 0.4583,
+      "oracle_share": 0.7273,
+      "p2_selected_share": 1.0
+    },
+    "mid_opportunity": {
+      "eligible_rate": 0.4583,
+      "oracle_share": 0.1818,
+      "p2_selected_share": 0.0
+    },
+    "winner_distribution": {
+      "weak": 18,
+      "strong": 3,
+      "mid": 3
+    },
+    "winner_entropy_bits": 1.0613,
+    "per_case_dominant": {
+      "sb_v02_sem_006": "weak",
+      "sb_v02_sem_023": "weak",
+      "sb_v02_sem_030": "mixed"
+    }
+  },
+  "P1536_same6": {
+    "n_nodes": 6,
+    "quality_headroom_mean": 0.1333,
+    "nonzero_headroom_rate": 0.3333,
+    "mean_score": {
+      "weak": 0.9333,
+      "mid": 0.8833,
+      "strong": 0.85
+    },
+    "mean_cost": {
+      "weak": 0.0023,
+      "mid": 0.0036,
+      "strong": 0.017
+    },
+    "cost_ratio_strong_over_weak": 7.39,
+    "cheap_safe_rate": 1.0,
+    "weak_opportunity": {
+      "eligible_rate": 0.6667,
+      "oracle_share": 1.0,
+      "p2_selected_share": 1.0
+    },
+    "mid_opportunity": {
+      "eligible_rate": 0.6667,
+      "oracle_share": 0.0,
+      "p2_selected_share": 0.0
+    },
+    "winner_distribution": {
+      "weak": 6
+    },
+    "winner_entropy_bits": 0.0,
+    "per_case_dominant": {
+      "sb_v02_sem_006": "weak",
+      "sb_v02_sem_023": "weak",
+      "sb_v02_sem_030": "weak"
+    }
+  },
+  "P4096_same6": {
+    "n_nodes": 6,
+    "quality_headroom_mean": 0.15,
+    "nonzero_headroom_rate": 0.3333,
+    "mean_score": {
+      "weak": 0.8333,
+      "mid": 0.9667,
+      "strong": 0.95
+    },
+    "mean_cost": {
+      "weak": 0.0041,
+      "mid": 0.0073,
+      "strong": 0.0337
+    },
+    "cost_ratio_strong_over_weak": 8.22,
+    "cheap_safe_rate": 0.6667,
+    "weak_opportunity": {
+      "eligible_rate": 0.6667,
+      "oracle_share": 0.5,
+      "p2_selected_share": 1.0
+    },
+    "mid_opportunity": {
+      "eligible_rate": 0.6667,
+      "oracle_share": 0.25,
+      "p2_selected_share": 0.0
+    },
+    "winner_distribution": {
+      "weak": 4,
+      "strong": 1,
+      "mid": 1
+    },
+    "winner_entropy_bits": 1.2516,
+    "per_case_dominant": {
+      "sb_v02_sem_006": "weak",
+      "sb_v02_sem_023": "strong",
+      "sb_v02_sem_030": "mixed"
+    }
+  },
+  "reading": {
+    "pool_still_complementary_P4096": true,
+    "note": "P4096 仅 6 节点，方向性参考；S12.6-A 双 profile 全量后再正式判定"
+  }
+}
