@@ -1,0 +1,68 @@
+{
+  "phase": "S12.5.4 Protocol Stability Probe",
+  "generated_at": "2026-10-08T14:23:01.014146+00:00",
+  "design": "6 nodes × 3 models × 2 profiles（只变 max_output：1536→4096）",
+  "frozen_thresholds": {
+    "go": 0.7,
+    "review": 0.4,
+    "note": "29 号 §十，结果前冻结"
+  },
+  "nodes": [
+    "sb_v02_sem_006/nsubtask_2",
+    "sb_v02_sem_023/n1_s1",
+    "sb_v02_sem_030/nC3",
+    "sb_v02_sem_030/nC2",
+    "sb_v02_sem_006/nsubtask_4_s3",
+    "sb_v02_sem_006/nsubtask_4_s1"
+  ],
+  "winner_agreement": 0.6667,
+  "n_scored": 6,
+  "pairwise_inversions": [
+    {
+      "case": "sb_v02_sem_023",
+      "node": "n1_s1",
+      "p1536": "weak",
+      "p4096": "strong"
+    },
+    {
+      "case": "sb_v02_sem_030",
+      "node": "nC2",
+      "p1536": "weak",
+      "p4096": "mid"
+    }
+  ],
+  "tier_means": {
+    "P1536": {
+      "weak": 0.9333,
+      "mid": 0.8833,
+      "strong": 0.85
+    },
+    "P4096": {
+      "weak": 0.8333,
+      "mid": 0.9667,
+      "strong": 0.95
+    }
+  },
+  "tier_order": {
+    "P1536": [
+      "weak",
+      "mid",
+      "strong"
+    ],
+    "P4096": [
+      "mid",
+      "strong",
+      "weak"
+    ]
+  },
+  "tier_order_stable": false,
+  "truncation_rate": {
+    "P1536": 0.9444,
+    "P4096": 0.5556
+  },
+  "headroom_mean": {
+    "P1536": 0.1333,
+    "P4096": 0.15
+  },
+  "verdict": "REVIEW"
+}
