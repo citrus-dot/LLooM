@@ -1,0 +1,21 @@
+{
+  "phase": "S12.5.2 Semantic Probe",
+  "generated_at": "2026-10-07T17:06:07.734884+00:00",
+  "probe_cases": [
+    "sb_v02_sem_023",
+    "sb_v02_sem_030",
+    "sb_v02_sem_006"
+  ],
+  "n_cells": 72,
+  "n_judged_this_run": 72,
+  "n_judged_total": 72,
+  "rubric_id": "sb_v02_judge_rubric_v2",
+  "rubric_sha256": "8b8fc8a2098c28c88d9e0b4242abe7c5f97030eb447b7decce677b0cf47389c7",
+  "judge_model": "qwen-turbo",
+  "cost_this_run_usd": 0.5426,
+  "cost_collect_this_run_usd": 0.5425,
+  "cost_judge_this_run_usd": 0.0001,
+  "validity_fail": 0,
+  "truncated": 65,
+  "resume_note": "断点续采：cost_*_this_run 仅本 run 新增 cells；judge=qwen-turbo"
+}

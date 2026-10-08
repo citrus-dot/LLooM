@@ -18,21 +18,19 @@
 # 执行协议（3 层池统一，production 子任务分支同款参数 + 一项显式偏差）：
 #   system_prompt  "你是一个专业的AI助手。请认真完成以下任务。"（ai_client.rs 子任务分支原文）
 #   temperature    0.3（生产同款）
-#   max_tokens     节点 estimated_output_tokens（生产同款）
-#   enable_thinking false ★显式偏差（DashScope compatible 扩展参数；生产 ai_client 不传）
-#     偏差依据（S12.5.0 Provider Probe 实测，reports/s12_5_provider_probe.json）：
-#       (a) qwen3.6 三层默认开 thinking，reasoning tokens 不受 max_tokens 约束，
-#           content 恒被截断（三模型 finish_reason=length，输出即"截断协议"）；
-#       (b) latency 44-144s（关后 3-5s），不可用于编排子任务；
-#       (c) completion tokens 7.4k-9.4k vs 216-233（≈15-19 倍），采集成本超出授权量级。
-#     thinking-on 口径保留为 sensitivity 记录，不采正式矩阵；如需该口径重评，
-#     S12.5.2 全部 cells 按协议重采（~$3 量级）。
+#   max_tokens     max(node.estimated_output_tokens, 1536) ★显式偏差（生产=estimated）
+#     偏差依据（S12.5.2 stage0 首跑实测）：planner 估的 estimated_output_tokens
+#     系统性低于真实输出需求 → 35/35 finish=length、content 全截断，质量信号被
+#     截断伪影污染；1536 为协议常量（≈2500 汉字）。
 #   ★ production finding（本仓生产侧候选回修，另行决策）：生产 OpenAI-compatible
-#     适配器对 qwen3.6 系列不传 enable_thinking → 用户配置该系列做编排子任务时
-#     会得到截断输出（finish=length）+ 分钟级 latency。
+#     适配器对 qwen3.6 系列不传 enable_thinking（DashScope 默认开）→ 用户配置该
+#     系列做编排子任务时会得到截断输出（finish=length）+ 分钟级 latency；且生产
+#     max_tokens=estimated 机制本身在所有模型上存在同款截断风险（stage0 实测
+#     thinking 关闭后仍 35/35 length）。
 #
 # Judge 协议：qwen-plus（不在采集池内，避免自评偏差）、temp=0、严格 JSON
-#   {"score": <0-1>, "reason": str}；frozen rubric 见 evaluator（S12.5.2 起生效）。
+#   {"score": <0-1>, "reason": str}；frozen rubric 见 evaluator/judge_rubric_v1.md
+#   （sb_v02_judge_rubric_v1）。
 #
 # 分层衔接：independent 节点 cells → L1 Matrix；artifact_dependent 节点 cells
 #   → L2 Conditional Matrix（cell 带 upstream_artifact_hashes/artifact_schema_hash/
@@ -65,7 +63,7 @@ execution_input:
   execution_protocol:
     system_prompt: "你是一个专业的AI助手。请认真完成以下任务。"
     temperature: 0.3
-    max_tokens: node.estimated_output_tokens
+    max_tokens: "max(node.estimated_output_tokens, 1536)"   # ★ 显式偏差，依据见文件头
     enable_thinking: false               # ★ 显式偏差，依据见文件头（probe 实测）
   hash_rule: sha256(final_text)
 

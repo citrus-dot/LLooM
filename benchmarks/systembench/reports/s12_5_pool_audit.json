@@ -1,0 +1,65 @@
+{
+  "phase": "S12.5.3 System Pool Audit",
+  "generated_at": "2026-10-07T17:07:42.378885+00:00",
+  "scope": "calibration split only（probe 5 case / 35 节点 / 105 cells）",
+  "router_seam": "R1 desc + P2 policy（routerbench_v02_p2，soft-gate 0）",
+  "metrics": {
+    "n_nodes_scored": 24,
+    "n_nodes_total": 24,
+    "quality_headroom": {
+      "mean": 0.1792,
+      "nonzero_rate": 0.5417,
+      "max": 0.5
+    },
+    "cost_ratio_strong_over_weak": 7.68,
+    "cost_ratio_mid_over_weak": 1.55,
+    "mean_score_by_tier": {
+      "weak": 0.8833,
+      "mid": 0.875,
+      "strong": 0.8458
+    },
+    "cheap_safe": {
+      "eps": 0.1,
+      "hits": 19,
+      "eligible": 24,
+      "rate": 0.7917
+    },
+    "weak_opportunity": {
+      "eligible_rate": 0.4583,
+      "eligible_oracle_share": 0.7273,
+      "p2_selected_share": 1.0
+    },
+    "mid_opportunity": {
+      "eligible_rate": 0.4583,
+      "eligible_oracle_share": 0.1818,
+      "p2_selected_share": 0.0,
+      "note": "eligible_oracle_share 高而 p2_selected_share 低 = mid 可用但 router 不选"
+    },
+    "winner_entropy_bits": 1.0613,
+    "winner_distribution": {
+      "weak": 18,
+      "mid": 3,
+      "strong": 3
+    },
+    "cross_workflow_dominant_winner": {
+      "sb_v02_sem_006": "weak",
+      "sb_v02_sem_023": "weak",
+      "sb_v02_sem_030": "mixed"
+    },
+    "gain_concentration_top20pct": 0.4651,
+    "quality_gap_nonzero": true
+  },
+  "go_flags": {
+    "two_tier_complement": true,
+    "quality_gap_nonzero": true,
+    "cost_leverage_nonzero": true,
+    "winner_diversity_across_workflows": true,
+    "gain_not_outlier_driven": true
+  },
+  "stop_flags": {
+    "models_homogeneous": false,
+    "outlier_driven": false,
+    "eligibility_only_source": false
+  },
+  "verdict": "GO"
+}
