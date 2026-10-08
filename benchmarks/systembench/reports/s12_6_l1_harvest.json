@@ -1,0 +1,52 @@
+{
+  "phase": "S12.6-A L1 Full Harvest",
+  "generated_at": "2026-10-08T16:05:09.364512+00:00",
+  "n_cells": 198,
+  "n_new_this_run": 198,
+  "target": "33 L1 independent × 3 models × 2 profiles = 198",
+  "cost_this_run_usd": 1.7,
+  "cost_collect_usd": 1.6846,
+  "cost_judge_usd": 0.0154,
+  "agg": {
+    "P1536/calibration": {
+      "n_cells": 21,
+      "truncated_rate": 0.7143,
+      "judge_mean": 0.8,
+      "by_tier_mean": {
+        "weak": 0.9,
+        "mid": 0.3,
+        "strong": 0.95
+      }
+    },
+    "P1536/test": {
+      "n_cells": 78,
+      "truncated_rate": 0.6923,
+      "judge_mean": 0.6968,
+      "by_tier_mean": {
+        "weak": 0.6538,
+        "mid": 0.62,
+        "strong": 0.7692
+      }
+    },
+    "P4096/calibration": {
+      "n_cells": 21,
+      "truncated_rate": 0.619,
+      "judge_mean": 0.9,
+      "by_tier_mean": {
+        "weak": 0.95,
+        "mid": 1.0,
+        "strong": 0.8
+      }
+    },
+    "P4096/test": {
+      "n_cells": 78,
+      "truncated_rate": 0.5769,
+      "judge_mean": 0.7774,
+      "by_tier_mean": {
+        "weak": 0.7308,
+        "mid": 0.78,
+        "strong": 0.8231
+      }
+    }
+  }
+}
