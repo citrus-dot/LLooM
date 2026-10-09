@@ -1,0 +1,37 @@
+{
+  "phase": "S12.6-B L2 Conditional Probe",
+  "generated_at": "2026-10-09T03:19:21.764635+00:00",
+  "n_cells": 180,
+  "upstream_artifacts": "stage0 冻结（qwen3.6-plus 参考执行，routing_inputs_v02.jsonl final_hash）",
+  "artifact_effect_delta": {
+    "n": 49,
+    "mean_delta_l2_minus_l1": 0.0408,
+    "nonzero_rate": 0.8571,
+    "note": "L1 对照 = 同 case 的 independent 节点同模型同 profile 分数；方向性证据"
+  },
+  "cost_this_run_usd": 1.5793,
+  "agg": {
+    "P1536": {
+      "n_cells": 90,
+      "truncated_rate": 0.6111,
+      "judge_ok_rate": 0.2889,
+      "judge_mean": 0.2808,
+      "by_tier_mean": {
+        "weak": 0.2625,
+        "mid": 0.2667,
+        "strong": 0.3111
+      }
+    },
+    "P4096": {
+      "n_cells": 90,
+      "truncated_rate": 0.2667,
+      "judge_ok_rate": 0.2556,
+      "judge_mean": 0.5522,
+      "by_tier_mean": {
+        "weak": 0.5143,
+        "mid": 0.3875,
+        "strong": 0.75
+      }
+    }
+  }
+}
