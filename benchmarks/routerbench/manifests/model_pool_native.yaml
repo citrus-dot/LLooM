@@ -9,6 +9,14 @@
 # 与 provisional 转述 diff：flash/plus <0.5%（换算舍入），max-preview -4.5%（原转述偏高）。
 #    重录后任何价格变化 = 新 cost_basis_hash = 新 benchmark_version，本文件随之修订。
 #    池结构（模型 id / tier / context_window）本轮冻结，变更 = 新 pool_id。
+#
+# 2026-10-09 追加（29 号 §十六 system_pool_v01 候选 + b 方案额度应对， Nironta 拍板）：
+#   qwen3.6-plus / qwen-turbo / qwen-plus 免费额度耗尽（403 Arrearage）后，
+#   新增 29 号 §八 定义的 P4096 profile 与两代际候选记录。qwen3.7-plus 作为
+#   mid-tier 候选（官方价 ¥2/¥8 每百万，北京，思考/非思考同价）与 qwen3.6-plus
+#   同价同档，具备代际对照价值；qwen3.8-flash 作为池外 judge 候选
+#   （¥0.8/¥2.7 每百万，北京）。两模型均为 free-tier 探测 200 OK（2026-10-09）。
+#   此记录为 manifest 附件性质；正式 system_pool_v01 冻结在 S12.7 申报审议。
 pool_id: native_qwen36_3tier_v1
 version: 2
 track: native_core
@@ -49,6 +57,26 @@ models:
     price:
       input_usd_per_million: 1.2414
       output_usd_per_million: 7.4483
+# ---- 2026-10-09 候选附件（非冻结层；system_pool_v01 在 S12.7 申报审议）----
+candidate_models:
+  - candidate_id: qwen37_plus_mid_candidate
+    role_hint: mid
+    provider_model_id: qwen3.7-plus
+    capability_tier: 2
+    context_window: 983616
+    price_status: official_verified_2026-10-09
+    source: https://help.aliyun.com/zh/model-studio/qwen3-7-plus
+    price_tier: input_le_256k
+    price_cny_per_million: { input: 2.0, output: 8.0 }
+    note: 与 qwen3.6-plus 同价同档，免费额度独立（200 OK 2026-10-09）；代际对照价值
+  - candidate_id: qwen38_flash_judge_candidate
+    role_hint: judge_only   # 池外 judge（rubric 独立性），不入采集池
+    provider_model_id: qwen3.8-flash
+    price_status: official_verified_2026-10-09
+    source: https://help.aliyun.com/zh/model-studio/qwen3-8-flash
+    price_tier: cn-beijing-flat
+    price_cny_per_million: { input: 0.8, output: 2.7 }
+    note: judge 候选（qwen-turbo 额度耗尽换档）；free-tier 200 OK 2026-10-09
 freeze_rules:
   - "Any model id change creates a new model_pool_id."
   - "Any capability_tier change creates a new model_pool_id."

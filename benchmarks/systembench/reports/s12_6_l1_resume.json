@@ -1,0 +1,63 @@
+{
+  "phase": "S12.6-A resume（b 方案）",
+  "generated_at": "2026-10-08T20:38:07.245477+00:00",
+  "decision": "Nironta 拍板 b（不充值）：mid=qwen3.7-plus 代采、judge=qwen3.8-flash（池外）",
+  "rubric_id": "sb_v02_judge_rubric_v3",
+  "rubric_sha256": "a51e952e687588a14ed21245584e5de46fe8866bf73013e9e69c3ff425ccb1f3",
+  "note": "旧 turbo 72 个分数作废统一重评（避免跨 judge 混算）；mid 代际替换在 S12.7 申报 system_pool_v01 变更",
+  "n_resampled": 55,
+  "n_rejudged": 198,
+  "cost_this_run_usd": 0.41,
+  "cost_collect_usd": 0.194,
+  "cost_judge_usd": 0.216,
+  "agg": {
+    "P1536/calibration": {
+      "n_cells": 21,
+      "validity_ok_rate": 1.0,
+      "truncated_rate": 1.0,
+      "judge_ok_rate": 0.5714,
+      "judge_mean": 0.325,
+      "by_tier_mean": {
+        "weak": 0.275,
+        "mid": 0.375,
+        "strong": 0.325
+      }
+    },
+    "P1536/test": {
+      "n_cells": 78,
+      "validity_ok_rate": 1.0,
+      "truncated_rate": 0.9615,
+      "judge_ok_rate": 0.5641,
+      "judge_mean": 0.4023,
+      "by_tier_mean": {
+        "weak": 0.3071,
+        "mid": 0.44,
+        "strong": 0.4533
+      }
+    },
+    "P4096/calibration": {
+      "n_cells": 21,
+      "validity_ok_rate": 1.0,
+      "truncated_rate": 0.9048,
+      "judge_ok_rate": 0.5714,
+      "judge_mean": 0.3833,
+      "by_tier_mean": {
+        "weak": 0.425,
+        "mid": 0.325,
+        "strong": 0.4
+      }
+    },
+    "P4096/test": {
+      "n_cells": 78,
+      "validity_ok_rate": 1.0,
+      "truncated_rate": 0.8077,
+      "judge_ok_rate": 0.5769,
+      "judge_mean": 0.4178,
+      "by_tier_mean": {
+        "weak": 0.34,
+        "mid": 0.4333,
+        "strong": 0.48
+      }
+    }
+  }
+}

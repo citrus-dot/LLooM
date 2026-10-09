@@ -1,0 +1,10 @@
+{
+  "phase": "S12.6-A judge finish",
+  "generated_at": "2026-10-08T21:07:45.035869+00:00",
+  "judge_model": "qwen3.7-max",
+  "honesty_note": "rubric v3 不变；113 cells 由 qwen3.8-flash 评、84 cells 由 qwen3.7-max 评（flash 中途额度耗尽换档；两模型均 temp=0 同 rubric）",
+  "n_done_this_run": 84,
+  "n_failed_remaining": 0,
+  "judge_ok_total": 197,
+  "cost_note": "qwen3.7-max 免费 tier 内；未产生计费（cost=0 记 unknown 规则，不计入 model_cost）"
+}
