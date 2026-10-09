@@ -1,0 +1,157 @@
+{
+  "checked": 30,
+  "pass": 30,
+  "fail": 0,
+  "items": [
+    {
+      "name": "fig1.always_strong.quality",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.always_strong.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.best_single.quality",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.best_single.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.lloom.quality",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.lloom.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.cost_matched_random.quality",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.cost_matched_random.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.strong_share_matched_random.quality",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.strong_share_matched_random.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.oracle.quality",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.oracle.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig1.saving_ci",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.B2_workflow_strong_seq.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.B2_workflow_strong_seq.makespan",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.B3_workflow_strong_par.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.B3_workflow_strong_par.makespan",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.B4_workflow_p2_par.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.B4_workflow_p2_par.makespan",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.O1_node_oracle_par.cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.O1_node_oracle_par.makespan",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.B4_routing_gain",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig3.L1_P1536.trunc",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig3.L1_P1536.cells",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig3.n_cells_all",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "l2.coverage",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "l1_audit.rows",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "l1_audit.included",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "l1_audit.model_ids",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "manifest.figure_hashes",
+      "status": "PASS",
+      "detail": "[]"
+    }
+  ]
+}

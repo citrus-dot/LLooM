@@ -1,0 +1,109 @@
+{
+  "demo_case": "sb_v02_sem_030",
+  "split": "calibration",
+  "boundary_note": "root_goal/annotation/routing decision 为真实 production path 语义；node outcome 为 frozen replay；artifact 为 stage0 冻结参考执行（qwen3.6-plus）；无真实 artifact 传播",
+  "root_goal": "我们是同城连锁药房总部运维组，明天一早 6 家门店要统一切换到新网络和新价签系统，今天必须完成所有的现场处理。你需要给出一份具体调度方案。你需要同时安排人员、设备、车辆和跨店转场，还要算上设备准备/收尾时间。\n\n计划时段：08:00-16:00，采用24小时制、精确到分钟。截至08:00，所有人员、设备及车辆均已到达总仓W。\n\n资源如下：\n1）人员：\n| 角色 | 头衔 | 职责范围（仅限） | ",
+  "nodes": [
+    {
+      "node_id": "nC1",
+      "semantic_role": "extraction",
+      "dependency_semantics": "independent",
+      "consumes_from": [],
+      "routing_input_mode": "R1 description (headline)",
+      "routing_input_hash": "d74220a42466edb2",
+      "execution_input_mode": "root_goal_plus_description",
+      "execution_input_hash": "3df1a288644b4597",
+      "artifacts_frozen": true,
+      "band_R1": "hard"
+    },
+    {
+      "node_id": "nC2",
+      "semantic_role": "search",
+      "dependency_semantics": "artifact_dependent",
+      "consumes_from": [
+        [
+          "nC1"
+        ]
+      ],
+      "routing_input_mode": "R1 description (headline)",
+      "routing_input_hash": "44cc981105cf87ee",
+      "execution_input_mode": "root_goal_plus_description_plus_artifacts",
+      "execution_input_hash": "829133dd2ff3a035",
+      "artifacts_frozen": true,
+      "band_R1": "medium"
+    },
+    {
+      "node_id": "nC3",
+      "semantic_role": "reasoning",
+      "dependency_semantics": "artifact_dependent",
+      "consumes_from": [
+        [
+          "nC1"
+        ],
+        [
+          "nC2"
+        ]
+      ],
+      "routing_input_mode": "R1 description (headline)",
+      "routing_input_hash": "18827e4a3309e9f5",
+      "execution_input_mode": "root_goal_plus_description_plus_artifacts",
+      "execution_input_hash": "f67d8e5e65ae5b4f",
+      "artifacts_frozen": true,
+      "band_R1": "hard"
+    },
+    {
+      "node_id": "nC4_s1",
+      "semantic_role": "extraction",
+      "dependency_semantics": "artifact_dependent",
+      "consumes_from": [
+        [
+          "nC1"
+        ],
+        [
+          "nC2"
+        ],
+        [
+          "nC3"
+        ]
+      ],
+      "routing_input_mode": "R1 description (headline)",
+      "routing_input_hash": "4b01e37348b797cf",
+      "execution_input_mode": "root_goal_plus_description_plus_artifacts",
+      "execution_input_hash": "ba0298fc4c704406",
+      "artifacts_frozen": true,
+      "band_R1": "medium"
+    },
+    {
+      "node_id": "nC4_s2",
+      "semantic_role": "synthesis",
+      "dependency_semantics": "artifact_dependent",
+      "consumes_from": [
+        [
+          "nC4_s1"
+        ]
+      ],
+      "routing_input_mode": "R1 description (headline)",
+      "routing_input_hash": "97ad15678eb9b556",
+      "execution_input_mode": "root_goal_plus_description_plus_artifacts",
+      "execution_input_hash": "79095a49aa39d70e",
+      "artifacts_frozen": true,
+      "band_R1": "hard"
+    },
+    {
+      "node_id": "nC4_s3",
+      "semantic_role": "verification",
+      "dependency_semantics": "artifact_dependent",
+      "consumes_from": [
+        [
+          "nC4_s2"
+        ]
+      ],
+      "routing_input_mode": "R1 description (headline)",
+      "routing_input_hash": "3724824a189df2bc",
+      "execution_input_mode": "root_goal_plus_description_plus_artifacts",
+      "execution_input_hash": "bdcbb7746dce894b",
+      "artifacts_frozen": true,
+      "band_R1": "hard"
+    }
+  ]
+}

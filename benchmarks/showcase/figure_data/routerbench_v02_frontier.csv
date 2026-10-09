@@ -1,0 +1,7 @@
+strategy,key,quality_mean,cost_mean_per_query_usd,n
+Always Strong,always_strong,0.586,0.000948,12345
+Best Single,best_single,0.6053,0.000674,12345
+LLooM P2 (frozen),lloom,0.5867,0.000849,12345
+Cost-matched Random,cost_matched_random,0.561,0.000819,12345
+Strong-share-matched Random,strong_share_matched_random,0.5749,0.000899,12345
+"Oracle (hindsight, not deployable)",oracle,0.7122,0.000118,12345

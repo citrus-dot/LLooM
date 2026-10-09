@@ -1,0 +1,9 @@
+{
+  "original_field": "coordination_tax.mean",
+  "original_value": 18.347,
+  "original_definition": "mean over workflows of (B4 workflow cost / Σ per-node min-cost − 1)；无单位 ratio-minus-one",
+  "derived_coordination_cost_ratio": 19.347,
+  "derived_coordination_overhead_pct": "+1834.7%",
+  "provenance": "派生展示值：旧值 +1 换算，非新采集/新统计；不覆盖 frozen v01_report.json",
+  "median_note": "median=5.1057（中位数远低于均值=右偏分布，均值受少数 workflow 主导）"
+}

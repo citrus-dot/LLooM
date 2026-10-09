@@ -1,0 +1,100 @@
+{
+  "showcase_id": "lloom-benchmark-showcase-2026-10-09",
+  "status": "showcase_snapshot_not_formal_v02_release",
+  "created_at": "2026-10-09T12:41:14.404737+00:00",
+  "source_commit": "42216b7c4129e5bf322bfb2efc2e764387e8e796",
+  "routerbench_id": "lloom-routerbench-v0.2",
+  "systembench_v01_id": "lloom-systembench-v0.1",
+  "semantic_snapshot_id": "s12-semantic-research-snapshot-2026-10-09",
+  "inputs": [
+    {
+      "path": "routerbench_v02_report",
+      "sha256": "45b84c6c96c4378a99a0cb16590bbc75b8e896b707494d487de3c288a2d3dbb4"
+    },
+    {
+      "path": "routerbench_v01_report_legacy",
+      "sha256": "6ed2612298b86ae6e9960d00c77832c431f1015e6517255e820fb457dac0e495"
+    },
+    {
+      "path": "routerbench_frozen_manifest",
+      "sha256": "3af67f063bb0c8b616e8e7151b66bec257a7fbee47d16ab029f2e1d270e3ca23"
+    },
+    {
+      "path": "systembench_v01_report",
+      "sha256": "609785e2d6dadbc497e7f7be05bcb4f667cacc7808bd9e504b0b1b4c8fe0eef2"
+    },
+    {
+      "path": "systembench_v01_manifest",
+      "sha256": "f643801cfa725c155164319ffe7a433fd1d1658ac734fb3563897f98910262fe"
+    },
+    {
+      "path": "s11_pilot",
+      "sha256": "bc1025122279b64759ae13e4bfb3c1c21b2b6f6b82f137a6bbdd62214d751689"
+    },
+    {
+      "path": "s12_5_4_protocol_stability",
+      "sha256": "2ace1411dde7a800d91798544e7634a1cf86cf1e2ec61a128081cad890fd19a8"
+    },
+    {
+      "path": "s12_6_a_l1_matrix",
+      "sha256": "d5a832557e6441f997ce53521c4666b719bba01455b9911dfd68e22536694681"
+    },
+    {
+      "path": "s12_6_b_l2_partial",
+      "sha256": "debc3cae57b58a0665833d192d0bb46d99d95f1c9ae222193b78b07d6f7de06a"
+    },
+    {
+      "path": "s12_5_5_pool_reaudit",
+      "sha256": "b66a883194138b6ce2436fcdb99843d7865c505e773cb21b7379ba01c86dc578"
+    },
+    {
+      "path": "band_coverage_v02",
+      "sha256": "2bb533d52fb0f4e5e9253d7b93799c58172d65f6a741e93d6b5735c2883d1b41"
+    },
+    {
+      "path": "model_pool_native",
+      "sha256": "ec19d66a1f6cdfbad2ad66e7196a7d3f8ddd8eb8af5f4f2abf5c5318290979c2"
+    },
+    {
+      "path": "routing_input_contract",
+      "sha256": "4802b4404a25f175a6fedc241674fe40ab15b39ffde31202a0f4e84d285b0a8a"
+    }
+  ],
+  "figures": [
+    {
+      "path": "figures/routerbench_quality_cost.png",
+      "sha256": "9db065499399e786dfd8a27b9484027968ed218ec29d0e4d4d1f5ea0e3f198dc"
+    },
+    {
+      "path": "figures/systembench_composition.png",
+      "sha256": "6b9af598073a516af48cfff5eb2183dca290069d4ad1938d41300a520a1bdad6"
+    },
+    {
+      "path": "figures/semantic_protocol_sensitivity.png",
+      "sha256": "64341f96b1353e0c52889867359cd71be47dc7df59fde05cbc9a91a8ba12ac04"
+    }
+  ],
+  "figure_data": [
+    {
+      "path": "figure_data/routerbench_v02_frontier.csv",
+      "sha256": "2e13adc9b1f64207efce10c28e9ad666c4dc934cb925e6fd34bf8b5f75aa60fd"
+    },
+    {
+      "path": "figure_data/systembench_v01_composition.csv",
+      "sha256": "c2b43a5718f0ce1db639b564436232e214ff5da1dfaed0c34ffc064b4f39a9c7"
+    },
+    {
+      "path": "figure_data/semantic_protocol_sensitivity.csv",
+      "sha256": "c5d2bd28586199697268afef7629866dfc458b31787dc30ab40493a7ba83430e"
+    }
+  ],
+  "figure_data_version": "1",
+  "report_version": "1",
+  "api_calls_during_render": 0,
+  "notes": [
+    "RouterBench v0.2 and SystemBench v0.1 remain frozen",
+    "S12.6-A is exploratory due to mixed model/judge identities and 178/198 truncation",
+    "S12.6-B is partial (119/180 output, 49 scored) and excluded from headline",
+    "Best Single dominates P2 on point estimates; shown in main table and figure"
+  ]
+}

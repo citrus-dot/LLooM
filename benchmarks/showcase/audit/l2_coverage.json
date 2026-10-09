@@ -1,0 +1,24 @@
+{
+  "status": "PARTIAL / NOT FOR HEADLINE",
+  "planned_cells": 180,
+  "has_output": 119,
+  "collect_api_error": 61,
+  "scored": 49,
+  "judge_api_error": 70,
+  "output_rate_of_planned": 0.6611,
+  "scored_rate_of_output": 0.4118,
+  "scored_rate_of_planned": 0.2722,
+  "missingness_note": "缺失与 quota interruption/调用顺序/model-judge 接力相关，非 MCAR；不计算 pooled mean，不得作为 L2 排名或 counterfactual 结论",
+  "by_tier": {
+    "weak": 15,
+    "mid": 17,
+    "strong": 17
+  },
+  "by_generation_profile": {
+    "P1536": 26,
+    "P4096": 23
+  },
+  "by_judge_model": {
+    "qwen3.7-max": 49
+  }
+}

@@ -57,4 +57,6 @@ benchmarks/routerbench/.venv/bin/python benchmarks/systembench/runner/compositio
 
 ## 状态
 
-Phase A 完成（S1-S5）。待办：Phase B（80-case、Coordination Tax 完整版、workflow-group paired bootstrap、v0.1 freeze）→ S9 Shadow → S10 freeze gate（S-0~S-8）。
+**v0.1 Frozen**（2026-10-06，Phase B 完成：80 cases / test 65 / 327 nodes、workflow-group paired bootstrap、frozen_manifest_v01.json；S9a Shadow 结构验证 + S10 L1 Hardening 六项收口见 `reports/v01_hardening.json`、`reports/gate_selfcheck.json`、`reports/v01_report.md`）。权威结果来源：`reports/v01_report.json`。
+
+S12 Semantic Workflow 扩展（v0.2 候选）进行中：30 semantic workflows / 175 节点已构建（`cases/system_cases_v02.jsonl`）；S12.5 Provider Probe / Contract Freeze / Protocol Stability Probe（REVIEW）/ Pool Re-audit 完成；S12.6-A L1 matrix（33 independent × 3 模型 × 双 profile，198 cells）完成——存在 mid 代际替换与 judge 换档，作 exploratory 分层报告；S12.6-B L2 partial（119/180）。**当前为 semantic research snapshot（非正式 v0.2 release）**，见 `../showcase/README.md` 与 30/31/32 号工作记录。

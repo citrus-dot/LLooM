@@ -1,0 +1,5 @@
+n_cells,n_scored_nodes,truncated,truncation_rate,winner_distribution,source,profile,model_generations,judges
+99,32,96,0.97,"{'mid': 10, 'weak': 17, 'strong': 5}",S12.6-A L1 matrix (exploratory),P1536,qwen3.6+qwen3.7(mid replaced),qwen3.8-flash(113)+qwen3.7-max(84)
+99,33,82,0.828,"{'weak': 16, 'strong': 6, 'mid': 11}",S12.6-A L1 matrix (exploratory),P4096,qwen3.6+qwen3.7(mid replaced),qwen3.8-flash(113)+qwen3.7-max(84)
+18,6,17,0.944,{'weak': 6},"S12.5.4 controlled probe (n=6, REVIEW)",P1536,qwen3.6 only,qwen-turbo(rubric v2)
+18,6,10,0.556,"{'weak': 4, 'strong': 1, 'mid': 1}","S12.5.4 controlled probe (n=6, REVIEW)",P4096,qwen3.6 only,qwen-turbo(rubric v2)

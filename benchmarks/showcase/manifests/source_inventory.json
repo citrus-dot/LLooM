@@ -1,0 +1,65 @@
+{
+  "snapshot_id": "lloom-benchmark-showcase-2026-10-09",
+  "created_at": "2026-10-09T12:34:07.307167+00:00",
+  "source_commit": "42216b7c4129e5bf322bfb2efc2e764387e8e796",
+  "branch": "v2",
+  "inputs": {
+    "routerbench_v02_report": {
+      "path": "benchmarks/routerbench/reports/v02_test_report.json",
+      "sha256": "45b84c6c96c4378a99a0cb16590bbc75b8e896b707494d487de3c288a2d3dbb4"
+    },
+    "routerbench_v01_report_legacy": {
+      "path": "benchmarks/routerbench/reports/bench_report.json",
+      "sha256": "6ed2612298b86ae6e9960d00c77832c431f1015e6517255e820fb457dac0e495"
+    },
+    "routerbench_frozen_manifest": {
+      "path": "benchmarks/routerbench/manifests/frozen_manifest_v02.json",
+      "sha256": "3af67f063bb0c8b616e8e7151b66bec257a7fbee47d16ab029f2e1d270e3ca23"
+    },
+    "systembench_v01_report": {
+      "path": "benchmarks/systembench/reports/v01_report.json",
+      "sha256": "609785e2d6dadbc497e7f7be05bcb4f667cacc7808bd9e504b0b1b4c8fe0eef2"
+    },
+    "systembench_v01_manifest": {
+      "path": "benchmarks/systembench/manifests/frozen_manifest_v01.json",
+      "sha256": "f643801cfa725c155164319ffe7a433fd1d1658ac734fb3563897f98910262fe"
+    },
+    "s11_pilot": {
+      "path": "benchmarks/systembench/reports/s11_decomposition_pilot.json",
+      "sha256": "bc1025122279b64759ae13e4bfb3c1c21b2b6f6b82f137a6bbdd62214d751689"
+    },
+    "s12_5_4_protocol_stability": {
+      "path": "benchmarks/systembench/reports/s12_5_protocol_stability.json",
+      "sha256": "2ace1411dde7a800d91798544e7634a1cf86cf1e2ec61a128081cad890fd19a8"
+    },
+    "s12_6_a_l1_matrix": {
+      "path": "benchmarks/systembench/matrices/semantic_outcomes_l1.jsonl",
+      "sha256": "d5a832557e6441f997ce53521c4666b719bba01455b9911dfd68e22536694681"
+    },
+    "s12_6_b_l2_partial": {
+      "path": "benchmarks/systembench/matrices/semantic_outcomes_l2.jsonl",
+      "sha256": "debc3cae57b58a0665833d192d0bb46d99d95f1c9ae222193b78b07d6f7de06a"
+    },
+    "s12_5_5_pool_reaudit": {
+      "path": "benchmarks/systembench/reports/s12_5_5_pool_reaudit.json",
+      "sha256": "b66a883194138b6ce2436fcdb99843d7865c505e773cb21b7379ba01c86dc578"
+    },
+    "band_coverage_v02": {
+      "path": "benchmarks/systembench/reports/band_coverage_v02.json",
+      "sha256": "2bb533d52fb0f4e5e9253d7b93799c58172d65f6a741e93d6b5735c2883d1b41"
+    },
+    "model_pool_native": {
+      "path": "benchmarks/routerbench/manifests/model_pool_native.yaml",
+      "sha256": "ec19d66a1f6cdfbad2ad66e7196a7d3f8ddd8eb8af5f4f2abf5c5318290979c2"
+    },
+    "routing_input_contract": {
+      "path": "benchmarks/systembench/manifests/routing_input_contract_v1.yaml",
+      "sha256": "4802b4404a25f175a6fedc241674fe40ab15b39ffde31202a0f4e84d285b0a8a"
+    }
+  },
+  "missing": [],
+  "notes": [
+    "routerbench_v01_report_legacy = v0.1 Core-1000 旧报告，禁止混入 v0.2 图表",
+    "missing 项如实记录；frozen_manifest_v02 若在 manifests/ 外另行定位则补录"
+  ]
+}

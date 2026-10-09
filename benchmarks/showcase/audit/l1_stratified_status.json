@@ -1,0 +1,112 @@
+[
+  {
+    "view": "profile=P1536",
+    "planned": 99,
+    "has_output": 99,
+    "truncated": 96,
+    "scored": 98,
+    "invalid_json": 1,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "profile=P1536,gen=qwen3.6",
+    "planned": 72,
+    "has_output": 72,
+    "truncated": 69,
+    "scored": 71,
+    "invalid_json": 1,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "profile=P1536,gen=qwen3.7",
+    "planned": 27,
+    "has_output": 27,
+    "truncated": 27,
+    "scored": 27,
+    "invalid_json": 0,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "profile=P4096",
+    "planned": 99,
+    "has_output": 99,
+    "truncated": 82,
+    "scored": 99,
+    "invalid_json": 0,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "profile=P4096,gen=qwen3.6",
+    "planned": 72,
+    "has_output": 72,
+    "truncated": 59,
+    "scored": 72,
+    "invalid_json": 0,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "profile=P4096,gen=qwen3.7",
+    "planned": 27,
+    "has_output": 27,
+    "truncated": 23,
+    "scored": 27,
+    "invalid_json": 0,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "judge=qwen3.8-flash",
+    "planned": 114,
+    "has_output": 114,
+    "truncated": 106,
+    "scored": 113,
+    "invalid_json": 1,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "judge=qwen3.7-max",
+    "planned": 84,
+    "has_output": 84,
+    "truncated": 72,
+    "scored": 84,
+    "invalid_json": 0,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "split=calibration",
+    "planned": 42,
+    "has_output": 42,
+    "truncated": 40,
+    "scored": 42,
+    "invalid_json": 0,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "split=test",
+    "planned": 156,
+    "has_output": 156,
+    "truncated": 138,
+    "scored": 155,
+    "invalid_json": 1,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  },
+  {
+    "view": "ALL",
+    "planned": 198,
+    "has_output": 198,
+    "truncated": 178,
+    "scored": 197,
+    "invalid_json": 1,
+    "judge_api_error": 0,
+    "collect_api_error": 0
+  }
+]

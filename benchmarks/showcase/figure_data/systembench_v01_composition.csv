@@ -1,0 +1,5 @@
+strategy,key,n_workflows,completion_proxy,q_node_mean,cost_per_workflow_usd,strong_share,simulated_makespan_ms_mean
+B2 Strong+Sequential,B2_workflow_strong_seq,65,0.1385,0.3134,0.002896,1.0,2184.6
+B3 Strong+Parallel,B3_workflow_strong_par,65,0.1385,0.3134,0.002896,1.0,500.0
+B4 P2 Router+Parallel,B4_workflow_p2_par,65,0.1385,0.3134,0.002463,0.9169,500.0
+O1 Node Oracle (upper bound),O1_node_oracle_par,65,0.2615,0.4965,0.00027,0.1285,500.0
