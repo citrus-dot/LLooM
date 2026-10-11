@@ -6,7 +6,7 @@
 
 | # | Claim | 数据源 | 分母/条件 |
 |---|---|---|---|
-| C1 | RouterBench v0.2 冻结 test 上，LLooM P2 相对 Always-Strong 成本节省 13.46%（CI95 [12.20, 14.73]），质量保留 1.0005（CI [0.9957, 1.0052]，含 1.0） | `routerbench/reports/v02_test_report.json` | n=12,345；该模型池+policy；实例级 bootstrap B=10k seed=3407 |
+| C1 | RouterBench v0.2 冻结 test 上，**LLooM P2 Frozen（`lloom@softgate0`，frozen manifest policy `P2_softgate0`）** 相对 Always-Strong 成本节省 13.46%（CI95 [12.20, 14.73]），质量保留 1.0005（CI [0.9957, 1.0052]，含 1.0）。注意区分：runs 里 `lloom`/`band_only`（0.5867/$0.000849）是 P0 Current/BandOnly，不是 P2 | `routerbench/reports/v02_test_report.json`（P2 Frozen = `lloom@softgate0`） | n=12,345；该模型池+policy；实例级 bootstrap B=10k seed=3407 |
 | C2 | P2 显著优于 cost-matched random（+2.52pp，CI [2.07, 2.97]）与 strong-share-matched random（+1.14pp，CI [0.75, 1.53]）——content-aware 路由实证 | 同上 | 同上 |
 | C3 | SystemBench v0.1 固定 workflow + frozen outcome 下，P2 路由使 workflow cost 下降 14.95%（CI [−26.59, −5.16]），completion/Q_node 点估计不变 | `systembench/reports/v01_report.json` | test 65 workflows / 327 nodes；workflow-group paired bootstrap |
 | C4 | 并行调度使模拟 makespan 2184.6→500 ms | 同上 | duration-profile 仿真，**必须说 simulated** |

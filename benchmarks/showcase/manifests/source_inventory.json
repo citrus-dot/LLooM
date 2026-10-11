@@ -60,6 +60,8 @@
   "missing": [],
   "notes": [
     "routerbench_v01_report_legacy = v0.1 Core-1000 旧报告，禁止混入 v0.2 图表",
-    "missing 项如实记录；frozen_manifest_v02 若在 manifests/ 外另行定位则补录"
-  ]
+    "missing 项如实记录；frozen_manifest_v02 若在 manifests/ 外另行定位则补录",
+    "2026-10-10 P0-2 勘误：showcase 内 lloom 行更正为 P2 Frozen (lloom@softgate0) 0.5863/$0.000821；冻结输入本身无变化"
+  ],
+  "p02_erratum": "2026-10-10"
 }

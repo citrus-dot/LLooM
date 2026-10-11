@@ -41,3 +41,9 @@
 ## Showcase Stop Gate（32 号 §11.1）对照
 
 全部满足 → **当前 benchmark 工作转 maintenance**。重开实验仅由 §11.2 表中触发器驱动。
+
+## P0-2 勘误记录（2026-10-10，34 号核验）
+
+- **P2 Frozen 数字归属修正**（34 号 §2.4）：showcase 图 1/CSV/报告/claims 与 33 号总结原把 `lloom` run（0.5867/$0.000849，实为 P0 Current/BandOnly）标为 P2 Frozen。真源：`v02_test_report.md`「P2 Frozen ⭐ = `lloom@softgate0` = 0.5863/$0.000821」（frozen manifest policy=`P2_softgate0`；cost-matched random $0.000819 与之匹配为佐证）。已修正：figure CSV、图 1 重渲染、showcase_report §2、claims C1、33 号 §2.2（含勘误块）。
+- **calibration/test 口径区分**（34 号 §2.4）：33 号 §2.3 加注——calibration weak precision 0.809（Day 9 tournament）≠ frozen test 0.786（CI [0.7629, 0.8086]）。
+- **校验与 manifest**：offline_replay_check 30/30 PASS（fig1.lloom 对照源改为 `lloom@softgate0`）；showcase_manifest 升 v2（report/figure_data version 2，erratum 记录）。

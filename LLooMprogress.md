@@ -1,10 +1,12 @@
 # LLooM v2 项目进度
 
-> 最后更新：2026-10-04 · 分支 `v2` · 当前架构说明见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
+> 最后更新：2026-10-10 · 分支 `v2` · 当前架构说明见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
 ## 当前状态
 
 LLooM 已完成从 Rust + Python 微服务到**纯 Rust 数据面**的迁移。
+
+**Benchmark 体系（2026-10-05 ～ 10-09）**：三条 track 建成并封板——RouterBench v0.2 冻结（test 12,345：P2 Frozen 省 13.46% 成本 CI[12.20,14.73]、胜过两种匹配随机、Best Single 点估计支配如实入档）；SystemBench v0.1 冻结（frozen composition：routing cost −14.95% CI、simulated makespan 2184.6→500ms）；OrchestrationBench v0.1 offline 基础层；S12 semantic research snapshot（L1 198 cells exploratory 分层、L2 partial）。证据审计与展示包：[`benchmarks/showcase/`](benchmarks/showcase/README.md)（Evidence Tier A-D、claims/limits、三图离线可再生）。**当前处于 maintenance**；重开实验仅由具体研究问题触发（32 号 §11.2 触发器表）。
 
 | 层 | 技术 | 状态 |
 |---|---|---|
@@ -45,7 +47,7 @@ npm run build --prefix webui
 cd tui && npx tsc --noEmit
 ```
 
-当前结果：Rust 130 项测试通过，WebUI 构建通过，TUI 类型检查通过。
+当前结果：Rust 138 项测试通过，WebUI 构建通过，TUI 类型检查通过。
 
 ## 已验证 E2E
 

@@ -22,7 +22,7 @@ soft-gate 0），test 12,345 实例，实例级 paired bootstrap B=10k seed=3407
 |---|---:|---:|---|
 | Always Strong | 0.5860 | $0.000948 | 成本/质量参照 |
 | **Best Single** | **0.6053** | **$0.000674** | 强基线：点估计质量更高且成本更低 |
-| **LLooM P2 (frozen)** | 0.5863 | $0.000849 | headline router policy |
+| **LLooM P2 Frozen (softgate0)** | 0.5863 | $0.000821 | headline router policy（frozen manifest 指向 `P2_softgate0`） |
 | Cost-matched Random | 0.5610 | $0.000819 | 近成本随机对照 |
 | Strong-share-matched Random | 0.5749 | $0.000899 | 近强模型占比随机对照 |
 | Oracle | 0.7122 | $0.000118 | hindsight 上界，不可部署 |
@@ -31,7 +31,7 @@ soft-gate 0），test 12,345 实例，实例级 paired bootstrap B=10k seed=3407
 
 - 相对 Always-Strong：cost saving **13.46% [12.20, 14.73]**；quality retention **1.0005 [0.9957, 1.0052]**（含 1.0，质量差异不显著）
 - 相对 cost-matched random：**+2.52pp [2.07, 2.97]**；相对 strong-share-matched random：**+1.14pp [0.75, 1.53]** —— 路由不是简单随机分派（content-aware 实证）
-- **Best Single 支配 P2 的点估计**（质量 0.6053 > 0.5863，成本 $0.000674 < $0.000849）。
+- **Best Single 支配 P2 的点估计**（质量 0.6053 > 0.5863，成本 $0.000674 < $0.000821）。
 
 > 图：`figures/routerbench_quality_cost.png`（数据：`figure_data/routerbench_v02_frontier.csv`）
 

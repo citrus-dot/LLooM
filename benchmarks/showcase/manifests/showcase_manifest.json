@@ -63,7 +63,7 @@
   "figures": [
     {
       "path": "figures/routerbench_quality_cost.png",
-      "sha256": "9db065499399e786dfd8a27b9484027968ed218ec29d0e4d4d1f5ea0e3f198dc"
+      "sha256": "9b9f1a498583023216d776c434196bcf06107557157236855bfcb81831c9fa71"
     },
     {
       "path": "figures/systembench_composition.png",
@@ -77,7 +77,7 @@
   "figure_data": [
     {
       "path": "figure_data/routerbench_v02_frontier.csv",
-      "sha256": "2e13adc9b1f64207efce10c28e9ad666c4dc934cb925e6fd34bf8b5f75aa60fd"
+      "sha256": "ca98332a7d4059900461b079fc6d109ca2b09d473b5417db5457bd8ffbf13c6a"
     },
     {
       "path": "figure_data/systembench_v01_composition.csv",
@@ -88,13 +88,15 @@
       "sha256": "c5d2bd28586199697268afef7629866dfc458b31787dc30ab40493a7ba83430e"
     }
   ],
-  "figure_data_version": "1",
-  "report_version": "1",
+  "figure_data_version": "2",
+  "report_version": "2",
   "api_calls_during_render": 0,
   "notes": [
     "RouterBench v0.2 and SystemBench v0.1 remain frozen",
     "S12.6-A is exploratory due to mixed model/judge identities and 178/198 truncation",
     "S12.6-B is partial (119/180 output, 49 scored) and excluded from headline",
-    "Best Single dominates P2 on point estimates; shown in main table and figure"
-  ]
+    "Best Single dominates P2 on point estimates; shown in main table and figure",
+    "v2: P0-2 erratum applied (P2 Frozen identity fix, 34 号 §2.4)"
+  ],
+  "p02_erratum_2026_10_10": "P2 Frozen 数字勘误：figure CSV/图/报告由 P0/BandOnly(0.5867/$0.000849) 更正为 lloom@softgate0 (0.5863/$0.000821)，frozen manifest policy=P2_softgate0"
 }

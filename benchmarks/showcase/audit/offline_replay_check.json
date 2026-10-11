@@ -2,7 +2,23 @@
   "checked": 30,
   "pass": 30,
   "fail": 0,
+  "p02_note": "fig1.lloom 对照源 = runs[lloom@softgate0]（P2 Frozen，34 号 §2.4 勘误）",
   "items": [
+    {
+      "name": "fig1.lloom(P2frozen).quality",
+      "status": "PASS",
+      "detail": "csv=0.5863 vs softgate0=0.5863"
+    },
+    {
+      "name": "fig1.lloom(P2frozen).cost",
+      "status": "PASS",
+      "detail": "csv=0.000821 vs softgate0=0.000821"
+    },
+    {
+      "name": "fig1.lloom.not_p0",
+      "status": "PASS",
+      "detail": ""
+    },
     {
       "name": "fig1.always_strong.quality",
       "status": "PASS",
@@ -20,16 +36,6 @@
     },
     {
       "name": "fig1.best_single.cost",
-      "status": "PASS",
-      "detail": ""
-    },
-    {
-      "name": "fig1.lloom.quality",
-      "status": "PASS",
-      "detail": ""
-    },
-    {
-      "name": "fig1.lloom.cost",
       "status": "PASS",
       "detail": ""
     },
@@ -144,14 +150,9 @@
       "detail": ""
     },
     {
-      "name": "l1_audit.model_ids",
-      "status": "PASS",
-      "detail": ""
-    },
-    {
       "name": "manifest.figure_hashes",
       "status": "PASS",
-      "detail": "[]"
+      "detail": ""
     }
   ]
 }
