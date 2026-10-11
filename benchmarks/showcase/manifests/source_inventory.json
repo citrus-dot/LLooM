@@ -63,5 +63,7 @@
     "missing 项如实记录；frozen_manifest_v02 若在 manifests/ 外另行定位则补录",
     "2026-10-10 P0-2 勘误：showcase 内 lloom 行更正为 P2 Frozen (lloom@softgate0) 0.5863/$0.000821；冻结输入本身无变化"
   ],
-  "p02_erratum": "2026-10-10"
+  "p02_erratum": "2026-10-10",
+  "erratum_commit": "18a5e35",
+  "erratum_note": "P0-2 勘误（2026-10-10）：showcase 内 P2 Frozen 数字由 P0/BandOnly 更正为 lloom@softgate0；本 inventory 的 source_commit 42216b7 为数据采集完成时的快照，勘误 commit 18a5e35 为展示层修正，冻结输入未变"
 }

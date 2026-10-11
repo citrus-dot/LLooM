@@ -49,7 +49,8 @@ node outcome 全部 frozen replay（零新推理），调度为 duration-profile
 | B4 P2 Router+Parallel | 13.9% | 0.3134 | **$0.002463** | 91.7% | 500 ms |
 | O1 Node Oracle | 26.2% | 0.4965 | $0.000270 | 12.8% | 500 ms |
 
-- **B2→B3（调度效果）**：模拟 makespan 2184.6→500 ms（duration-profile 仿真，非线上墙钟）。
+- **B2→B3（调度效果）**：模拟 makespan 均值 2184.6→500 ms（median 2000→500、p90 3500→500，
+  分位数见 `v01_hardening.json`；duration-profile 仿真，非线上墙钟）。
 - **B3→B4（路由效果）**：workflow cost **−14.95%**（bootstrap CI [−26.59%, −5.16%]），
   completion proxy 与 Q_node 点估计不变——当前口径下路由改变的是成本，不是质量。
 - **O1 为事后上界参照**，不是可部署策略。
