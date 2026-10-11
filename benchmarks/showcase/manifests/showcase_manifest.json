@@ -67,7 +67,7 @@
     },
     {
       "path": "figures/systembench_composition.png",
-      "sha256": "6b9af598073a516af48cfff5eb2183dca290069d4ad1938d41300a520a1bdad6"
+      "sha256": "1e0ef05375f8c5f9ff20b3b417eada81f8c52dd1472ece8f6948477cbc70fbd5"
     },
     {
       "path": "figures/semantic_protocol_sensitivity.png",
@@ -81,22 +81,33 @@
     },
     {
       "path": "figure_data/systembench_v01_composition.csv",
-      "sha256": "c2b43a5718f0ce1db639b564436232e214ff5da1dfaed0c34ffc064b4f39a9c7"
+      "sha256": "fff65606341a58b0658474c10c93e373ce1508e9a5add3afe14da9c2f07d1722"
     },
     {
       "path": "figure_data/semantic_protocol_sensitivity.csv",
       "sha256": "c5d2bd28586199697268afef7629866dfc458b31787dc30ab40493a7ba83430e"
     }
   ],
-  "figure_data_version": "2",
-  "report_version": "2",
+  "figure_data_version": "3",
+  "report_version": "3",
   "api_calls_during_render": 0,
   "notes": [
     "RouterBench v0.2 and SystemBench v0.1 remain frozen",
     "S12.6-A is exploratory due to mixed model/judge identities and 178/198 truncation",
     "S12.6-B is partial (119/180 output, 49 scored) and excluded from headline",
     "Best Single dominates P2 on point estimates; shown in main table and figure",
-    "v2: P0-2 erratum applied (P2 Frozen identity fix, 34 号 §2.4)"
+    "v2: P0-2 erratum applied (P2 Frozen identity fix, 34 号 §2.4)",
+    "v3: P1/P2 收口（replay_check.py 固化、walkthrough、median/p90 分列、README identity 直书）"
   ],
-  "p02_erratum_2026_10_10": "P2 Frozen 数字勘误：figure CSV/图/报告由 P0/BandOnly(0.5867/$0.000849) 更正为 lloom@softgate0 (0.5863/$0.000821)，frozen manifest policy=P2_softgate0"
+  "p02_erratum_2026_10_10": "P2 Frozen 数字勘误：figure CSV/图/报告由 P0/BandOnly(0.5867/$0.000849) 更正为 lloom@softgate0 (0.5863/$0.000821)，frozen manifest policy=P2_softgate0",
+  "audit_documents": [
+    {
+      "path": "audit/walkthrough.md",
+      "sha256": "d0c79eaafe5c46cae0c5a1db2cbc28fd28c60a3778ca976bfa490869f83b3313"
+    },
+    {
+      "path": "audit/replay_check.py",
+      "sha256": "10cf48d17d907bd3c13ecec7c2a1eb3de4d5dade4ded0d5597e03589752ea471"
+    }
+  ]
 }

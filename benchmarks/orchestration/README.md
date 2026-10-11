@@ -62,3 +62,16 @@ python3 scripts/db_init.py                      # 幂等
 | O4 End-to-End | final goal completion + cost/latency 归因 |
 
 失败分类 P1-P11（方案 §十三）+ 注入族 F1-F7（方案 §二十一）。
+
+## 状态与相关入口
+
+- **Offline report**（O-Day 14 产出）：[`reports/offline_v0.1.md`](reports/offline_v0.1.md) / `.json`——
+  **手工扰动 fixture 的演示/基础设施证据**，不是真实在线预测计划的总体结果；P1-P11 归因链与
+  recovery 状态机能力以此演示。
+- **与 SystemBench 的关系**：调度引擎 `schedule.py` 被 SystemBench v0.1 import（duration-profile
+  仿真口径同源）；validator `validate.py` 服务两边的 canonical workflow 校验。SystemBench v0.1
+  frozen composition 的调度效果（simulated makespan）即建在本层之上。
+- **与 Showcase 的关系**：本层属基础设施/诊断证据（Evidence Tier B 语境），不独立造 headline；
+  展示入口见 [`../showcase/README.md`](../showcase/README.md)（Tier A-D 分级与 walkthrough）。
+- online / live track（APB online、τ²、ToolSandbox、AppWorld、WebArena）全部后置，重开条件见
+  32 号决策 §11.2 触发器。

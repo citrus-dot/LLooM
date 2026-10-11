@@ -1,23 +1,23 @@
 {
-  "checked": 30,
-  "pass": 30,
+  "checked": 31,
+  "pass": 31,
   "fail": 0,
   "p02_note": "fig1.lloom 对照源 = runs[lloom@softgate0]（P2 Frozen，34 号 §2.4 勘误）",
   "items": [
     {
       "name": "fig1.lloom(P2frozen).quality",
       "status": "PASS",
-      "detail": "csv=0.5863 vs softgate0=0.5863"
+      "detail": ""
     },
     {
       "name": "fig1.lloom(P2frozen).cost",
       "status": "PASS",
-      "detail": "csv=0.000821 vs softgate0=0.000821"
+      "detail": ""
     },
     {
       "name": "fig1.lloom.not_p0",
       "status": "PASS",
-      "detail": ""
+      "detail": "不得使用 P0/BandOnly（0.5867/$0.000849）"
     },
     {
       "name": "fig1.always_strong.quality",
@@ -80,7 +80,7 @@
       "detail": ""
     },
     {
-      "name": "fig2.B2_workflow_strong_seq.makespan",
+      "name": "fig2.B2_workflow_strong_seq.makespan_mean",
       "status": "PASS",
       "detail": ""
     },
@@ -90,7 +90,7 @@
       "detail": ""
     },
     {
-      "name": "fig2.B3_workflow_strong_par.makespan",
+      "name": "fig2.B3_workflow_strong_par.makespan_mean",
       "status": "PASS",
       "detail": ""
     },
@@ -100,7 +100,7 @@
       "detail": ""
     },
     {
-      "name": "fig2.B4_workflow_p2_par.makespan",
+      "name": "fig2.B4_workflow_p2_par.makespan_mean",
       "status": "PASS",
       "detail": ""
     },
@@ -110,12 +110,17 @@
       "detail": ""
     },
     {
-      "name": "fig2.O1_node_oracle_par.makespan",
+      "name": "fig2.O1_node_oracle_par.makespan_mean",
       "status": "PASS",
       "detail": ""
     },
     {
       "name": "fig2.B4_routing_gain",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "fig2.makespan_median_p90_present",
       "status": "PASS",
       "detail": ""
     },
@@ -152,7 +157,7 @@
     {
       "name": "manifest.figure_hashes",
       "status": "PASS",
-      "detail": ""
+      "detail": "[]"
     }
   ]
 }

@@ -17,19 +17,26 @@
 ## 快速复现（全部离线，零 API）
 
 ```bash
-# 三图与底层 CSV 由冻结产物直接生成（不调用 provider）
-git rev-parse HEAD   # source commit 见 manifests/source_inventory.json
-# 图已提交在 figures/；figure_data/*.csv 为绘图数据真源
+# 1) 离线复核：figure_data CSV ↔ 冻结报告逐项核对 + audit 自洽 + manifest hash（31 项）
+python3 benchmarks/showcase/audit/replay_check.py
+# 2) 来源快照：source commit 与 13 个输入文件 SHA-256 见 manifests/source_inventory.json
+#    （source_commit 42216b7…；勘误 commit 18a5e35 / f4b5eea，冻结输入未变）
+# 3) 图已提交在 figures/；figure_data/*.csv 为绘图数据真源（渲染脚本零 provider 调用）
 ```
+
+**Snapshot identity**：RouterBench v0.2 = `lloom-routerbench-v0.2`；
+SystemBench v0.1 = `lloom-systembench-v0.1`；
+showcase = `lloom-benchmark-showcase-2026-10-09`（status: `showcase_snapshot_not_formal_v02_release`）。
 
 ## 目录
 
 - `showcase_report.md` — 主叙事（三层证据 + 边界）
 - `claims_and_limits.md` — 可引用 claims / 禁止越界 claims
+- `audit/walkthrough.md` — 贯穿式 demo（每步标注生产/回放/仿真身份）
 - `figures/` — 三张核心图（PNG）
-- `figure_data/` — 三图底层 CSV（图由 CSV 再生）
+- `figure_data/` — 三图底层 CSV（图由 CSV 再生；v0.1 makespan mean 与 median/p90 分列）
 - `manifests/source_inventory.json` — 源 commit + 13 个输入文件 SHA-256
-- `audit/` — 逐 cell 可比性审计、分层状态、L2 coverage、Coordination 派生值
+- `audit/` — 逐 cell 可比性审计、分层状态、L2 coverage、Coordination 派生值、`replay_check.py`（离线复核脚本）
 
 ## 一句话结论
 
