@@ -5,23 +5,32 @@ use crate::error::{AppError, Result};
 use std::process::{Child, Command, Stdio};
 
 /// Enhanced PATH so bundled/standard binaries are found in all layouts.
+/// Splits/joins on the platform separator (`:` on Unix, `;` on Windows) so the
+/// child environment is never a single bogus path entry.
 fn enhanced_path() -> String {
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let extra: &[&str] = if cfg!(windows) {
+        // Standard user install roots (Ollama installer defaults to
+        // %LOCALAPPDATA%\Programs\Ollama; expand below when spawning).
+        &[]
+    } else {
+        &[
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+    };
+    let mut parts: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
     let current = std::env::var("PATH").unwrap_or_default();
-    let extra = [
-        "/usr/local/bin",
-        "/opt/homebrew/bin",
-        "/usr/bin",
-        "/bin",
-        "/usr/sbin",
-        "/sbin",
-    ];
-    let mut parts: Vec<&str> = extra.to_vec();
-    for p in current.split(':') {
-        if !parts.contains(&p) {
-            parts.push(p);
+    for p in current.split(sep).filter(|s| !s.is_empty()) {
+        if !parts.iter().any(|q| q == p) {
+            parts.push(p.to_string());
         }
     }
-    parts.join(":")
+    parts.join(&sep.to_string())
 }
 
 fn cmd(binary: &str) -> Command {
@@ -86,8 +95,18 @@ pub async fn start_ollama() -> Result<Option<Child>> {
 /// Stop a running Ollama regardless of who started it. If this process spawned
 /// it (child handle held), the caller kills the handle; otherwise find and
 /// terminate the `ollama serve` process (external / system-managed instance).
+/// Platform-native process kill: `pkill` on Unix, `taskkill` on Windows.
 pub fn stop_ollama() -> String {
-    match Command::new("pkill").args(["-f", "ollama serve"]).status() {
+    let status = if cfg!(windows) {
+        Command::new("taskkill")
+            .args(["/IM", "ollama.exe", "/T", "/F"])
+            .status()
+    } else {
+        Command::new("pkill")
+            .args(["-f", "ollama serve"])
+            .status()
+    };
+    match status {
         Ok(s) if s.success() => "Ollama stopped".to_string(),
         Ok(_) => "Ollama not running".to_string(),
         Err(e) => format!("Failed to stop Ollama: {e}"),
@@ -95,6 +114,21 @@ pub fn stop_ollama() -> String {
 }
 
 // ── Health helpers ──
+
+/// Open a URL in the user's default browser (cross-platform; used by
+/// `--open` on startup and the `/api/system/open-web` endpoint). `webbrowser`
+/// wraps the platform launcher (open / xdg-open / cmd start) with proper
+/// argument quoting. Fire-and-forget: the browser is not our child process.
+pub fn open_browser(url: &str) -> bool {
+    webbrowser::open(url).is_ok()
+}
+
+/// Reveal a directory in the platform file manager. `webbrowser` converts
+/// local paths to `file://` URLs and hands them to the platform handler
+/// (Finder / Explorer / xdg-open), so one code path serves all platforms.
+pub fn reveal_in_file_manager(dir: &str) -> bool {
+    webbrowser::open(dir).is_ok()
+}
 
 /// Async HTTP GET, returning the body. Used for health probes.
 async fn http_get(url: &str, timeout_secs: u64) -> String {
@@ -123,6 +157,28 @@ pub fn ollama_installed() -> bool {
     if bin != "ollama" {
         return true; // bundled path found
     }
+    // PATH lookup via the platform's `where`/`command -v`, plus standard
+    // install roots a minimal PATH (IDE/sandbox launch) can miss.
+    if cfg!(windows) {
+        if Command::new("where")
+            .arg("ollama")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        let mut roots = vec![std::path::PathBuf::from(
+            r"C:\Program Files\Ollama\ollama.exe",
+        )];
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            // Ollama installer default per-user location.
+            roots.push(std::path::PathBuf::from(local).join("Programs").join("Ollama").join("ollama.exe"));
+        }
+        return roots.iter().any(|r| r.exists());
+    }
     if Command::new("sh")
         .args(["-c", "command -v ollama >/dev/null 2>&1"])
         .status()
@@ -136,4 +192,40 @@ pub fn ollama_installed() -> bool {
     // standard install locations before claiming it's not installed.
     std::path::Path::new("/usr/local/bin/ollama").exists()
         || std::path::Path::new("/opt/homebrew/bin/ollama").exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The enhanced PATH must stay a well-formed entry list on the host
+    /// platform: exactly the platform separator, no empty entries, no dups.
+    #[test]
+    fn enhanced_path_is_well_formed() {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let path = enhanced_path();
+        let entries: Vec<&str> = path.split(sep).collect();
+        assert!(!entries.is_empty());
+        assert!(
+            entries.iter().all(|e| !e.is_empty()),
+            "no empty entries: {path}"
+        );
+        let mut deduped = entries.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(entries.len(), deduped.len(), "no dup entries: {path}");
+    }
+
+    /// Unix extras must survive on Unix; Windows never injects Unix roots.
+    #[test]
+    fn enhanced_path_platform_extras() {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let path = enhanced_path();
+        let has = |root: &str| path.split(sep).any(|e| e == root);
+        if cfg!(windows) {
+            assert!(!has("/usr/local/bin"));
+        } else {
+            assert!(has("/usr/local/bin") && has("/opt/homebrew/bin"));
+        }
+    }
 }

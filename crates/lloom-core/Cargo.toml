@@ -22,3 +22,4 @@ tower-http = { version = "0.6", features = ["fs"] }
 sha2 = "0.10"
 fastembed = "7.1"
 rand = "0.9"
+webbrowser = "1.2.4"

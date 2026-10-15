@@ -24,6 +24,10 @@ struct Args {
     /// 绑定地址（默认 127.0.0.1；同 LLOOM_BIND）
     #[arg(long)]
     bind: Option<String>,
+
+    /// 启动完成后自动在系统默认浏览器打开 WebUI（便携包 start 脚本默认带上）
+    #[arg(long)]
+    open: bool,
 }
 
 fn main() {
@@ -61,6 +65,7 @@ fn main() {
 
     let state_for_spawn = state.clone();
     let web_port = config::web_port();
+    let open_ui = args.open;
     let router = build_router(state.clone());
 
     std::thread::spawn(move || {
@@ -80,6 +85,18 @@ fn main() {
                     std::process::exit(1);
                 });
             println!("[core] REST server on {bind_addr}:{web_port}");
+
+            // --open: fire the default browser once the port is live, so the
+            // page never races the listener (start.sh / start.bat pass this).
+            if open_ui {
+                let url = format!("http://localhost:{web_port}/");
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    if !lloom_core::processes::open_browser(&url) {
+                        eprintln!("[core] ⚠ failed to open browser for {url}");
+                    }
+                });
+            }
 
             // Background jobs: daily price calibration + always-on probes
             // (PRICING-PLAN §6.2 / §7). Handles are intentionally not held;

@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" />
-  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blue" alt="Platform" />
+  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue" alt="Platform" />
   <img src="https://img.shields.io/badge/Rust-axum-CE422B?logo=rust&logoColor=white" alt="Rust" />
   <img src="https://img.shields.io/badge/Providers-OpenAI%20%7C%20Anthropic-blue" alt="Providers" />
   <img src="https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
@@ -40,11 +40,15 @@
 
 ## 快速开始
 
-**方式 A — 下载发布包**
+**方式 A — 下载发布包（便携 zip/tar.gz，解压即用）**
 
-1. 从 [Releases](https://github.com/citrus-dot/LLooM/releases) 下载最新构建（或安装 `.deb`/`.rpm`）
-2. 在「模型管理」页添加模型并按模型配置 API Key
-3. 打开 `http://localhost:7861` 开始聊天
+1. 从 [Releases](https://github.com/citrus-dot/LLooM/releases) 下载对应平台包：Windows 取 `.zip`，macOS/Linux 取 `.tar.gz`
+2. 解压到任意目录，双击 `start`（Windows 为 `start.bat`，macOS/Linux 为 `start.sh`）——浏览器自动打开 `http://localhost:7861`
+3. 在「模型管理」页添加模型并按模型配置 API Key，开始聊天
+
+停止：双击 `stop`（`stop.bat` / `stop.sh`）——脚本会请求服务端优雅关闭（连同其拉起的子进程）。改端口：复制 `.env.example` 为 `.env` 后设 `LLOOM_WEB_PORT`。数据都在二进制旁的 `data/` 目录里；升级时替换整个目录但保留 `data/`（和你的 `.env`）即可。
+
+> **Windows SmartScreen**：二进制未签名，首次运行可能提示「Windows 已保护你的电脑」——点 *更多信息 → 仍要运行*。**macOS Gatekeeper**：对解压后的目录执行一次 `xattr -cr LLooM`。
 
 **方式 B — 源码运行**
 

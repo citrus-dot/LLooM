@@ -1,0 +1,9 @@
+# Windows batch scripts must keep CRLF (cmd's parser is line-ending sensitive);
+# Unix shell scripts must keep LF (CRLF breaks the shebang under some shells).
+*.bat text eol=crlf
+*.sh text eol=lf
+packaging/*.bat text eol=crlf
+packaging/*.sh text eol=lf
+
+# Default: native line-ending normalization for text files.
+* text=auto

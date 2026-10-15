@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" />
-  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blue" alt="Platform" />
+  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue" alt="Platform" />
   <img src="https://img.shields.io/badge/Rust-axum-CE422B?logo=rust&logoColor=white" alt="Rust" />
   <img src="https://img.shields.io/badge/Providers-OpenAI%20%7C%20Anthropic-blue" alt="Providers" />
   <img src="https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
@@ -43,9 +43,13 @@
 
 **Option A — download a release**
 
-1. Grab the latest build from [Releases](https://github.com/citrus-dot/LLooM/releases) (or install the `.deb`/`.rpm`)
-2. Add models on the **Models** page and set each model's API key there
-3. Chat at `http://localhost:7861`
+1. Grab the archive for your platform from [Releases](https://github.com/citrus-dot/LLooM/releases): `.zip` on Windows, `.tar.gz` on macOS/Linux
+2. Unzip it anywhere and double-click `start` (`start.bat` on Windows / `start.sh` on macOS/Linux) — the WebUI opens automatically at `http://localhost:7861`
+3. Add models on the **Models** page and set each model's API key there; chat away
+
+To stop: double-click `stop` (`stop.bat` / `stop.sh`) — it asks the server to shut down gracefully (child processes included). To change the port, copy `.env.example` to `.env` and set `LLOOM_WEB_PORT`. Your data lives in `data/` next to the binary; to upgrade, replace everything except `data/` (and your `.env`).
+
+> **Windows SmartScreen**: the binaries are unsigned, so the first launch may show "Windows protected your PC" — click *More info → Run anyway*. **macOS Gatekeeper**: run `xattr -cr LLooM` on the extracted folder once.
 
 **Option B — from source**
 

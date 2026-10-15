@@ -1253,7 +1253,14 @@ pub fn shutdown_all(state: &AppState) {
     }
     // 2. Kill any external instances we didn't spawn (e.g. started by a
     //    previous run, or a system-managed Ollama). Matches dev + bundled
-    //    invocation patterns.
+    //    invocation patterns. Platform-native: pkill on Unix, taskkill on Windows.
+    #[cfg(windows)]
+    let _ = Command::new("taskkill")
+        .args(["/IM", "ollama.exe", "/T", "/F"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    #[cfg(not(windows))]
     let _ = Command::new("pkill").args(["-f", "ollama serve"]).status();
 }
 
@@ -1275,28 +1282,14 @@ async fn shutdown_server(State(state): State<AppState>) -> Json<Value> {
 
 async fn open_folder(Json(body): Json<Value>) -> Json<Value> {
     let path = body.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    let ok = std::process::Command::new(opener)
-        .arg(path)
-        .spawn()
-        .map(|_| true)
-        .unwrap_or(false);
+    let ok = crate::processes::reveal_in_file_manager(path);
     Json(json!({ "ok": ok }))
 }
 
 async fn open_web(Json(body): Json<Value>) -> Json<Value> {
     let url = body.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    let _ = std::process::Command::new(opener).arg(url).spawn();
-    Json(json!({ "ok": true }))
+    let ok = crate::processes::open_browser(url);
+    Json(json!({ "ok": ok }))
 }
 
 // ── Background jobs (PRICING-PLAN §6.2 / §7) ──

@@ -12,7 +12,7 @@
 #   ├── lloom-server
 #   ├── lloom-cli
 #   ├── resources/webui/dist/
-#   ├── start.sh
+#   ├── start.sh / stop.sh               ← packaging/（start 带 --open 自动开浏览器）
 #   └── .env.example
 #
 # 用法: bash scripts/package.sh          # 组装并压缩
@@ -29,7 +29,7 @@ VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
 STAGE="dist/pkg/LLooM"
 OUT="dist/LLooM-${VERSION}-${OS}-${ARCH}.tar.gz"
 
-for f in "target/release/lloom-server" "webui/dist/index.html"; do
+for f in "target/release/lloom-server" "webui/dist/index.html" "packaging/start.sh" "packaging/stop.sh"; do
   if [ ! -e "$f" ]; then
     echo "✗ 缺少构建产物: $f （先跑 build.sh 或 CI 对应步骤）" >&2
     exit 1
@@ -45,12 +45,10 @@ mkdir -p "$STAGE/resources/webui"
 cp -r webui/dist "$STAGE/resources/webui/dist"
 cp .env.example "$STAGE/"
 
-cat > "$STAGE/start.sh" <<'EOF'
-#!/bin/bash
-cd "$(dirname "$0")"
-exec ./lloom-server
-EOF
-chmod +x "$STAGE/start.sh" "$STAGE/lloom-server"
+# 便携包启动/停止脚本（含 --open 自动开浏览器；stop 走 /api/shutdown 优雅关闭）
+install -m 755 packaging/start.sh "$STAGE/start.sh"
+install -m 755 packaging/stop.sh "$STAGE/stop.sh"
+chmod +x "$STAGE/lloom-server"
 [ -f "$STAGE/lloom-cli" ] && chmod +x "$STAGE/lloom-cli"
 
 mkdir -p dist/pkg

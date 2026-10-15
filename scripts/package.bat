@@ -1,6 +1,6 @@
 @echo off
 rem LLooM installer packaging for Windows.
-rem Prereqs: target\release\lloom-server.exe, webui\dist\
+rem Prereqs: target\release\lloom-server.exe, webui\dist\, packaging\*.bat
 rem Output:  dist\LLooM-<version>-windows-x86_64.zip
 rem NOTE: keep this file ASCII-only (cmd parses scripts under the OEM codepage).
 setlocal
@@ -14,6 +14,8 @@ set "OUT=dist\LLooM-%VERSION%-windows-%ARCH%.zip"
 
 if not exist "target\release\lloom-server.exe" echo missing: target\release\lloom-server.exe & exit /b 1
 if not exist "webui\dist\index.html" echo missing: webui\dist\index.html & exit /b 1
+if not exist "packaging\start.bat" echo missing: packaging\start.bat & exit /b 1
+if not exist "packaging\stop.bat" echo missing: packaging\stop.bat & exit /b 1
 
 rmdir /s /q "dist\pkg" 2>nul
 mkdir "%STAGE%\resources\webui" || exit /b 1
@@ -24,11 +26,10 @@ robocopy "webui\dist" "%STAGE%\resources\webui\dist" /E /NFL /NDL /NJH /NJS /NP 
 if errorlevel 8 exit /b 1
 copy /y ".env.example" "%STAGE%\" >nul || exit /b 1
 
-(
-  echo @echo off
-  echo cd /d %%~dp0
-  echo lloom-server.exe
-) > "%STAGE%\start.bat"
+rem Portable launcher/stopper: start.bat passes --open (auto browser), stop.bat
+rem prefers the graceful /api/shutdown path before any taskkill fallback.
+copy /y "packaging\start.bat" "%STAGE%\start.bat" >nul || exit /b 1
+copy /y "packaging\stop.bat" "%STAGE%\stop.bat" >nul || exit /b 1
 
 tar -a -c -f "%OUT%" -C "dist\pkg" "LLooM" || exit /b 1
 rmdir /s /q "dist\pkg"
