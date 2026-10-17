@@ -80,17 +80,20 @@ jobs:
           fi
 
       - name: Package
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "macOS" ] && [ "${{ matrix.arch }}" = "x86_64" ]; then
             bash scripts/package.sh --target x86_64-apple-darwin
-          elif [ "${{ runner.os }}" = "Windows" ]; then
-            # 本 step 是 bash（Windows runner 也有 Git Bash），bat 路径必须用
-            # 正斜杠交给 cmd——bash 会把 scripts\package.bat 的反斜杠吞成转义。
-            cmd /c scripts/package.bat
           else
             bash scripts/package.sh
           fi
+
+      # Windows 用 runner 默认 pwsh：cmd /c + 反斜杠路径原生可用。经 Git Bash
+      # 转发 cmd /c 会静默退出（横幅后无输出，exit 0），两次踩坑实录见 git log。
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: cmd /c scripts\package.bat
 
       - name: Smoke Intel build (load-dynamic wiring present)
         if: runner.os == 'macOS' && matrix.arch == 'x86_64'
