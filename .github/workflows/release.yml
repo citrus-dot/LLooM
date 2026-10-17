@@ -38,16 +38,12 @@ jobs:
       matrix:
         include:
           - os: macos-latest        # Apple Silicon (macos-14+ 均为 M 系)
-            pkg: bash scripts/package.sh
             arch: arm64
           - os: macos-latest        # 同一 runner 交叉产出 Intel 包（见下「Intel 交叉编译」）
-            pkg: bash scripts/package.sh
             arch: x86_64
           - os: ubuntu-24.04
-            pkg: bash scripts/package.sh
             arch: x86_64
           - os: windows-latest
-            pkg: cmd /c scripts\package.bat
             arch: x86_64
     runs-on: ${{ matrix.os }}
     steps:
@@ -87,9 +83,13 @@ jobs:
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "macOS" ] && [ "${{ matrix.arch }}" = "x86_64" ]; then
-            ${{ matrix.pkg }} --target x86_64-apple-darwin
+            bash scripts/package.sh --target x86_64-apple-darwin
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            # 本 step 是 bash（Windows runner 也有 Git Bash），bat 路径必须用
+            # 正斜杠交给 cmd——bash 会把 scripts\package.bat 的反斜杠吞成转义。
+            cmd /c scripts/package.bat
           else
-            ${{ matrix.pkg }}
+            bash scripts/package.sh
           fi
 
       - name: Smoke Intel build (load-dynamic wiring present)
