@@ -37,14 +37,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
-            pkg: bash scripts/package.sh
           - os: macos-latest        # Apple Silicon (macos-14+ 均为 M 系)
             pkg: bash scripts/package.sh
-          - os: macos-13            # 最后的 Intel runner，产 darwin-x86_64 包
+            arch: arm64
+          - os: macos-latest        # 同一 runner 交叉产出 Intel 包（见下「Intel 交叉编译」）
             pkg: bash scripts/package.sh
+            arch: x86_64
+          - os: ubuntu-24.04
+            pkg: bash scripts/package.sh
+            arch: x86_64
           - os: windows-latest
             pkg: cmd /c scripts\package.bat
+            arch: x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -55,39 +59,50 @@ jobs:
         with:
           node-version: 20
 
+      # Intel 交叉编译：pyke 无 x86_64-apple-darwin 的 ORT 预编译静态库，
+      # 但该 target 走 ort-load-dynamic（编译期不链 ORT、运行期 dlopen），
+      # 故 arm64 runner 可正常交叉出 Intel 包——绕开 macos-13 的排队困境
+      # （GitHub 淘汰 Intel 硬件后该镜像排队常达数小时）。
+      - name: Add Rust Intel target (x86_64 macOS builds)
+        if: runner.os == 'macOS' && matrix.arch == 'x86_64'
+        run: rustup target add x86_64-apple-darwin
+
       - name: Build WebUI
         run: |
           cd webui
           npm ci
           npm run build
 
-      - name: Install ONNX Runtime (Intel macOS only — runtime dlopen target)
-        if: runner.os == 'macOS' && runner.arch == 'X64'
-        run: brew install onnxruntime
-
       - name: Build Rust (release)
-        run: cargo build --workspace --release
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ] && [ "${{ matrix.arch }}" = "x86_64" ]; then
+            cargo build --workspace --release --target x86_64-apple-darwin
+          else
+            cargo build --workspace --release
+          fi
 
       - name: Package
-        run: ${{ matrix.pkg }}
-
-      - name: Smoke Intel build (load-dynamic dylib resolves)
-        if: runner.os == 'macOS' && runner.arch == 'X64'
         run: |
-          # load-dynamic：二进制只含 dlopen 引用，不链 .dylib。用 brew 装的
-          # libonnxruntime.dylib 验证 ORT_DYLIB_PATH 可定位（仅 --help 冒烟，
-          # 真正 dlopen 发生在首次语义缓存调用）。
-          DYLIB="$(ls /opt/homebrew/lib/libonnxruntime.dylib /usr/local/lib/libonnxruntime.dylib 2>/dev/null | head -1)"
-          if [ -n "$DYLIB" ]; then
-            LLOOM_ORT_DYLIB_PATH="$DYLIB" ./target/release/lloom-server --help >/dev/null \
-              && echo "smoke ok (dylib: $DYLIB)"
+          if [ "${{ runner.os }}" = "macOS" ] && [ "${{ matrix.arch }}" = "x86_64" ]; then
+            ${{ matrix.pkg }} --target x86_64-apple-darwin
           else
-            echo "smoke skipped: no brew dylib found"
+            ${{ matrix.pkg }}
           fi
+
+      - name: Smoke Intel build (load-dynamic wiring present)
+        if: runner.os == 'macOS' && matrix.arch == 'x86_64'
+        run: |
+          # load-dynamic：编译期不链 .dylib，二进制应含 dlopen 目标名与中文提示；
+          # 真正 dlopen 发生在用户机首次语义缓存调用，此处只验链接形态。
+          BIN="target/x86_64-apple-darwin/release/lloom-server"
+          [ -x "$BIN" ] || { echo "missing $BIN"; exit 1; }
+          file "$BIN" | grep -q x86_64 || { echo "not an Intel binary"; exit 1; }
+          strings "$BIN" | grep -q libonnxruntime \
+            && echo "smoke ok: load-dynamic target embedded"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: installer-${{ matrix.os }}
+          name: installer-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             dist/*.tar.gz
             dist/*.zip
