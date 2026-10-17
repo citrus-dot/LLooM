@@ -101,7 +101,10 @@ jobs:
           BIN="target/x86_64-apple-darwin/release/lloom-server"
           [ -x "$BIN" ] || { echo "missing $BIN"; exit 1; }
           file "$BIN" | grep -q x86_64 || { echo "not an Intel binary"; exit 1; }
-          strings "$BIN" | grep -q libonnxruntime \
+          # 避免 strings | grep -q：grep 提前退出会令 strings flush 管道失败
+          # （macOS 报 failed to flush output 非零退出）。先落盘再查。
+          strings "$BIN" > /tmp/lloom-strings.txt || { echo "strings failed"; exit 1; }
+          grep -q libonnxruntime /tmp/lloom-strings.txt \
             && echo "smoke ok: load-dynamic target embedded"
 
       - uses: actions/upload-artifact@v4
