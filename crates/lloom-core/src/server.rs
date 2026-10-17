@@ -1202,7 +1202,15 @@ async fn services_status(State(state): State<AppState>) -> Json<Value> {
         .find(|s| s["name"].as_str() == Some("Ollama"))
     {
         if !crate::processes::ollama_installed() {
-            ollama["detail"] = json!("未安装 Ollama。本地模型不可用（云 API 不受影响）。安装: curl -fsSL https://ollama.com/install.sh | sh");
+            // 安装提示按平台给：Windows/macOS 没有 install.sh 脚本链路。
+            let hint = if cfg!(windows) {
+                "未安装 Ollama。本地模型不可用（云 API 不受影响）。安装: https://ollama.com/download/windows 下载 OllamaSetup.exe"
+            } else if cfg!(target_os = "macos") {
+                "未安装 Ollama。本地模型不可用（云 API 不受影响）。安装: brew install ollama（或 https://ollama.com/download/mac 下载 dmg）"
+            } else {
+                "未安装 Ollama。本地模型不可用（云 API 不受影响）。安装: curl -fsSL https://ollama.com/install.sh | sh"
+            };
+            ollama["detail"] = json!(hint);
         }
     }
     let healthy = services
