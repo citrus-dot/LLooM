@@ -50,6 +50,8 @@
 To stop: double-click `stop` (`stop.bat` / `stop.sh`) — it asks the server to shut down gracefully (child processes included). To change the port, copy `.env.example` to `.env` and set `LLOOM_WEB_PORT`. Your data lives in `data/` next to the binary; to upgrade, replace everything except `data/` (and your `.env`).
 
 > **Windows SmartScreen**: the binaries are unsigned, so the first launch may show "Windows protected your PC" — click *More info → Run anyway*. **macOS Gatekeeper**: run `xattr -cr LLooM` on the extracted folder once.
+>
+> **Intel Mac**: pick the `darwin-x86_64` archive. The semantic cache (L2) needs ONNX Runtime, which is loaded at runtime: `brew install onnxruntime` once. Skip it and everything else works — L2 is just bypassed (exact cache L1 and routing are unaffected).
 
 **Option B — from source**
 

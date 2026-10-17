@@ -51,7 +51,21 @@ impl SemanticCache {
             }
             TextEmbedding::try_new(options)
                 .map(Mutex::new)
-                .map_err(|e| e.to_string())
+                .map_err(|e| {
+                    let msg = e.to_string();
+                    // Intel Mac 构建走 ort load-dynamic：dylib 缺失时错误文本指向
+                    // dlopen 失败。聊天会静默降级无 L2，这里给一条可执行的修复提示。
+                    if cfg!(all(target_os = "macos", target_arch = "x86_64"))
+                        && msg.contains("libonnxruntime")
+                    {
+                        eprintln!(
+                            "[core] L2 语义缓存不可用：{msg}\n\
+                             [core] Intel Mac 版需 ONNX Runtime：brew install onnxruntime\n\
+                             [core] （不装也能用：L1 精确缓存与云端/本地模型路由不受影响）"
+                        );
+                    }
+                    msg
+                })
         });
         let model = result.as_ref().map_err(Clone::clone)?;
         model

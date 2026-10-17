@@ -13,6 +13,10 @@
 # 说明：
 #   - Linux 用 ubuntu-24.04：ort 预编译静态库按 glibc≥2.38 / GCC 13 工具链构建（pykeio/ort#523），
 #     22.04 链接报 __isoc23_strtoll 未定义；产物 glibc 底线实际由该静态库决定，不因 runner 而变。
+#   - Intel Mac（darwin-x86_64）：pyke 不分发该 target 的 ORT 预编译库，lloom-core 的 Cargo.toml
+#     仅此 target 切 fastembed/ort-load-dynamic——运行期 dlopen libonnxruntime.dylib（brew install
+#     onnxruntime；缺失时 L2 语义缓存自动降级，L1/路由不受影响）。故 macos-13 构建前装 brew 包，
+#     既供 CI 冒烟也锁定产物可加载版本。arm64 runner 亦可 --target x86_64-apple-darwin 交叉产出。
 #   - Ollama 不捆绑；macOS 产物未签名（用户首次运行需 xattr -cr 绕 Gatekeeper）。
 
 name: release
@@ -57,11 +61,29 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install ONNX Runtime (Intel macOS only — runtime dlopen target)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        run: brew install onnxruntime
+
       - name: Build Rust (release)
         run: cargo build --workspace --release
 
       - name: Package
         run: ${{ matrix.pkg }}
+
+      - name: Smoke Intel build (load-dynamic dylib resolves)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        run: |
+          # load-dynamic：二进制只含 dlopen 引用，不链 .dylib。用 brew 装的
+          # libonnxruntime.dylib 验证 ORT_DYLIB_PATH 可定位（仅 --help 冒烟，
+          # 真正 dlopen 发生在首次语义缓存调用）。
+          DYLIB="$(ls /opt/homebrew/lib/libonnxruntime.dylib /usr/local/lib/libonnxruntime.dylib 2>/dev/null | head -1)"
+          if [ -n "$DYLIB" ]; then
+            LLOOM_ORT_DYLIB_PATH="$DYLIB" ./target/release/lloom-server --help >/dev/null \
+              && echo "smoke ok (dylib: $DYLIB)"
+          else
+            echo "smoke skipped: no brew dylib found"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

@@ -20,6 +20,20 @@ futures = "0.3"
 bytes = "1"
 tower-http = { version = "0.6", features = ["fs"] }
 sha2 = "0.10"
-fastembed = "7.1"
 rand = "0.9"
 webbrowser = "1.2.4"
+
+# 语义缓存（FastEmbed + ONNX Runtime）。除 Intel Mac 外全平台走 ort 预编译静态库；
+# x86_64-apple-darwin 官方不分发预编译 ORT（ort-sys dist.tsv 无该 target），
+# 仅此 target 切 ort-load-dynamic：编译期不链 ORT，运行期 dlopen 用户提供的
+# libonnxruntime.dylib（brew install onnxruntime；缺失时 L2 自动绕过，L1/云路由不受影响）。
+# 注意 target-specific 表不继承通用表，故 fastembed 在两个 target 表中各写一份。
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+fastembed = { version = "7.1", default-features = false, features = [
+  "ort-load-dynamic",
+  "hf-hub-native-tls",
+  "image-models",
+] }
+
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+fastembed = "7.1"

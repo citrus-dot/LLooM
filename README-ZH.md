@@ -49,6 +49,8 @@
 停止：双击 `stop`（`stop.bat` / `stop.sh`）——脚本会请求服务端优雅关闭（连同其拉起的子进程）。改端口：复制 `.env.example` 为 `.env` 后设 `LLOOM_WEB_PORT`。数据都在二进制旁的 `data/` 目录里；升级时替换整个目录但保留 `data/`（和你的 `.env`）即可。
 
 > **Windows SmartScreen**：二进制未签名，首次运行可能提示「Windows 已保护你的电脑」——点 *更多信息 → 仍要运行*。**macOS Gatekeeper**：对解压后的目录执行一次 `xattr -cr LLooM`。
+>
+> **Intel 芯片 Mac**：选 `darwin-x86_64` 包。L2 语义缓存的 ONNX Runtime 为运行期加载，需先执行 `brew install onnxruntime`；不装也能正常使用——仅 L2 语义缓存自动绕过（L1 精确缓存与路由不受影响）。
 
 **方式 B — 源码运行**
 
