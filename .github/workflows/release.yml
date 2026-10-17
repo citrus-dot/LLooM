@@ -35,7 +35,9 @@ jobs:
         include:
           - os: ubuntu-24.04
             pkg: bash scripts/package.sh
-          - os: macos-latest
+          - os: macos-latest        # Apple Silicon (macos-14+ 均为 M 系)
+            pkg: bash scripts/package.sh
+          - os: macos-13            # 最后的 Intel runner，产 darwin-x86_64 包
             pkg: bash scripts/package.sh
           - os: windows-latest
             pkg: cmd /c scripts\package.bat
