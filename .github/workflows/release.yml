@@ -68,12 +68,14 @@ jobs:
         run: rustup target add x86_64-apple-darwin
 
       - name: Build WebUI
+        shell: bash
         run: |
           cd webui
           npm ci
           npm run build
 
       - name: Build Rust (release)
+        shell: bash
         run: |
           if [ "${{ runner.os }}" = "macOS" ] && [ "${{ matrix.arch }}" = "x86_64" ]; then
             cargo build --workspace --release --target x86_64-apple-darwin
@@ -82,6 +84,7 @@ jobs:
           fi
 
       - name: Package
+        shell: bash
         run: |
           if [ "${{ runner.os }}" = "macOS" ] && [ "${{ matrix.arch }}" = "x86_64" ]; then
             ${{ matrix.pkg }} --target x86_64-apple-darwin
@@ -91,6 +94,7 @@ jobs:
 
       - name: Smoke Intel build (load-dynamic wiring present)
         if: runner.os == 'macOS' && matrix.arch == 'x86_64'
+        shell: bash
         run: |
           # load-dynamic：编译期不链 .dylib，二进制应含 dlopen 目标名与中文提示；
           # 真正 dlopen 发生在用户机首次语义缓存调用，此处只验链接形态。
