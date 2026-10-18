@@ -70,6 +70,8 @@ cargo run -p lloom-server                  # WebUI 在 :7861
 
 **WebUI** — 打开 [http://localhost:7861](http://localhost:7861)：服务状态、聊天、模型、用量、定价、设置。
 
+安全提示：`/api/*` 管理接口和 `/metrics` 仅允许本机访问；如需在局域网使用 `/v1/*` 代理，须先在本机 WebUI 创建 API Key。CLI/TUI 可用 `LLOOM_SERVER_URL` 指定服务地址，或通过 `LLOOM_WEB_PORT` 指定本机端口。
+
 **CLI**
 
 ```bash

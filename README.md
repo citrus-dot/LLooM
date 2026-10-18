@@ -71,6 +71,8 @@ The server (`:7861`) is the single entry point. Cloud providers are called nativ
 
 **WebUI** — open [http://localhost:7861](http://localhost:7861): service status, chat, models, usage, pricing, settings.
 
+Security: `/api/*` management endpoints and `/metrics` are loopback-only. To use the `/v1/*` proxy over a LAN, create an API key locally first. CLI/TUI accept `LLOOM_SERVER_URL` or `LLOOM_WEB_PORT` to select the server.
+
 **CLI**
 
 ```bash

@@ -548,7 +548,7 @@ export async function streamOrchestrate(
     body: JSON.stringify(body),
   });
   if (!res.ok || !res.body) {
-    onEvent({ event: 'error', data: { detail: `HTTP ${res.status}` } });
+    onEvent({ event: 'error', data: { error: true, detail: `HTTP ${res.status}` } });
     return;
   }
   const reader = res.body.getReader();
@@ -557,9 +557,9 @@ export async function streamOrchestrate(
   let eventName: string | null = null;
   let dataBuf = '';
   const flush = () => {
-    if (eventName !== null && dataBuf) {
+    if (dataBuf) {
       try {
-        onEvent({ event: eventName, data: JSON.parse(dataBuf) });
+        onEvent({ event: eventName ?? 'message', data: JSON.parse(dataBuf) });
       } catch {
         /* ignore malformed */
       }

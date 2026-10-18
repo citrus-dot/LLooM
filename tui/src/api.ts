@@ -1,6 +1,8 @@
 // LLooM TUI REST client — all data flows through the lloom-server REST API.
 
-const BASE = "http://localhost:7861"
+declare const process: { env: Record<string, string | undefined> }
+
+const BASE = (process.env.LLOOM_SERVER_URL || `http://127.0.0.1:${process.env.LLOOM_WEB_PORT || "7861"}`).replace(/\/$/, "")
 
 export interface ServiceStatus {
   name: string
@@ -237,17 +239,24 @@ export async function chatStream(messages: ChatMessage[]): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages }),
   })
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
   const text = await res.text()
   let out = ""
+  let completed = ""
   for (const line of text.split("\n")) {
     if (line.startsWith("data: ")) {
       try {
         const v = JSON.parse(line.slice(6))
-        if (v.content) out += v.content
-      } catch {}
+        if (v.error) throw new Error(v.detail || "模型调用失败")
+        if (v.chunk) out += v.chunk
+        if (v.done && typeof v.content === "string") completed = v.content
+      } catch (e) {
+        if (e instanceof SyntaxError) continue
+        throw e
+      }
     }
   }
-  return out
+  return completed || out
 }
 
 // SSE orchestrate stream → parsed events
@@ -270,6 +279,7 @@ export async function orchestrateStream(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, history }),
   })
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
   if (!res.body) {
     const text = await res.text()
     return parseSse(text, onEvent)

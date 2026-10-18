@@ -119,10 +119,13 @@ fn main() {
                 println!("[core] all services stopped.");
             };
 
-            axum::serve(listener, router)
-                .with_graceful_shutdown(shutdown_signal)
-                .await
-                .ok();
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal)
+            .await
+            .ok();
             // Ensure the whole process exits even if background tasks linger.
             std::process::exit(0);
         });

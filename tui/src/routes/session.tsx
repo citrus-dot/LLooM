@@ -208,7 +208,7 @@ export function Session(props: { setStatus: (s: string) => void }) {
           }
         })
       } catch {
-        streaming = await chatStream(history)
+        streaming = await chatStream([...history, userMsg])
       }
 
       const parts: string[] = []
@@ -433,4 +433,3 @@ export function Session(props: { setStatus: (s: string) => void }) {
     </box>
   )
 }
-

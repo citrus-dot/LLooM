@@ -268,7 +268,17 @@ enum BudgetsCmd {
     },
 }
 
-const BASE: &str = "http://localhost:7861";
+fn server_base() -> String {
+    std::env::var("LLOOM_SERVER_URL")
+        .unwrap_or_else(|_| {
+            format!(
+                "http://127.0.0.1:{}",
+                std::env::var("LLOOM_WEB_PORT").unwrap_or_else(|_| "7861".into())
+            )
+        })
+        .trim_end_matches('/')
+        .to_string()
+}
 
 #[tokio::main]
 async fn main() {
@@ -660,7 +670,7 @@ async fn cmd_bench_sweep(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>
 // ── helpers ──
 
 async fn get(client: &Client, path: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let res = client.get(format!("{BASE}{path}")).send().await?;
+    let res = client.get(format!("{}{path}", server_base())).send().await?;
     if !res.status().is_success() {
         return Err(format!("HTTP {}", res.status()).into());
     }
@@ -673,7 +683,7 @@ async fn post(
     body: Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let res = client
-        .post(format!("{BASE}{path}"))
+        .post(format!("{}{path}", server_base()))
         .json(&body)
         .send()
         .await?;
@@ -684,7 +694,7 @@ async fn post(
 }
 
 async fn del(client: &Client, path: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let res = client.delete(format!("{BASE}{path}")).send().await?;
+    let res = client.delete(format!("{}{path}", server_base())).send().await?;
     if !res.status().is_success() {
         return Err(format!("HTTP {}", res.status()).into());
     }
@@ -841,15 +851,14 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
                 return Ok(());
             }
             let res = client
-                .put(format!("{BASE}/api/models/{}", urlencode(&name)))
+                .put(format!("{}/api/models/{}", server_base(), urlencode(&name)))
                 .json(&Value::Object(updates))
                 .send()
                 .await?;
-            if res.status().is_success() {
-                println!("✓ 模型已更新: {name}");
-            } else {
-                println!("✗ 更新失败 (HTTP {})", res.status());
+            if !res.status().is_success() {
+                return Err(format!("更新模型失败 (HTTP {}): {}", res.status(), res.text().await?).into());
             }
+            println!("✓ 模型已更新: {name}");
         }
         ModelsCmd::Remove { name } => {
             let r = del(client, &format!("/api/models/{}", urlencode(&name))).await?;
@@ -1052,7 +1061,7 @@ async fn stream_chat(
     use futures_util::StreamExt;
     use std::io::Write;
     let res = client
-        .post(format!("{BASE}/api/chat/stream"))
+        .post(format!("{}/api/chat/stream", server_base()))
         .json(&serde_json::json!({ "messages": messages }))
         .send()
         .await?;
@@ -1070,12 +1079,20 @@ async fn stream_chat(
             let line = line.trim_end_matches(['\r', '\n']);
             if let Some(data) = line.strip_prefix("data: ") {
                 if let Ok(v) = serde_json::from_str::<Value>(data) {
-                    if let Some(content) = v["content"].as_str() {
-                        print!("{content}");
+                    if let Some(chunk) = v["chunk"].as_str() {
+                        print!("{chunk}");
                         std::io::stdout().flush()?;
-                        reply.push_str(content);
+                        reply.push_str(chunk);
+                    } else if v["done"].as_bool().unwrap_or(false) {
+                        if let Some(content) = v["content"].as_str() {
+                            if reply.is_empty() {
+                                print!("{content}");
+                                std::io::stdout().flush()?;
+                            }
+                            reply = content.to_string();
+                        }
                     } else if v["error"].as_bool().unwrap_or(false) {
-                        eprintln!("\n✗ 请求失败: {}", v["detail"].as_str().unwrap_or(""));
+                        return Err(format!("请求失败: {}", v["detail"].as_str().unwrap_or("未知错误")).into());
                     }
                 }
             }
@@ -1130,7 +1147,7 @@ async fn cmd_conversation(
         ConversationCmd::Rename { id, title } => {
             let resolved = resolve_session_id(client, &id).await?;
             let r = client
-                .put(format!("{BASE}/api/conversations/{resolved}"))
+                .put(format!("{}/api/conversations/{resolved}", server_base()))
                 .json(&serde_json::json!({ "title": title }))
                 .send()
                 .await?
@@ -1182,7 +1199,7 @@ fn print_proxy_info(cfg: &Value) {
         if auth {
             format!("启用（{key_count} 个 API Key）")
         } else {
-            "未鉴权（任何能访问该端口的程序都可调用；仅环回绑定时可接受）".to_string()
+            "未配置 Key（仅允许本机调用；远程接入须先创建 API Key）".to_string()
         }
     );
     println!();
@@ -1204,7 +1221,7 @@ async fn cmd_orchestrate(client: &Client, query: &str) -> Result<(), Box<dyn std
     use std::io::Write;
 
     let res = client
-        .post(format!("{BASE}/api/orchestrate/stream"))
+        .post(format!("{}/api/orchestrate/stream", server_base()))
         .json(&serde_json::json!({ "query": query, "history": [] }))
         .send()
         .await?;
@@ -1310,7 +1327,7 @@ fn urlencode(s: &str) -> String {
     // Simple percent-encoding for path segments (model names, scope ids).
     let mut out = String::new();
     for c in s.chars() {
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/' {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
             out.push(c);
         } else {
             let mut buf = [0u8; 4];

@@ -15,15 +15,16 @@ use crate::pricing;
 use crate::router;
 use crate::security;
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post, put};
-use axum::{Json, Router};
+use axum::{middleware, Json, Router};
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
@@ -331,16 +332,40 @@ async fn delete_budget(
     Ok(Json(json!({ "deleted": deleted })))
 }
 
+#[derive(Deserialize)]
+struct BudgetCheckQuery {
+    scope: String,
+    scope_id: String,
+    prospective_cost: Option<f64>,
+}
+
+#[cfg(test)]
+mod budget_query_tests {
+    use super::BudgetCheckQuery;
+    use axum::{extract::Query, http::Uri};
+
+    #[test]
+    fn prospective_cost_is_a_number() {
+        let uri: Uri = "/api/budgets/check?scope=user&scope_id=test&prospective_cost=1.25"
+            .parse()
+            .unwrap();
+        let Query(q) = Query::<BudgetCheckQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(q.prospective_cost, Some(1.25));
+    }
+}
+
 async fn check_budget(
     State(state): State<AppState>,
-    Query(q): Query<Value>,
+    Query(q): Query<BudgetCheckQuery>,
 ) -> Result<Json<Value>> {
-    let scope = q.get("scope").and_then(|v| v.as_str()).unwrap_or("");
-    let scope_id = q.get("scope_id").and_then(|v| v.as_str()).unwrap_or("");
-    let prospective = q
-        .get("prospective_cost")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
+    let scope = q.scope.as_str();
+    let scope_id = q.scope_id.as_str();
+    let prospective = q.prospective_cost.unwrap_or(0.0);
+    if !prospective.is_finite() || prospective < 0.0 {
+        return Err(AppError::InvalidRequest(
+            "prospective_cost 必须是非负有限数字".into(),
+        ));
+    }
     let budget = state.db.get_budget(scope, scope_id)?;
     let (within, spent) = match &budget {
         Some(b) => {
@@ -1864,6 +1889,53 @@ async fn probe_down_models(db: &db::Db) {
 
 // ── Router ──
 
+fn remote_api_allowed(path: &str, local: bool, has_api_keys: bool) -> bool {
+    local
+        || path == "/api/health"
+        || !(path.starts_with("/api/")
+            || path == "/metrics"
+            || (path.starts_with("/v1/") && !has_api_keys))
+}
+
+/// The browser management API is local-only. Remote OpenAI-compatible clients
+/// may use /v1 only after an API key has been configured locally.
+async fn remote_api_guard(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let path = request.uri().path();
+    let local = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_some_and(|ConnectInfo(addr)| addr.ip().is_loopback());
+    let has_api_keys = if !local && path.starts_with("/v1/") {
+        state.db.list_api_keys().is_ok_and(|keys| !keys.is_empty())
+    } else {
+        false
+    };
+    if !remote_api_allowed(path, local, has_api_keys) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
+}
+
+#[cfg(test)]
+mod remote_api_tests {
+    use super::remote_api_allowed;
+
+    #[test]
+    fn management_is_local_only_and_remote_proxy_requires_keys() {
+        assert!(remote_api_allowed("/api/shutdown", true, false));
+        assert!(!remote_api_allowed("/api/shutdown", false, true));
+        assert!(!remote_api_allowed("/api/api-keys", false, true));
+        assert!(!remote_api_allowed("/metrics", false, true));
+        assert!(!remote_api_allowed("/v1/models", false, false));
+        assert!(remote_api_allowed("/v1/models", false, true));
+        assert!(remote_api_allowed("/api/health", false, false));
+    }
+}
+
 pub fn build_router(state: AppState) -> Router {
     // Serve the frontend: static assets from the ui dir, SPA fallback to index.html.
     let ui = config::ui_dir().unwrap_or_default();
@@ -1972,6 +2044,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/system/open-web", post(open_web))
         .route("/api/shutdown", post(shutdown_server))
         // Semantic cache management
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            remote_api_guard,
+        ))
         .with_state(state)
 }
 
