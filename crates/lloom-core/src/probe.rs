@@ -282,7 +282,7 @@ async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::e
 
 /// 探针成功记账（task_type='probe'；act_cost 由 Rust 按 PriceSpec 分项计算）。
 /// 返回实际成本（USD）供预算扣费。
-fn record_probe_usage(
+pub(crate) fn record_probe_usage(
     db: &crate::db::Db,
     m: &Model,
     usage: &pricing::UsageDetail,
@@ -328,7 +328,7 @@ fn record_probe_usage(
 }
 
 /// 探针失败记账：cost=-1 哨兵（stats 用 cost<0 计数）。
-fn record_probe_failure(db: &crate::db::Db, m: &Model) {
+pub(crate) fn record_probe_failure(db: &crate::db::Db, m: &Model) {
     let _ = db.insert_usage(&db::UsageRecord {
         model_name: &m.name,
         user_id: "default",

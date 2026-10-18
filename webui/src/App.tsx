@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Layout, Menu, Typography } from 'antd';
+import { Alert, Layout, Menu, Typography } from 'antd';
 import {
   DashboardOutlined,
   LineChartOutlined,
@@ -33,6 +33,13 @@ const NAV_ITEMS = [
 
 export default function App() {
   const [page, setPage] = useState<PageKey>('overview');
+  const [remoteBlocked, setRemoteBlocked] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/models').then((res) => {
+      if (res.status === 403) setRemoteBlocked(true);
+    }).catch(() => { /* Other connection errors are shown by the current page. */ });
+  }, []);
 
   // Light beforeunload warning: reminds the user that closing/refreshing the
   // tab will lose the connection to the local server. (Modern browsers only
@@ -63,6 +70,16 @@ export default function App() {
       </Sider>
       <Layout>
         <Content style={{ padding: 24, overflow: 'auto' }}>
+          {remoteBlocked && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="管理界面仅允许在服务器本机访问"
+              description="请在运行 LLooM 的电脑上打开 WebUI；局域网客户端如需使用 /v1 代理，请先在本机配置 API Key。"
+            />
+          )}
+          {!remoteBlocked && <>
           <Typography.Title level={3} style={{ marginTop: 0, marginBottom: 16 }}>
             {NAV_ITEMS.find((i) => i.key === page)?.label}
           </Typography.Title>
@@ -73,6 +90,7 @@ export default function App() {
           {page === 'pricing' && <PricingPage />}
           {page === 'keys' && <ApiKeysPage />}
           {page === 'settings' && <SettingsPage />}
+          </>}
         </Content>
       </Layout>
     </Layout>

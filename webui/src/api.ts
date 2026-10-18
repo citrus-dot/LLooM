@@ -36,6 +36,7 @@ export interface Model {
   capability_tier: number;
   quality_score: number;
   health_state: string;
+  health_checked_at?: string | null;
 }
 
 /** POST /api/models 入参（kind: local|cloud）。*/
@@ -132,9 +133,15 @@ export interface SseEvent {
 
 // ── HTTP helpers ──
 
+async function httpError(res: Response): Promise<Error> {
+  const data = await res.clone().json().catch(() => null);
+  const detail = typeof data?.error === 'string' ? data.error : `${res.status} ${res.statusText}`;
+  return new Error(detail);
+}
+
 async function jget<T>(path: string): Promise<T> {
   const res = await fetch(path);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw await httpError(res);
   return res.json();
 }
 
@@ -144,13 +151,13 @@ async function jpost<T>(path: string, body?: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? '{}' : JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw await httpError(res);
   return res.json();
 }
 
 async function jdelete<T>(path: string): Promise<T> {
   const res = await fetch(path, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw await httpError(res);
   return res.json();
 }
 
@@ -160,7 +167,7 @@ async function jput<T>(path: string, body?: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? '{}' : JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw await httpError(res);
   return res.json();
 }
 
@@ -168,6 +175,19 @@ async function jput<T>(path: string, body?: unknown): Promise<T> {
 
 export function getServicesStatus(): Promise<ServicesStatus> {
   return jget('/api/services/status');
+}
+
+export interface RuntimeSettings {
+  health_probe_sec: number;
+  shadow_ratio: number;
+}
+
+export function getRuntimeSettings(): Promise<RuntimeSettings> {
+  return jget('/api/settings/runtime');
+}
+
+export function saveRuntimeSettings(settings: RuntimeSettings): Promise<RuntimeSettings> {
+  return jput('/api/settings/runtime', settings);
 }
 
 export function shutdownAll(): Promise<{ shutting_down: boolean }> {
@@ -297,6 +317,17 @@ export function removeModel(name: string): Promise<{ deleted: boolean }> {
 
 export function updateModel(name: string, patch: ModelPatchPayload): Promise<{ updated: boolean }> {
   return jput(`/api/models/${encodeURIComponent(name)}`, patch);
+}
+
+export interface ModelProbeResult {
+  ok: boolean;
+  detail: string;
+  health_state: string;
+  latency_ms: number;
+}
+
+export function probeModel(name: string): Promise<ModelProbeResult> {
+  return jpost(`/api/models/${encodeURIComponent(name)}/probe`);
 }
 
 // ── Stats / usage ──

@@ -23,6 +23,9 @@ sha2 = "0.10"
 rand = "0.9"
 webbrowser = "1.2.4"
 
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
 # 语义缓存（FastEmbed + ONNX Runtime）。除 Intel Mac 外全平台走 ort 预编译静态库；
 # x86_64-apple-darwin 官方不分发预编译 ORT（ort-sys dist.tsv 无该 target），
 # 仅此 target 切 ort-load-dynamic：编译期不链 ORT，运行期 dlopen 用户提供的

@@ -1070,10 +1070,11 @@ async fn stream_chat(
     }
     let mut stream = res.bytes_stream();
     let mut buf = String::new();
+    let mut pending_utf8 = Vec::new();
     let mut reply = String::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
-        buf.push_str(&String::from_utf8_lossy(&chunk));
+        append_utf8(&mut buf, &mut pending_utf8, &chunk)?;
         while let Some(pos) = buf.find('\n') {
             let line: String = buf.drain(..=pos).collect();
             let line = line.trim_end_matches(['\r', '\n']);
@@ -1097,6 +1098,9 @@ async fn stream_chat(
                 }
             }
         }
+    }
+    if !pending_utf8.is_empty() {
+        return Err("聊天流以不完整的 UTF-8 字符结束".into());
     }
     Ok(reply)
 }
@@ -1233,11 +1237,12 @@ async fn cmd_orchestrate(client: &Client, query: &str) -> Result<(), Box<dyn std
     // deltas as they arrive (instead of buffering the whole response first).
     let mut stream = res.bytes_stream();
     let mut buf = String::new();
+    let mut pending_utf8 = Vec::new();
     let mut current_event = String::new();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
-        buf.push_str(&String::from_utf8_lossy(&chunk));
+        append_utf8(&mut buf, &mut pending_utf8, &chunk)?;
         while let Some(pos) = buf.find('\n') {
             let line: String = buf.drain(..=pos).collect();
             let line = line.trim_end_matches(['\r', '\n']);
@@ -1247,6 +1252,9 @@ async fn cmd_orchestrate(client: &Client, query: &str) -> Result<(), Box<dyn std
                 handle_orchestrate_event(&current_event, data);
             }
         }
+    }
+    if !pending_utf8.is_empty() {
+        return Err("编排流以不完整的 UTF-8 字符结束".into());
     }
     // Flush any trailing line without a newline terminator.
     if let Some(data) = buf.strip_prefix("data: ") {
@@ -1323,6 +1331,27 @@ fn handle_orchestrate_event(ev: &str, data: &str) {
 
 // ── helpers ──
 
+/// Preserve a UTF-8 code point split across HTTP chunks instead of replacing it
+/// with U+FFFD (common for Chinese streaming responses).
+fn append_utf8(buf: &mut String, pending: &mut Vec<u8>, chunk: &[u8]) -> Result<(), std::str::Utf8Error> {
+    pending.extend_from_slice(chunk);
+    match std::str::from_utf8(pending) {
+        Ok(text) => {
+            buf.push_str(text);
+            pending.clear();
+        }
+        Err(err) => {
+            let valid = err.valid_up_to();
+            if err.error_len().is_some() {
+                return Err(err);
+            }
+            buf.push_str(std::str::from_utf8(&pending[..valid])?);
+            pending.drain(..valid);
+        }
+    }
+    Ok(())
+}
+
 fn urlencode(s: &str) -> String {
     // Simple percent-encoding for path segments (model names, scope ids).
     let mut out = String::new();
@@ -1337,4 +1366,21 @@ fn urlencode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod stream_utf8_tests {
+    use super::append_utf8;
+
+    #[test]
+    fn split_chinese_character_survives_chunks() {
+        let mut buf = String::new();
+        let mut pending = Vec::new();
+        let bytes = "data: {\"chunk\":\"你好\"}\n\n".as_bytes();
+        for byte in bytes {
+            append_utf8(&mut buf, &mut pending, &[*byte]).unwrap();
+        }
+        assert_eq!(buf, "data: {\"chunk\":\"你好\"}\n\n");
+        assert!(pending.is_empty());
+    }
 }

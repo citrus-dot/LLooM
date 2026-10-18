@@ -1778,6 +1778,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
+ "tower",
  "tower-http",
  "webbrowser",
 ]

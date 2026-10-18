@@ -713,6 +713,18 @@ impl Db {
             .map_err(Into::into)
     }
 
+    pub fn list_model_health_checks(&self) -> Result<std::collections::HashMap<String, String>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT name, health_checked_at FROM models WHERE health_checked_at IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()
+            .map_err(Into::into)
+    }
+
     pub fn deactivate_model(&self, name: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(

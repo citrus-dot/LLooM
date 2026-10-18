@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Select, message, Popconfirm } from 'antd';
 import { PlusOutlined, ReloadOutlined, EditOutlined } from '@ant-design/icons';
-import { getModels, addModel, updateModel, removeModel } from '../api';
-import type { Model, ModelCreatePayload, ModelPatchPayload } from '../api';
+import { getModels, addModel, updateModel, removeModel, probeModel } from '../api';
+import type { Model, ModelCreatePayload, ModelPatchPayload, ModelProbeResult } from '../api';
 
 const CLOUD_PROVIDERS = [
   { value: 'dashscope', label: '阿里云百炼 (DashScope)' },
@@ -43,6 +43,8 @@ export default function ModelsPage() {
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Model | null>(null);
+  const [probing, setProbing] = useState<string | null>(null);
+  const [probeResults, setProbeResults] = useState<Record<string, ModelProbeResult>>({});
   const [form] = Form.useForm();
   const kind = Form.useWatch('kind', form) ?? 'cloud';
   const compat = Form.useWatch('compat', form);
@@ -146,7 +148,12 @@ export default function ModelsPage() {
   const handleRemove = async (name: string) => {
     try {
       await removeModel(name);
-      message.success('模型已删除');
+      setProbeResults((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      message.success('模型已停用');
       refresh();
     } catch (e) {
       message.error(`删除失败: ${e}`);
@@ -156,10 +163,30 @@ export default function ModelsPage() {
   const handleRestore = async (name: string) => {
     try {
       await updateModel(name, { is_active: 1 });
+      setProbeResults((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
       message.success('模型已恢复');
       refresh();
     } catch (e) {
       message.error(`恢复失败: ${e}`);
+    }
+  };
+
+  const handleProbe = async (name: string) => {
+    setProbing(name);
+    try {
+      const result = await probeModel(name);
+      setProbeResults((prev) => ({ ...prev, [name]: result }));
+      if (result.ok) message.success(`${name} 调用成功（${result.latency_ms} ms）`);
+      else message.error(`${name} 测试失败：${result.detail}`);
+      await refresh();
+    } catch (e) {
+      message.error(`测活失败: ${e}`);
+    } finally {
+      setProbing(null);
     }
   };
 
@@ -185,6 +212,12 @@ export default function ModelsPage() {
           <Tag color={HEALTH_STATES[m.health_state]?.color ?? 'default'}>
             健康：{HEALTH_STATES[m.health_state]?.label ?? m.health_state ?? '未检测'}
           </Tag>
+          {m.health_checked_at && <span title="上次健康状态记录时间">记录于 {m.health_checked_at}</span>}
+          {probeResults[m.name] && (
+            <Tag color={probeResults[m.name].ok ? 'green' : 'red'}>
+              本次检测：{probeResults[m.name].ok ? `${probeResults[m.name].latency_ms} ms` : '失败'}
+            </Tag>
+          )}
         </Space>
       ),
     },
@@ -212,6 +245,13 @@ export default function ModelsPage() {
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(m)}>
             编辑
           </Button>
+          {m.is_active && (
+            <Popconfirm title="发起最小模型请求？云端模型可能产生少量费用" onConfirm={() => handleProbe(m.name)}>
+              <Button size="small" loading={probing === m.name} disabled={probing !== null && probing !== m.name}>
+                立即测活
+              </Button>
+            </Popconfirm>
+          )}
           {m.is_active ? (
             <Popconfirm title={`确认停用 ${m.name}？`} onConfirm={() => handleRemove(m.name)}>
               <Button size="small" danger>停用</Button>

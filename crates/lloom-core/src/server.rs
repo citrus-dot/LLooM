@@ -177,6 +177,42 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok", "version": "2.0.0" }))
 }
 
+#[derive(Deserialize)]
+struct RuntimeSettingsUpdate {
+    health_probe_sec: u64,
+    shadow_ratio: f64,
+}
+
+async fn runtime_settings(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({
+        "health_probe_sec": config::health_probe_sec(&state.db),
+        "shadow_ratio": config::shadow_ratio(&state.db),
+    }))
+}
+
+async fn update_runtime_settings(
+    State(state): State<AppState>,
+    Json(body): Json<RuntimeSettingsUpdate>,
+) -> Result<Json<Value>> {
+    if !(5..=86400).contains(&body.health_probe_sec) {
+        return Err(AppError::InvalidRequest(
+            "健康探测间隔必须在 5～86400 秒之间".into(),
+        ));
+    }
+    if !body.shadow_ratio.is_finite() || !(0.0..=1.0).contains(&body.shadow_ratio) {
+        return Err(AppError::InvalidRequest(
+            "影子采样比例必须在 0～1 之间".into(),
+        ));
+    }
+    state
+        .db
+        .set_setting("health.probe_sec", &body.health_probe_sec.to_string())?;
+    state
+        .db
+        .set_setting("routing.shadow_ratio", &body.shadow_ratio.to_string())?;
+    Ok(runtime_settings(State(state)).await)
+}
+
 // ── Models ──
 
 #[derive(Deserialize)]
@@ -206,12 +242,17 @@ async fn list_models(
     Query(q): Query<ModelListQuery>,
 ) -> Result<Json<Value>> {
     let active_only = q.active_only.unwrap_or(true);
-    let dtos: Vec<model_dto::ModelDto> = state
+    let checked_at = state.db.list_model_health_checks()?;
+    let dtos: Vec<Value> = state
         .db
         .list_models(active_only)?
         .iter()
-        .map(model_dto::ModelDto::from)
-        .collect();
+        .map(|model| {
+            let mut dto = serde_json::to_value(model_dto::ModelDto::from(model))?;
+            dto["health_checked_at"] = json!(checked_at.get(&model.name));
+            Ok(dto)
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(Json(json!({ "models": dtos })))
 }
 
@@ -252,6 +293,52 @@ async fn delete_model(
     state.db.find_model(&name, false)?;
     state.db.deactivate_model(&name)?;
     Ok(Json(json!({ "deleted": true })))
+}
+
+/// Manual, billable one-token connectivity check; never routes to another model.
+async fn probe_model(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>> {
+    let model = state.db.find_model(&name, true)?;
+    if matches!(model.backend, Backend::Cloud { .. })
+        && config::api_key_for(model.api_key_env()).is_empty()
+    {
+        return Err(AppError::InvalidRequest("模型未配置可用的 API Key".into()));
+    }
+    if crate::health::current_state(&name) == "unknown" && model.health_state != "unknown" {
+        crate::health::seed_state(&state.db, &name, &model.health_state);
+    }
+    let started = std::time::Instant::now();
+    let spec = ModelSpec::from(&model);
+    let probe_msg = json!({"role":"user","content":"ping"});
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        ai_client::chat(&spec, &[probe_msg], 1, 0.0, None),
+    )
+    .await;
+    let (ok, detail) = match result {
+        Ok(Ok(reply)) => {
+            crate::probe::record_probe_usage(&state.db, &model, &reply.usage, false);
+            (true, "调用成功".to_string())
+        }
+        Ok(Err(error)) => {
+            crate::probe::record_probe_failure(&state.db, &model);
+            (false, error.to_string())
+        }
+        Err(_) => {
+            crate::probe::record_probe_failure(&state.db, &model);
+            (false, "探测超时（20 秒）".to_string())
+        }
+    };
+    let health_state = crate::health::record_outcome(&state.db, &name, ok);
+    state.db.set_model_health(&name, &health_state)?;
+    Ok(Json(json!({
+        "ok": ok,
+        "detail": detail,
+        "health_state": health_state,
+        "latency_ms": started.elapsed().as_millis(),
+    })))
 }
 
 // ── Usage / Budgets ──
@@ -1871,6 +1958,9 @@ async fn probe_down_models(db: &db::Db) {
                 || !config::api_key_for(m.api_key_env()).is_empty()
         })
     {
+        if crate::health::current_state(&m.name) == "unknown" {
+            crate::health::seed_state(db, &m.name, &m.health_state);
+        }
         // 最小试探：1 token、低温度、仅确认可达（不产生有意义的答复）。
         let spec = ai_client::ModelSpec::from(m);
         let probe_msg = serde_json::json!([{
@@ -1936,6 +2026,184 @@ mod remote_api_tests {
     }
 }
 
+#[cfg(test)]
+mod api_contract_tests {
+    use super::{build_router, AppState, Children};
+    use crate::db::{BudgetInput, Db};
+    use axum::{
+        body::{to_bytes, Body},
+        extract::ConnectInfo,
+        http::{Request, StatusCode},
+    };
+    use serde_json::json;
+    use std::{
+        net::SocketAddr,
+        sync::{Arc, Mutex},
+        time::Instant,
+    };
+    use tower::ServiceExt;
+
+    fn request(path: &str, peer: &str) -> Request<Body> {
+        let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+        request
+    }
+
+    #[tokio::test]
+    async fn actual_http_router_enforces_local_admin_and_budget_amount() {
+        let path = std::env::temp_dir().join(format!(
+            "lloom_api_contract_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = Db::new(&path).unwrap();
+        db.insert_model(&crate::models::Model::fixture("checked-model", "dashscope"))
+            .unwrap();
+        db.set_model_health("checked-model", "up").unwrap();
+        db.upsert_budget(&BudgetInput {
+            scope: "user",
+            scope_id: "contract",
+            max_budget: 1.0,
+            duration: "30d",
+            scope_task_type: None,
+            soft_limit_ratio: None,
+            action_on_exceed: None,
+        })
+        .unwrap();
+        let router = build_router(AppState {
+            children: Arc::new(Mutex::new(Children::default())),
+            started_at: Instant::now(),
+            db,
+        });
+        let remote = "192.0.2.1:9000";
+        let local = "127.0.0.1:9000";
+
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request("/api/models", remote))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request("/v1/models", remote))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request("/api/health", remote))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let path_with_cost =
+            "/api/budgets/check?scope=user&scope_id=contract&prospective_cost=1.25";
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request(path_with_cost, remote))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let response = router
+            .clone()
+            .oneshot(request(path_with_cost, local))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["within_budget"], false);
+        let response = router
+            .clone()
+            .oneshot(request(
+                "/api/budgets/check?scope=user&scope_id=contract&prospective_cost=0.75",
+                local,
+            ))
+            .await
+            .unwrap();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["within_budget"], true);
+        let response = router
+            .clone()
+            .oneshot(request("/api/models", local))
+            .await
+            .unwrap();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["models"][0]["name"], "checked-model");
+        assert!(body["models"][0]["health_checked_at"].is_string());
+        let mut remote_settings = request("/api/settings/runtime", remote);
+        *remote_settings.method_mut() = axum::http::Method::PUT;
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(remote_settings)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let update = |probe_sec: u64, ratio: f64| {
+            let mut request = request("/api/settings/runtime", local);
+            *request.method_mut() = axum::http::Method::PUT;
+            request.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                "application/json".parse().unwrap(),
+            );
+            *request.body_mut() =
+                Body::from(json!({"health_probe_sec":probe_sec,"shadow_ratio":ratio}).to_string());
+            request
+        };
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(update(4, 0.5))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let response = router.clone().oneshot(update(120, 0.25)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["health_probe_sec"], 120);
+        assert_eq!(body["shadow_ratio"], 0.25);
+        let mut remote_probe = request("/api/models/missing/probe", remote);
+        *remote_probe.method_mut() = axum::http::Method::POST;
+        assert_eq!(
+            router.clone().oneshot(remote_probe).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        let mut local_probe = request("/api/models/missing/probe", local);
+        *local_probe.method_mut() = axum::http::Method::POST;
+        assert_eq!(
+            router.clone().oneshot(local_probe).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+        drop(router);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
 pub fn build_router(state: AppState) -> Router {
     // Serve the frontend: static assets from the ui dir, SPA fallback to index.html.
     let ui = config::ui_dir().unwrap_or_default();
@@ -1946,12 +2214,17 @@ pub fn build_router(state: AppState) -> Router {
         // UI (SPA: static files + fallback to index.html) + health
         .fallback_service(serve_ui)
         .route("/api/health", get(health))
+        .route(
+            "/api/settings/runtime",
+            get(runtime_settings).put(update_runtime_settings),
+        )
         // Models
         .route("/api/models", get(list_models).post(register_model))
         .route(
             "/api/models/{name}",
             get(get_model).put(update_model).delete(delete_model),
         )
+        .route("/api/models/{name}/probe", post(probe_model))
         // Usage + budgets
         .route("/api/usage", get(get_usage))
         .route("/api/usage/reconcile", get(reconcile_report))
