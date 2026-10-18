@@ -561,7 +561,29 @@ impl Db {
                              supports_tools, supports_vision, supports_stream,
                              is_local, priority, needs_calibration)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                  ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+          ON CONFLICT(name) DO UPDATE SET
+              provider = excluded.provider,
+              provider_model = excluded.provider_model,
+              api_base = excluded.api_base,
+              api_key_env = excluded.api_key_env,
+              task_type = excluded.task_type,
+              input_cost_per_token = excluded.input_cost_per_token,
+              output_cost_per_token = excluded.output_cost_per_token,
+              rpm = excluded.rpm,
+              is_active = excluded.is_active,
+              capability_tier = excluded.capability_tier,
+              quality_score = excluded.quality_score,
+              context_window = excluded.context_window,
+              supports_tools = excluded.supports_tools,
+              supports_vision = excluded.supports_vision,
+              supports_stream = excluded.supports_stream,
+              is_local = excluded.is_local,
+              priority = excluded.priority,
+              needs_calibration = excluded.needs_calibration,
+              health_state = 'unknown',
+              health_checked_at = NULL
+          WHERE models.is_active = 0",
             params![
                 row.name,
                 row.provider,
@@ -585,10 +607,11 @@ impl Db {
             ],
         );
         match res {
-            Ok(_) => {
+            Ok(1) => {
                 let _ = self.seed_cold_start_scores(&filled.name);
                 Ok(())
             }
+            Ok(_) => Err(AppError::Conflict(m.name.clone())),
             Err(rusqlite::Error::SqliteFailure(e, _))
                 if e.code == rusqlite::ErrorCode::ConstraintViolation =>
             {
@@ -2386,6 +2409,51 @@ mod model_row_tests {
             }
         ));
         assert_eq!(ModelRow::from(&model), row);
+    }
+}
+
+#[cfg(test)]
+mod model_registration_tests {
+    use super::*;
+
+    #[test]
+    fn deleted_model_can_be_registered_again_with_new_configuration() {
+        let path = std::env::temp_dir().join(format!(
+            "lloom_model_reactivation_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = Db::new(&path).unwrap();
+        let original = Model::fixture("reused-name", "dashscope");
+        db.insert_model(&original).unwrap();
+        assert!(matches!(
+            db.insert_model(&original),
+            Err(AppError::Conflict(_))
+        ));
+
+        let original_id = db.find_model(&original.name, true).unwrap().id;
+        db.set_model_health(&original.name, "down").unwrap();
+        db.deactivate_model(&original.name).unwrap();
+        assert!(db.list_models(true).unwrap().is_empty());
+
+        let mut replacement = Model::fixture("reused-name", "openai");
+        replacement.provider_model = "openai/replacement".into();
+        db.insert_model(&replacement).unwrap();
+
+        let restored = db.find_model(&original.name, true).unwrap();
+        assert_eq!(restored.id, original_id);
+        assert_eq!(restored.provider_model, "openai/replacement");
+        assert_eq!(restored.health_state, "unknown");
+        assert_eq!(db.list_models(false).unwrap().len(), 1);
+        assert!(matches!(
+            db.insert_model(&replacement),
+            Err(AppError::Conflict(_))
+        ));
+        drop(db);
+        std::fs::remove_file(path).unwrap();
     }
 }
 

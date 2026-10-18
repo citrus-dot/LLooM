@@ -572,6 +572,16 @@ mod tests {
     }
 
     #[test]
+    fn patch_restores_inactive_model_without_changing_name() {
+        let mut model = Model::fixture("qwen-plus", "dashscope");
+        model.is_active = 0;
+        let patch: ModelPatch = serde_json::from_str(r#"{"is_active":1}"#).unwrap();
+        let restored = patch.resolve_against(&model).unwrap();
+        assert_eq!(restored.name, model.name);
+        assert_eq!(restored.is_active, 1);
+    }
+
+    #[test]
     fn dto_masks_key() {
         let mut cloud = Model::fixture("qwen-plus", "dashscope");
         if let Backend::Cloud { api_key, .. } = &mut cloud.backend {

@@ -30,6 +30,14 @@ const TASK_TYPES = [
   { value: 'complex_reasoning', label: '复杂分析' },
 ];
 
+const HEALTH_STATES: Record<string, { label: string; color: string }> = {
+  up: { label: '正常', color: 'green' },
+  healthy: { label: '正常', color: 'green' },
+  degraded: { label: '降级', color: 'orange' },
+  down: { label: '不可用', color: 'red' },
+  unknown: { label: '未检测', color: 'default' },
+};
+
 export default function ModelsPage() {
   const [models, setModels] = useState<Model[]>([]);
   const [loading, setLoading] = useState(false);
@@ -42,7 +50,7 @@ export default function ModelsPage() {
   const refresh = async () => {
     setLoading(true);
     try {
-      const { models } = await getModels();
+      const { models } = await getModels(false);
       setModels(models);
     } catch (e) {
       message.error(`加载失败: ${e}`);
@@ -77,6 +85,11 @@ export default function ModelsPage() {
         await updateModel(editing.name, patch);
         message.success('模型已更新');
       } else {
+        const existing = models.find((m) => m.name === v.name);
+        if (existing?.is_active) {
+          message.error('模型名称已存在');
+          return;
+        }
         const body: ModelCreatePayload = {
           name: v.name,
           kind: v.kind,
@@ -114,7 +127,9 @@ export default function ModelsPage() {
 
   const openEdit = (m: Model) => {
     setEditing(m);
+    form.resetFields();
     form.setFieldsValue({
+      name: m.name,
       kind: m.kind,
       compat: m.compat ?? 'ollama',
       provider: m.provider ?? 'dashscope',
@@ -138,6 +153,16 @@ export default function ModelsPage() {
     }
   };
 
+  const handleRestore = async (name: string) => {
+    try {
+      await updateModel(name, { is_active: 1 });
+      message.success('模型已恢复');
+      refresh();
+    } catch (e) {
+      message.error(`恢复失败: ${e}`);
+    }
+  };
+
   const columns = [
     { title: '模型名称', dataIndex: 'name', key: 'name', render: (n: string) => <b>{n}</b> },
     {
@@ -151,6 +176,18 @@ export default function ModelsPage() {
         ),
     },
     { title: '供应商模型', dataIndex: 'provider_model', key: 'provider_model' },
+    {
+      title: '状态',
+      key: 'status',
+      render: (_: unknown, m: Model) => (
+        <Space>
+          <Tag color={m.is_active ? 'green' : 'default'}>{m.is_active ? '已启用' : '已停用'}</Tag>
+          <Tag color={HEALTH_STATES[m.health_state]?.color ?? 'default'}>
+            健康：{HEALTH_STATES[m.health_state]?.label ?? m.health_state ?? '未检测'}
+          </Tag>
+        </Space>
+      ),
+    },
     {
       title: '输入 ($/1K)',
       key: 'in',
@@ -175,11 +212,13 @@ export default function ModelsPage() {
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(m)}>
             编辑
           </Button>
-          <Popconfirm title={`确认删除 ${m.name}？`} onConfirm={() => handleRemove(m.name)}>
-            <Button size="small" danger>
-              删除
-            </Button>
-          </Popconfirm>
+          {m.is_active ? (
+            <Popconfirm title={`确认停用 ${m.name}？`} onConfirm={() => handleRemove(m.name)}>
+              <Button size="small" danger>停用</Button>
+            </Popconfirm>
+          ) : (
+            <Button size="small" onClick={() => handleRestore(m.name)}>恢复</Button>
+          )}
         </Space>
       ),
     },
@@ -188,7 +227,7 @@ export default function ModelsPage() {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <span style={{ color: '#999' }}>共 {models.length} 个模型</span>
+        <span style={{ color: '#999' }}>共 {models.filter((m) => m.is_active).length} 个启用模型，{models.filter((m) => !m.is_active).length} 个已停用</span>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={refresh}>
             刷新

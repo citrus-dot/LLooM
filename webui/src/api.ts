@@ -65,6 +65,7 @@ export interface ModelPatchPayload {
   input_cost_per_token?: number;
   output_cost_per_token?: number;
   rpm?: number;
+  is_active?: number;
 }
 
 export interface UsageStats {
@@ -282,8 +283,8 @@ export function setProbeBudget(monthlyLimitCny: number): Promise<{ ok: boolean; 
 
 // ── Model endpoints ──
 
-export function getModels(): Promise<{ models: Model[] }> {
-  return jget('/api/models');
+export function getModels(activeOnly = true): Promise<{ models: Model[] }> {
+  return jget(`/api/models?active_only=${activeOnly}`);
 }
 
 export function addModel(m: ModelCreatePayload): Promise<{ id: number }> {

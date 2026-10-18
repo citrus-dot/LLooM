@@ -178,11 +178,33 @@ async fn health() -> Json<Value> {
 
 // ── Models ──
 
-async fn list_models(State(state): State<AppState>, Query(q): Query<Value>) -> Result<Json<Value>> {
-    let active_only = q
-        .get("active_only")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+#[derive(Deserialize)]
+struct ModelListQuery {
+    active_only: Option<bool>,
+}
+
+#[cfg(test)]
+mod model_list_query_tests {
+    use super::ModelListQuery;
+    use axum::{extract::Query, http::Uri};
+
+    #[test]
+    fn active_only_parses_url_boolean() {
+        let uri: Uri = "/api/models?active_only=false".parse().unwrap();
+        let Query(q) = Query::<ModelListQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(q.active_only, Some(false));
+
+        let uri: Uri = "/api/models".parse().unwrap();
+        let Query(q) = Query::<ModelListQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(q.active_only, None);
+    }
+}
+
+async fn list_models(
+    State(state): State<AppState>,
+    Query(q): Query<ModelListQuery>,
+) -> Result<Json<Value>> {
+    let active_only = q.active_only.unwrap_or(true);
     let dtos: Vec<model_dto::ModelDto> = state
         .db
         .list_models(active_only)?
