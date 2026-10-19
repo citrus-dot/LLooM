@@ -1037,9 +1037,13 @@ impl Db {
         let expired = expires.as_deref().is_some_and(|v| {
             !v.is_empty()
                 && conn
-                    .query_row("SELECT date(?1) < date('now')", params![v], |r| {
-                        r.get::<_, bool>(0)
-                    })
+                    .query_row(
+                        // Invalid dates must fail closed.  SQLite returns NULL for
+                        // date('garbage'), and NULL < date('now') is false.
+                        "SELECT date(?1) IS NULL OR date(?1) < date('now')",
+                        params![v],
+                        |r| r.get::<_, bool>(0),
+                    )
                     .unwrap_or(true)
         });
         if expired {
@@ -2798,6 +2802,43 @@ mod rpm_reservation_tests {
                 .count(),
             3
         );
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(test)]
+mod api_key_expiry_tests {
+    use super::*;
+
+    fn test_db(name: &str) -> (Db, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "lloom_{name}_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        (Db::new(&path).unwrap(), path)
+    }
+
+    #[test]
+    fn malformed_expiry_is_rejected_fail_closed() {
+        let (db, path) = test_db("api_key_expiry");
+        let conn = db.conn().unwrap();
+        conn.execute(
+            "INSERT INTO api_keys(name,key_hash,key_prefix,expires_at)
+             VALUES ('malformed','expiry-hash','ll-','not-a-date')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert!(db
+            .authenticate_api_key("expiry-hash", "auto")
+            .unwrap()
+            .is_none());
         drop(db);
         let _ = std::fs::remove_file(path);
     }

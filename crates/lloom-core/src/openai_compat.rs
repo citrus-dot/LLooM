@@ -783,6 +783,49 @@ pub struct ApiKeyPatch {
     pub expires_at: Option<String>,
 }
 
+fn validate_api_key_fields(
+    name: &str,
+    status: &str,
+    quota_usd: Option<f64>,
+    rpm: i64,
+    expires_at: Option<&str>,
+) -> Result<(), &'static str> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 128 || name.chars().any(char::is_control) {
+        return Err("名称必须为 1-128 个非控制字符");
+    }
+    if !matches!(status, "active" | "disabled") {
+        return Err("状态必须为 active 或 disabled");
+    }
+    if quota_usd.is_some_and(|quota| !quota.is_finite() || quota < 0.0) {
+        return Err("额度必须为非负有限数字");
+    }
+    if !(1..=10_000).contains(&rpm) {
+        return Err("RPM 必须在 1-10000 之间");
+    }
+    if expires_at.is_some_and(|date| {
+        date.len() != 10
+            || date.as_bytes()[4] != b'-'
+            || date.as_bytes()[7] != b'-'
+            || date
+                .bytes()
+                .enumerate()
+                .any(|(index, byte)| index != 4 && index != 7 && !byte.is_ascii_digit())
+    }) {
+        return Err("过期日期必须为 YYYY-MM-DD");
+    }
+    Ok(())
+}
+
+fn validation_error(message: &str) -> Response {
+    error_response(
+        StatusCode::BAD_REQUEST,
+        message,
+        "invalid_request_error",
+        "invalid_api_key_settings",
+    )
+}
+
 pub async fn api_keys_list(State(state): State<AppState>) -> Response {
     match state.db.list_api_keys() {
         Ok(keys) => Json(json!({"keys": keys.into_iter().map(|k| json!({
@@ -806,13 +849,14 @@ pub async fn api_key_create(
     Json(body): Json<ApiKeyCreate>,
 ) -> Response {
     use rand::RngCore;
-    if body.name.trim().is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "名称不能为空",
-            "invalid_request_error",
-            "invalid_name",
-        );
+    if let Err(message) = validate_api_key_fields(
+        &body.name,
+        "active",
+        body.quota_usd,
+        body.rpm.unwrap_or(60),
+        body.expires_at.as_deref(),
+    ) {
+        return validation_error(message);
     }
     let mut random = [0u8; 24];
     rand::rng().fill_bytes(&mut random);
@@ -829,7 +873,7 @@ pub async fn api_key_create(
         name: body.name.trim(),
         status: "active",
         quota_usd: body.quota_usd,
-        rpm: body.rpm.unwrap_or(60).clamp(1, 10000),
+        rpm: body.rpm.unwrap_or(60),
         allowed_models: &models,
         expires_at: body.expires_at.as_deref(),
     };
@@ -849,12 +893,21 @@ pub async fn api_key_update(
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(body): Json<ApiKeyPatch>,
 ) -> Response {
+    if let Err(message) = validate_api_key_fields(
+        &body.name,
+        &body.status,
+        body.quota_usd,
+        body.rpm,
+        body.expires_at.as_deref(),
+    ) {
+        return validation_error(message);
+    }
     let models = serde_json::to_string(&body.allowed_models).unwrap_or_else(|_| "[]".into());
     let write = db::ApiKeyWrite {
         name: &body.name,
         status: &body.status,
         quota_usd: body.quota_usd,
-        rpm: body.rpm.clamp(1, 10000),
+        rpm: body.rpm,
         allowed_models: &models,
         expires_at: body.expires_at.as_deref(),
     };
@@ -949,6 +1002,18 @@ mod tests {
         assert_eq!(v["usage"]["prompt_tokens"], 10);
         assert_eq!(v["usage"]["completion_tokens"], 5);
         assert_eq!(v["usage"]["total_tokens"], 15);
+    }
+
+    #[test]
+    fn api_key_settings_reject_invalid_values() {
+        assert!(
+            validate_api_key_fields("safe", "active", Some(1.0), 60, Some("2030-01-01")).is_ok()
+        );
+        assert!(validate_api_key_fields("", "active", None, 60, None).is_err());
+        assert!(validate_api_key_fields("safe", "unknown", None, 60, None).is_err());
+        assert!(validate_api_key_fields("safe", "active", Some(-1.0), 60, None).is_err());
+        assert!(validate_api_key_fields("safe", "active", None, 0, None).is_err());
+        assert!(validate_api_key_fields("safe", "active", None, 60, Some("not-a-date")).is_err());
     }
 
     #[test]
