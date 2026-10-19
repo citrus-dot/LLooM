@@ -28,6 +28,18 @@ use std::net::SocketAddr;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
+const SECONDS_PER_MINUTE: u64 = 60;
+const SECONDS_PER_DAY: u64 = 86_400;
+const API_KEY_CLEANUP_INTERVAL_SECS: u64 = SECONDS_PER_MINUTE;
+const CALIBRATION_INTERVAL_SECS: u64 = SECONDS_PER_DAY;
+const DEFAULT_ESTIMATED_INPUT_TOKENS: i64 = 500;
+const PROBE_TIMEOUT_SECS: u64 = 20;
+const HTTP_REQUEST_TIMEOUT_SECS: u64 = 15;
+const HTTP_PROVIDER_TIMEOUT_SECS: u64 = 20;
+const BUDGET_FP_TOLERANCE: f64 = 1e-9;
+const MIN_PRICE_PER_TOKEN: f64 = 1e-9;
+const MAX_PRICE_PER_TOKEN: f64 = 1e-3;
+
 // ── AppState ──
 
 #[derive(Clone)]
@@ -351,7 +363,7 @@ async fn probe_model(
     let spec = ModelSpec::from(&model);
     let probe_msg = json!({"role":"user","content":"ping"});
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(20),
+        std::time::Duration::from_secs(PROBE_TIMEOUT_SECS),
         ai_client::chat(&spec, &[probe_msg], 1, 0.0, None),
     )
     .await;
@@ -572,7 +584,10 @@ async fn check_budget(
                 None,
             )?;
             // P2-9：边界比较加 ulp 级容差——0.1+0.2<=0.3 这类 fp 尾差会误拒请求。
-            (spent + prospective <= b.max_budget + 1e-9, spent)
+            (
+                spent + prospective <= b.max_budget + BUDGET_FP_TOLERANCE,
+                spent,
+            )
         }
         None => (true, 0.0),
     };
@@ -1682,7 +1697,9 @@ pub fn spawn_background_jobs(db: db::Db) -> Vec<tokio::task::JoinHandle<()>> {
 }
 
 async fn api_key_request_cleanup(db: db::Db) {
-    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(
+        API_KEY_CLEANUP_INTERVAL_SECS,
+    ));
     loop {
         ticker.tick().await;
         if let Err(e) = db.prune_api_key_requests() {
@@ -1697,7 +1714,8 @@ async fn api_key_request_cleanup(db: db::Db) {
 /// 日级校准 job：每天聚合昨天用量 → 写 price_calibration → 更新命中率 EWMA →
 /// 对账偏差连续越界 3 天则标 price_stale（PRICING-PLAN §6.2）。
 async fn calibration_job(db: db::Db) {
-    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(86_400));
+    let mut ticker =
+        tokio::time::interval(std::time::Duration::from_secs(CALIBRATION_INTERVAL_SECS));
     ticker.tick().await; // 跳过立即触发
     loop {
         ticker.tick().await;
@@ -1718,7 +1736,7 @@ const MIN_CALIBRATION_CALLS: i64 = 50;
 
 async fn run_daily_calibration(db: &db::Db) -> Result<()> {
     let now = now_epoch_secs();
-    let (y, m, d, _, _) = pricing::beijing_parts(now - 86_400, 8); // 北京昨天
+    let (y, m, d, _, _) = pricing::beijing_parts(now - CALIBRATION_INTERVAL_SECS as i64, 8); // 北京昨天
     let day = format!("{y:04}-{m:02}-{d:02}");
     let rows = db.aggregate_usage_by_model_day(&day)?;
     for r in &rows {
@@ -1812,9 +1830,9 @@ async fn pricing_spec_update(
 ) -> Result<Json<Value>> {
     // 录入断言：量纲强制 USD/token
     for v in [body.input_cost, body.output_cost] {
-        if !(1e-9..=1e-3).contains(&v) {
+        if !(MIN_PRICE_PER_TOKEN..=MAX_PRICE_PER_TOKEN).contains(&v) {
             return Err(AppError::InvalidRequest(format!(
-                "price {v} out of USD/token range [1e-9, 1e-3]; expected per-token value"
+                "price {v} out of USD/token range [{MIN_PRICE_PER_TOKEN}, {MAX_PRICE_PER_TOKEN}]; expected per-token value"
             )));
         }
     }
@@ -1856,7 +1874,7 @@ async fn pricing_calibration(
 /// 返回 (更新行数, 远端条数, 被保留的 manual 行数)。
 async fn run_pricing_refresh(db: &db::Db) -> std::result::Result<(usize, usize, usize), String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
         .build()
         .map_err(|e| e.to_string())?;
     let urls = [
@@ -1931,7 +1949,7 @@ async fn pricing_refresh(State(state): State<AppState>) -> Result<Json<Value>> {
 /// 返回匹配条数；网络失败返回 Err（调用方静默）。
 async fn run_reference_refresh(db: &db::Db) -> std::result::Result<usize, String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(HTTP_PROVIDER_TIMEOUT_SECS))
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
@@ -2000,7 +2018,7 @@ async fn pricing_accept(
 
 /// P2.a 后台 24h 刷新 job：周期拉远端价；断网失败静默（保留本地值，不影响主流程）。
 async fn pricing_refresh_loop(db: db::Db) {
-    let mut int = tokio::time::interval(std::time::Duration::from_secs(86400));
+    let mut int = tokio::time::interval(std::time::Duration::from_secs(SECONDS_PER_DAY));
     int.tick().await; // 首个周期：启动后 24h 才首次触发
     loop {
         int.tick().await;
@@ -2065,7 +2083,10 @@ async fn rust_plan_subtask(
     State(state): State<AppState>,
     Json(req): Json<PlanSubtaskRequest>,
 ) -> Result<Json<Value>> {
-    let est_in = req.est_in_tokens.unwrap_or(500).max(0);
+    let est_in = req
+        .est_in_tokens
+        .unwrap_or(DEFAULT_ESTIMATED_INPUT_TOKENS)
+        .max(0);
     // P5.c：est_out 未显式传时用该角色真实均值（avg_out_tokens）；预算档未传时从全局水位注出。
     let est_out = match req.est_out_tokens {
         Some(v) => v.max(0),

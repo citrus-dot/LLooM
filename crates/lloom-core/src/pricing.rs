@@ -13,6 +13,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
+const SECONDS_PER_MINUTE: i64 = 60;
+const SECONDS_PER_HOUR: i64 = 60 * SECONDS_PER_MINUTE;
+const SECONDS_PER_DAY: i64 = 24 * SECONDS_PER_HOUR;
+
 // ── Usage detail（透传自 Provider 响应的 usage 字段）──
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -331,18 +335,19 @@ fn weekday(y: i64, m: u32, d: u32) -> u32 {
 
 /// 北京时刻的组成部分（epoch 秒 → 北京年/月/日/星期/小时）
 pub fn beijing_parts(epoch_secs: i64, tz_offset_hours: i32) -> (i64, u32, u32, u32, u32) {
-    let shifted = epoch_secs + tz_offset_hours as i64 * 3600;
-    let days = shifted.div_euclid(86_400);
-    let secs_of_day = shifted.rem_euclid(86_400);
+    let shifted = epoch_secs + tz_offset_hours as i64 * SECONDS_PER_HOUR;
+    let days = shifted.div_euclid(SECONDS_PER_DAY);
+    let secs_of_day = shifted.rem_euclid(SECONDS_PER_DAY);
     let (y, m, d) = civil_from_days(days);
-    let hour = (secs_of_day / 3600) as u32;
+    let hour = (secs_of_day / SECONDS_PER_HOUR) as u32;
     (y, m, d, weekday(y, m, d), hour)
 }
 
 /// 构造指定北京时刻的 epoch 秒（单测用）
 pub fn beijing_epoch(y: i64, mo: u32, d: u32, h: u32, min: u32, tz_offset_hours: i32) -> i64 {
     let days = days_from_civil(y, mo as i64, d as i64);
-    days * 86_400 + (h as i64 * 3600 + min as i64 * 60) - tz_offset_hours as i64 * 3600
+    days * SECONDS_PER_DAY + (h as i64 * SECONDS_PER_HOUR + min as i64 * SECONDS_PER_MINUTE)
+        - tz_offset_hours as i64 * SECONDS_PER_HOUR
 }
 
 fn hours_match(spec: &str, hh: u32) -> bool {
