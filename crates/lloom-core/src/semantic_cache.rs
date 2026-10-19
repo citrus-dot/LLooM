@@ -6,7 +6,91 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-static EMBEDDER: OnceLock<std::result::Result<Mutex<TextEmbedding>, String>> = OnceLock::new();
+static EMBEDDER: OnceLock<std::result::Result<EmbedderPool, String>> = OnceLock::new();
+
+/// P2-3：ONNX 会话不再共用一把全局锁——小容量实例池（最多 2 个会话），
+/// 单实例独占式借出，剩余请求复用空闲槽或在下一个实例上排队。
+/// 首次失败（如 x86_64 Mac 缺 ONNX Runtime dylib）会永久缓存错误并降级。
+struct EmbedderPool {
+    free: Mutex<std::collections::VecDeque<TextEmbedding>>,
+    created: std::sync::atomic::AtomicUsize,
+    max: usize,
+}
+
+fn new_embedder_session() -> std::result::Result<TextEmbedding, String> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(4))
+        .ok();
+    let mut options = TextInitOptions::new(EmbeddingModel::AllMiniLML6V2Q)
+        .with_cache_dir(crate::config::data_dir().join("models/fastembed"))
+        .with_show_download_progress(false);
+    if let Some(threads) = threads {
+        options = options.with_intra_threads(threads);
+    }
+    TextEmbedding::try_new(options).map_err(|e| {
+        let msg = e.to_string();
+        // Intel Mac 构建走 ort load-dynamic：dylib 缺失时错误文本指向
+        // dlopen 失败。聊天会静默降级无 L2，这里给一条可执行的修复提示。
+        if cfg!(all(target_os = "macos", target_arch = "x86_64")) && msg.contains("libonnxruntime")
+        {
+            eprintln!(
+                "[core] L2 语义缓存不可用：{msg}\n\
+                 [core] Intel Mac 版需 ONNX Runtime：brew install onnxruntime\n\
+                 [core] （不装也能用：L1 精确缓存与云端/本地模型路由不受影响）"
+            );
+        }
+        msg
+    })
+}
+
+/// 借出的会话句柄，Drop 时归还实例池。
+struct EmbedderLease<'a>(&'a EmbedderPool, Option<TextEmbedding>);
+
+impl Drop for EmbedderLease<'_> {
+    fn drop(&mut self) {
+        if let Some(model) = self.1.take() {
+            if let Ok(mut free) = self.0.free.lock() {
+                free.push_back(model);
+            }
+        }
+    }
+}
+
+impl EmbedderPool {
+    fn instance(&self) -> std::result::Result<TextEmbedding, String> {
+        let mut tries = 0;
+        loop {
+            if let Ok(mut free) = self.free.lock() {
+                if let Some(model) = free.pop_front() {
+                    return Ok(model);
+                }
+            }
+            // 未达实例上限 → 惰性创建新会话；否则小睡等待归还。
+            let created = self.created.load(std::sync::atomic::Ordering::Relaxed);
+            if created < self.max {
+                if self
+                    .created
+                    .compare_exchange(
+                        created,
+                        created + 1,
+                        std::sync::atomic::Ordering::Relaxed,
+                        std::sync::atomic::Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    return new_embedder_session();
+                }
+                continue;
+            }
+            tries += 1;
+            if tries > 1200 {
+                // 约 1 分钟仍无空闲会话：视为系统异常，放弃（调用方降级无缓存）。
+                return Err("embedding pool exhausted".to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+}
 
 pub struct SemanticCache {
     conn: Mutex<Connection>,
@@ -35,29 +119,26 @@ impl SemanticCache {
              CREATE INDEX IF NOT EXISTS idx_semantic_model_created
              ON semantic_cache(model, created_at);",
         )?;
-        let mut cols = conn.prepare("PRAGMA table_info(semantic_cache)")?;
-        let existing = cols
-            .query_map([], |r| r.get::<_, String>(1))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(cols);
-        for (name, ddl) in [
-            (
-                "system_hash",
-                "ALTER TABLE semantic_cache ADD COLUMN system_hash TEXT NOT NULL DEFAULT ''",
-            ),
-            (
-                "temperature",
-                "ALTER TABLE semantic_cache ADD COLUMN temperature REAL NOT NULL DEFAULT 0",
-            ),
-            (
-                "last_hit_at",
-                "ALTER TABLE semantic_cache ADD COLUMN last_hit_at INTEGER NOT NULL DEFAULT 0",
-            ),
-        ] {
-            if !existing.iter().any(|c| c == name) {
-                conn.execute_batch(ddl)?;
-            }
-        }
+        // P2-7：复用 db::Db::ensure_columns 的幂等加列助手（不再手写 PRAGMA 探测）。
+        crate::db::Db::ensure_columns(
+            &conn,
+            "semantic_cache",
+            &[
+                (
+                    "system_hash",
+                    "ALTER TABLE semantic_cache ADD COLUMN system_hash TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "temperature",
+                    "ALTER TABLE semantic_cache ADD COLUMN temperature REAL NOT NULL DEFAULT 0",
+                ),
+                (
+                    "last_hit_at",
+                    "ALTER TABLE semantic_cache ADD COLUMN last_hit_at INTEGER NOT NULL DEFAULT 0",
+                ),
+            ],
+        )
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         Ok(Self {
             conn: Mutex::new(conn),
             ttl_secs,
@@ -67,37 +148,22 @@ impl SemanticCache {
 
     pub fn embed(text: &str) -> std::result::Result<Vec<f32>, String> {
         let result = EMBEDDER.get_or_init(|| {
-            let threads = std::thread::available_parallelism()
-                .map(|n| n.get().min(4))
-                .ok();
-            let mut options = TextInitOptions::new(EmbeddingModel::AllMiniLML6V2Q)
-                .with_cache_dir(crate::config::data_dir().join("models/fastembed"))
-                .with_show_download_progress(false);
-            if let Some(threads) = threads {
-                options = options.with_intra_threads(threads);
-            }
-            TextEmbedding::try_new(options)
-                .map(Mutex::new)
-                .map_err(|e| {
-                    let msg = e.to_string();
-                    // Intel Mac 构建走 ort load-dynamic：dylib 缺失时错误文本指向
-                    // dlopen 失败。聊天会静默降级无 L2，这里给一条可执行的修复提示。
-                    if cfg!(all(target_os = "macos", target_arch = "x86_64"))
-                        && msg.contains("libonnxruntime")
-                    {
-                        eprintln!(
-                            "[core] L2 语义缓存不可用：{msg}\n\
-                             [core] Intel Mac 版需 ONNX Runtime：brew install onnxruntime\n\
-                             [core] （不装也能用：L1 精确缓存与云端/本地模型路由不受影响）"
-                        );
-                    }
-                    msg
-                })
+            // 首个会话急切创建：初始化失败（含 dylib 缺失提示）只发生一次并永久缓存。
+            Ok(match new_embedder_session() {
+                Ok(first) => EmbedderPool {
+                    free: Mutex::new(std::collections::VecDeque::from(vec![first])),
+                    created: std::sync::atomic::AtomicUsize::new(1),
+                    max: 2,
+                },
+                Err(msg) => return Err(msg),
+            })
         });
-        let model = result.as_ref().map_err(Clone::clone)?;
-        model
-            .lock()
-            .map_err(|_| "embedding model lock poisoned".to_string())?
+        let pool = result.as_ref().map_err(Clone::clone)?;
+        let mut lease = EmbedderLease(pool, Some(pool.instance()?));
+        lease
+            .1
+            .as_mut()
+            .ok_or_else(|| "embedding lease already returned".to_string())?
             .embed(vec![text], None)
             .map_err(|e| e.to_string())?
             .into_iter()

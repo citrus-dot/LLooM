@@ -528,7 +528,9 @@ impl Db {
     }
 
     /// 幂等加列：PRAGMA table_info 检查缺失列再 ALTER，可重跑。
-    fn ensure_columns(
+    /// P2-7：提升为 crate 内共享助手——各存储（semantic_cache 等）复用同一逻辑，
+    /// 不再各自手写 PRAGMA 探测。
+    pub(crate) fn ensure_columns(
         conn: &rusqlite::Connection,
         table: &str,
         cols: &[(&str, &str)],
@@ -749,73 +751,100 @@ impl Db {
     /// for backward compatibility — old callers pass None.
     pub fn insert_usage(&self, rec: &UsageRecord<'_>) -> Result<()> {
         let conn = self.conn()?;
-        let mut cols: Vec<&str> = vec![
-            "model_name",
-            "user_id",
-            "input_tokens",
-            "output_tokens",
-            "cost",
-            "task_type",
-            "cache_hit",
-        ];
-        let mut vals: Vec<rusqlite::types::Value> = vec![
-            rusqlite::types::Value::Text(rec.model_name.to_string()),
-            rusqlite::types::Value::Text(rec.user_id.to_string()),
-            rusqlite::types::Value::Integer(rec.input_tokens),
-            rusqlite::types::Value::Integer(rec.output_tokens),
-            rusqlite::types::Value::Real(rec.cost),
-            match rec.task_type {
-                Some(t) => rusqlite::types::Value::Text(t.to_string()),
-                None => rusqlite::types::Value::Null,
-            },
-            rusqlite::types::Value::Integer(if rec.cache_hit { 1 } else { 0 }),
+        // P2-6：不用平行的 cols/vals 双数组（易漂移、静默错位），改为单对齐列表。
+        let mut cols_vals: Vec<(&str, rusqlite::types::Value)> = vec![
+            (
+                "model_name",
+                rusqlite::types::Value::Text(rec.model_name.to_string()),
+            ),
+            (
+                "user_id",
+                rusqlite::types::Value::Text(rec.user_id.to_string()),
+            ),
+            (
+                "input_tokens",
+                rusqlite::types::Value::Integer(rec.input_tokens),
+            ),
+            (
+                "output_tokens",
+                rusqlite::types::Value::Integer(rec.output_tokens),
+            ),
+            ("cost", rusqlite::types::Value::Real(rec.cost)),
+            (
+                "task_type",
+                match rec.task_type {
+                    Some(t) => rusqlite::types::Value::Text(t.to_string()),
+                    None => rusqlite::types::Value::Null,
+                },
+            ),
+            (
+                "cache_hit",
+                rusqlite::types::Value::Integer(if rec.cache_hit { 1 } else { 0 }),
+            ),
         ];
         if let Some(e) = &rec.extra {
-            cols.extend([
-                "cached_tokens",
-                "reasoning_tokens",
-                "est_cost",
-                "act_cost",
-                "zone_multiplier",
-                "conversation_id",
-                "field_missing",
-                "cache_saved_cost",
-                "est_input_cost",
-                "act_input_cost",
+            cols_vals.extend([
+                (
+                    "cached_tokens",
+                    rusqlite::types::Value::Integer(e.cached_tokens),
+                ),
+                (
+                    "reasoning_tokens",
+                    rusqlite::types::Value::Integer(e.reasoning_tokens),
+                ),
+                ("est_cost", rusqlite::types::Value::Real(e.est_cost)),
+                ("act_cost", rusqlite::types::Value::Real(e.act_cost)),
+                (
+                    "zone_multiplier",
+                    rusqlite::types::Value::Real(e.zone_multiplier),
+                ),
+                (
+                    "conversation_id",
+                    match &e.conversation_id {
+                        Some(c) => rusqlite::types::Value::Text(c.clone()),
+                        None => rusqlite::types::Value::Null,
+                    },
+                ),
+                (
+                    "field_missing",
+                    rusqlite::types::Value::Integer(if e.field_missing { 1 } else { 0 }),
+                ),
+                (
+                    "cache_saved_cost",
+                    rusqlite::types::Value::Real(e.cache_saved_cost),
+                ),
+                // C2 输入侧分列
+                (
+                    "est_input_cost",
+                    rusqlite::types::Value::Real(e.est_input_cost),
+                ),
+                (
+                    "act_input_cost",
+                    rusqlite::types::Value::Real(e.act_input_cost),
+                ),
             ]);
-            vals.push(rusqlite::types::Value::Integer(e.cached_tokens));
-            vals.push(rusqlite::types::Value::Integer(e.reasoning_tokens));
-            vals.push(rusqlite::types::Value::Real(e.est_cost));
-            vals.push(rusqlite::types::Value::Real(e.act_cost));
-            vals.push(rusqlite::types::Value::Real(e.zone_multiplier));
-            vals.push(match &e.conversation_id {
-                Some(c) => rusqlite::types::Value::Text(c.clone()),
-                None => rusqlite::types::Value::Null,
-            });
-            vals.push(rusqlite::types::Value::Integer(if e.field_missing {
-                1
-            } else {
-                0
-            }));
-            vals.push(rusqlite::types::Value::Real(e.cache_saved_cost));
-            // C2 输入侧分列
-            vals.push(rusqlite::types::Value::Real(e.est_input_cost));
-            vals.push(rusqlite::types::Value::Real(e.act_input_cost));
             // C3：仅显式标记来源时写列（None 落库默认 'webui'，旧行为不变）
             if let Some(src) = &e.api_source {
-                cols.push("api_source");
-                vals.push(rusqlite::types::Value::Text(src.clone()));
+                cols_vals.push(("api_source", rusqlite::types::Value::Text(src.clone())));
             }
         }
-        cols.extend(["latency_ms", "request_id"]);
-        vals.push(match rec.latency_ms {
-            Some(l) => rusqlite::types::Value::Real(l),
-            None => rusqlite::types::Value::Null,
-        });
-        vals.push(match rec.request_id {
-            Some(r) => rusqlite::types::Value::Text(r.to_string()),
-            None => rusqlite::types::Value::Null,
-        });
+        cols_vals.extend([
+            (
+                "latency_ms",
+                match rec.latency_ms {
+                    Some(l) => rusqlite::types::Value::Real(l),
+                    None => rusqlite::types::Value::Null,
+                },
+            ),
+            (
+                "request_id",
+                match rec.request_id {
+                    Some(r) => rusqlite::types::Value::Text(r.to_string()),
+                    None => rusqlite::types::Value::Null,
+                },
+            ),
+        ]);
+        let (cols, vals): (Vec<&str>, Vec<rusqlite::types::Value>) = cols_vals.into_iter().unzip();
         let placeholders: Vec<String> = (1..=vals.len()).map(|i| format!("?{i}")).collect();
         let sql = format!(
             "INSERT INTO usage_records ({}) VALUES ({})",
@@ -1833,6 +1862,22 @@ impl Db {
             Ok(v) if v > 0.0 => v,
             _ => 750.0, // 冷启动
         }
+    }
+
+    /// P2-2 回放保真度：近期该 task_type 的平均输入 token（重放时替代 0 估算，
+    /// 让成本/命中侧计算对齐真实请求）。样本不足（<20 次）返回 None。
+    pub fn task_avg_in_tokens(&self, task_type: &str) -> Option<i64> {
+        let conn = self.conn().ok()?;
+        conn.query_row(
+            "SELECT AVG(input_tokens) FROM usage_records
+             WHERE task_type = ?1 AND input_tokens > 0
+               AND created_at >= datetime('now', '-14 days')
+             HAVING COUNT(*) >= 20",
+            params![task_type],
+            |r| r.get::<_, f64>(0),
+        )
+        .ok()
+        .map(|v| v.round() as i64)
     }
 
     /// PR-5 §5.1：最近 14 天、至少 5 次有效调用的模型缓存命中率。

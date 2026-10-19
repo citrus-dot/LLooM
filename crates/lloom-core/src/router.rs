@@ -538,7 +538,11 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
         .zip(ecs.iter())
         .map(|(m, &ec)| {
             let q = quality_of(input, m);
-            let norm_cost = if !ec.is_finite() {
+            // P3：单候选时无相对成本维度（med=ec 会让 norm_cost 恒为 0.5），
+            // 明确记 0，避免审计出无意义的成本罚分。
+            let norm_cost = if gated.len() == 1 {
+                0.0
+            } else if !ec.is_finite() {
                 1.0
             } else if ec + med_ec > 0.0 {
                 ec / (ec + med_ec)

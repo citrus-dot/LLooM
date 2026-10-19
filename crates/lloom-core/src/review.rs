@@ -115,14 +115,19 @@ fn aggregate_aiq(db: &crate::db::Db) -> Result<Option<Value>> {
 /// 一次 plan() 无副作用重放：返回 (选模, est_cost, quality)。
 /// PlanInput 组装口径与 `router::route()` 对齐（est_in 未知 query 文本取 0，
 /// 仅影响门槛/成本线性缩放，不影响选模排序）。
-fn replay_once(
-    db: &crate::db::Db,
-    task_type: &str,
-    policy: &RoutingPolicy,
-    models: &[Model],
-    spec_map: &HashMap<(String, String), PriceSpec>,
-    zr: &ZoneResolver,
-) -> Option<(String, f64, f64)> {
+#[derive(Debug)]
+struct ReplayInputs {
+    quality_override: HashMap<String, f64>,
+    hit_rate: HashMap<String, f64>,
+    est_in: i64,
+    est_out: i64,
+    band: String,
+    now: i64,
+}
+
+/// 一次性读齐重放所需的数据库快照（质量 EWMA / 缓存命中率 / 平均输出长度），
+/// 供 49 个网格点纯内存重放使用——避免每个网格点重复扫库（P2-3）。
+fn prepare_replay_inputs(db: &crate::db::Db, task_type: &str, models: &[Model]) -> ReplayInputs {
     let mut quality_override = HashMap::new();
     for m in models {
         if let Some(sc) = db.get_model_task_score(&m.name, task_type).ok().flatten() {
@@ -136,22 +141,44 @@ fn replay_once(
         HashMap::new()
     });
     let est_out = db.task_avg_out_tokens(task_type).round() as i64;
+    // P2-2：重放用近期平均输入 token，使成本与上下文过滤对齐真实请求（不足 20 例回退 0）。
+    let est_in = db.task_avg_in_tokens(task_type).unwrap_or(0);
     let band = router::band_for(task_type, "");
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
+    ReplayInputs {
+        quality_override,
+        hit_rate,
+        est_in,
+        est_out,
+        band: band.to_string(),
+        now,
+    }
+}
+
+/// 库快照已就位后的纯内存重放（0 次 DB 查询）。
+fn replay_from(
+    task_type: &str,
+    policy: &RoutingPolicy,
+    models: &[Model],
+    spec_map: &HashMap<(String, String), PriceSpec>,
+    zr: &ZoneResolver,
+    inputs: &ReplayInputs,
+) -> Option<(String, f64, f64)> {
+    let hit_rate = inputs.hit_rate.clone();
     let input = PlanInput {
         task_type,
-        band,
+        band: &inputs.band,
         policy,
         models,
         price_specs: spec_map,
         zones: zr,
-        t_epoch_secs: now,
-        est_in_tokens: 0,
-        est_out_tokens: est_out,
-        quality_override: &quality_override,
+        t_epoch_secs: inputs.now,
+        est_in_tokens: inputs.est_in,
+        est_out_tokens: inputs.est_out,
+        quality_override: &inputs.quality_override,
         budget_tier: "normal",
         hit_rate: &hit_rate,
         last_model_conv: None,
@@ -163,7 +190,6 @@ fn replay_once(
     Some((outcome.primary.clone(), top.est_cost, top.quality))
 }
 
-/// 网格点双向权衡打分（相对当前策略）：
 /// - 省成本方向（更便宜）：相对省额 − 质量损失；
 /// - 提质量方向（更准）：质量增益 − 0.5×成本相对增幅；
 /// - 两者皆非（同点/更贵且更差）→ −∞。
@@ -215,8 +241,11 @@ pub fn grid_search_suggestions(db: &crate::db::Db) -> Result<Vec<Value>> {
             .ok()
             .flatten()
             .unwrap_or_default();
+        // 重放输入（质量 EWMA / 命中率 / 输出长度）每个 task_type 读一次库，
+        // 49 个网格点全部纯内存重放（P2-3：避免 49×N 扫库）。
+        let inputs = prepare_replay_inputs(db, task_type, &models);
         let Some((cur_model, cur_cost, cur_quality)) =
-            replay_once(db, task_type, &policy, &models, &spec_map, &zr)
+            replay_from(task_type, &policy, &models, &spec_map, &zr, &inputs)
         else {
             continue;
         };
@@ -228,7 +257,9 @@ pub fn grid_search_suggestions(db: &crate::db::Db) -> Result<Vec<Value>> {
                 let mut p = policy.clone();
                 p.cost_weight = cw;
                 p.quality_weight = qw;
-                if let Some((m, c, q)) = replay_once(db, task_type, &p, &models, &spec_map, &zr) {
+                if let Some((m, c, q)) =
+                    replay_from(task_type, &p, &models, &spec_map, &zr, &inputs)
+                {
                     points.push((cw, qw, m, c, q));
                 }
             }
@@ -433,6 +464,33 @@ mod tests {
         teardown(dir);
     }
 
+    /// P2-2 回放保真度：重放的 est_in 来自近期真实 usage 平均（≥20 样本），
+    /// 而不是固定 0——否则成本/budget 过滤与真实请求错位。
+    #[test]
+    fn replay_inputs_use_recent_average_input_tokens() {
+        let (db, dir) = setup("avin");
+        for i in 0..20 {
+            db.insert_usage(&db::UsageRecord {
+                model_name: "m",
+                user_id: "default",
+                input_tokens: 900 + i,
+                output_tokens: 100,
+                cost: 1e-6,
+                task_type: Some("simple_qa"),
+                cache_hit: false,
+                latency_ms: None,
+                request_id: None,
+                extra: None,
+            })
+            .unwrap();
+        }
+        let avg = db.task_avg_in_tokens("simple_qa").unwrap();
+        assert!((900..=919).contains(&avg), "均值应取真实样本: {avg}");
+        // 样本不足（<20）→ None，回退 0
+        assert_eq!(db.task_avg_in_tokens("missing_task"), None);
+        teardown(dir);
+    }
+
     /// 采纳建议 → 策略权重更新 → 下一次重放换选便宜模型（单一真源生效验证）。
     #[test]
     fn adopt_updates_policy_and_changes_selection() {
@@ -487,7 +545,8 @@ mod tests {
             spec_map.insert((spec.provider.clone(), spec.model.clone()), spec);
         }
         let zr = ZoneResolver::new();
-        let (model, _, _) = replay_once(&db, "general", &p, &models, &spec_map, &zr).unwrap();
+        let inputs = prepare_replay_inputs(&db, "general", &models);
+        let (model, _, _) = replay_from("general", &p, &models, &spec_map, &zr, &inputs).unwrap();
         assert_eq!(model, cheap, "采纳后重放应换选便宜模型");
 
         teardown(dir);

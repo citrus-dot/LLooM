@@ -381,12 +381,76 @@ async fn probe_model(
 
 // ── Usage / Budgets ──
 
+/// P2-16：`/api/usage?since=` 不再原样透传任意字符串。
+/// 接受三类输入并归一化：ISO 日期(`YYYY-MM-DD`)、完整 ISO 时间戳、
+/// Unix 秒（数字，转成与 `CURRENT_TIMESTAMP` 同格式的 UTC 串）。
+/// 其他输入一律 400，避免异常比较结果。
+fn validated_since(raw: Option<&str>) -> Result<Option<String>> {
+    let Some(s) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if s.len() > 32 || s.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(AppError::InvalidRequest("since 参数格式无效".into()));
+    }
+    if s.chars().all(|c| c.is_ascii_digit()) {
+        let secs: i64 = s
+            .parse()
+            .map_err(|_| AppError::InvalidRequest("since 参数超出 Unix 时间范围".into()))?;
+        let days = secs.div_euclid(86_400);
+        let rem = secs.rem_euclid(86_400);
+        // civil-from-days（proleptic Gregorian；usage created_at 是 UTC CURRENT_TIMESTAMP）
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = if m <= 2 { y + 1 } else { y };
+        return Ok(Some(format!(
+            "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}",
+            rem / 3_600,
+            rem % 3_600 / 60,
+            rem % 60
+        )));
+    }
+    // ISO 形式兜底校验：年-月-日结构 + 合法月日 + 余部仅允许时间/时区字符
+    let bytes = s.as_bytes();
+    let month: u32 = s.get(5..7).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let day: u32 = s.get(8..10).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let date_ok = bytes.len() >= 10
+        && bytes[..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && (1..=12).contains(&month)
+        && (1..=31).contains(&day);
+    let remainder_ok = bytes.len() >= 10
+        && bytes[10..].iter().all(|c| {
+            matches!(
+                *c,
+                b'0'..=b'9' | b'T' | b't' | b'Z' | b'z' | b':' | b'.' | b'+' | b'-'
+            )
+        });
+    if !date_ok || !remainder_ok {
+        return Err(AppError::InvalidRequest(
+            "since 需为 YYYY-MM-DD、ISO 时间戳或 Unix 秒".into(),
+        ));
+    }
+    Ok(Some(s.to_string()))
+}
+
 async fn get_usage(State(state): State<AppState>, Query(q): Query<Value>) -> Result<Json<Value>> {
     let model_name = q.get("model_name").and_then(|v| v.as_str());
     let user_id = q.get("user_id").and_then(|v| v.as_str());
-    let since = q.get("since").and_then(|v| v.as_str());
-    let stats = state.db.get_usage_stats(model_name, user_id, since)?;
-    let total = state.db.get_total_spend(user_id, model_name, since)?;
+    let since = validated_since(q.get("since").and_then(|v| v.as_str()))?;
+    let stats = state
+        .db
+        .get_usage_stats(model_name, user_id, since.as_deref())?;
+    let total = state
+        .db
+        .get_total_spend(user_id, model_name, since.as_deref())?;
     let total_cache_saved: f64 = stats.iter().map(|s| s.cache_saved).sum();
     Ok(Json(
         json!({ "usage": stats, "total_spend": total, "total_cache_saved": total_cache_saved }),
@@ -1206,158 +1270,35 @@ async fn orchestrate_stream(
     // 流式闭包内需要 DB 句柄（Db 是连接池的轻量 clone）。
     let db = state.db.clone();
     let body = Body::from_stream(events.map(move |ev| {
-        // Persist cache hit/miss for hit-rate stats + threshold calibration.
-        // Pure side-effect; failures are non-fatal (cache is best-effort).
-        if let Some(obj) = ev.data.as_object() {
-            // Rolling-summary persistence: the AI service recomputed the L2
-            // summary because the token budget dropped older turns.
-            if ev.event == "summary_updated" {
-                if let (Some(cid), Some(text), Some(upto)) = (
-                    conv_for_events.as_deref(),
-                    obj.get("text").and_then(|v| v.as_str()),
-                    obj.get("upto").and_then(|v| v.as_i64()),
-                ) {
-                    let _ = conversations::set_summary(&db, cid, text, upto);
-                }
-            }
-            // Semantic-cache calibration: log whenever the chat pipeline reports a
-            // similarity (hit or miss). Pure side-effect; failures non-fatal.
-            if let Some(sim) = obj.get("cache_sim").and_then(|v| v.as_f64()) {
-                let is_hit = obj
-                    .get("cache_hit")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                let decision = if is_hit { "hit" } else { "miss" };
-                let model = obj
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("default")
-                    .to_string();
-                let _ = db.insert_cache_calibration(sim, decision, &model, None, "passive");
-            }
-            // Real usage accounting (PRICING-PLAN PR-1 + ROUTING P1.a): one row
-            // per LLM 动作的真实用量，按事件携带的 role（task_type）细分——
-            // 轻量=general、子任务=各自 task_type、汇总=aggregate，便于按角色成本归因。
-            // 只记带用量的 task_done（每个成功 LLM 调用都会发）；不记失败。
-            if ev.event == "task_done" {
-                // 读取 role/task_type：1) 事件显式字段；2) 汇总(agg, id=0)；3) 未知
-                let role = obj
-                    .get("task_type")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        obj.get("id")
-                            .and_then(|v| v.as_i64())
-                            .filter(|&id| id == 0)
-                            .map(|_| "aggregate".to_string())
-                    })
-                    .unwrap_or_else(|| "unknown".to_string());
-                let model = obj
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let in_tok = obj
-                    .get("input_tokens")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                let out_tok = obj
-                    .get("output_tokens")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                // task_done 事件不带 cached/reasoning/field_missing，走 0 默认
-                let is_hit = obj
-                    .get("cache_hit")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                // duration 为秒，换算毫秒落库
-                let latency_ms = obj
-                    .get("duration")
-                    .and_then(|v| v.as_f64())
-                    .map(|d| d * 1000.0);
-                let provider = models
-                    .iter()
-                    .find(|m| m.name == model)
-                    .map(|m| m.provider_name())
-                    .unwrap_or("unknown");
-                let usage_detail = pricing::UsageDetail {
-                    prompt_tokens: in_tok,
-                    completion_tokens: out_tok,
-                    cached_tokens: 0,
-                    reasoning_tokens: 0,
-                    cache_creation_tokens: 0,
-                    field_missing: false,
-                };
-                let (mut act_cost, act_input_cost, zm) =
-                    priced_usage(&db, provider, &model, &usage_detail);
-                // P2.b 语义缓存命中省下的金额：未真正调用供应商费用为 0，但本应花费的 act_cost 保留，
-                // 用作「缓存为您节省 ¥X」的账实来源（cost 仍记 0）。
-                let cache_saved_cost = if is_hit { act_cost } else { 0.0 };
-                if is_hit {
-                    act_cost = 0.0;
-                }
-                // C2：子任务级 est_input_cost 由 plan-subtask 响应经 task_done 事件透传
-                let est_input_cost = obj
-                    .get("est_input_cost")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                let _ = db.insert_usage(&db::UsageRecord {
-                    model_name: &model,
-                    user_id: "default",
-                    input_tokens: in_tok,
-                    output_tokens: out_tok,
-                    cost: act_cost,
-                    task_type: Some(&role),
-                    cache_hit: is_hit,
-                    latency_ms,
-                    request_id: Some(&orchestrate_rid),
-                    extra: Some(db::UsageExtra {
-                        cached_tokens: 0,
-                        reasoning_tokens: 0,
-                        est_cost: 0.0,
-                        act_cost,
-                        zone_multiplier: zm,
-                        conversation_id: conv_for_events.clone(),
-                        field_missing: false,
-                        cache_saved_cost,
-                        api_source: None,
-                        est_input_cost,
-                        act_input_cost,
-                    }),
-                });
-                // P3：按 task_done 成功/失败喂健康哨点（模型可达性，无 role 归属冲突）
-                if model != "unknown" {
-                    let ok = obj
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .is_none_or(|s| s.is_empty());
-                    crate::health::record_outcome(&db, &model, ok);
-                }
-                // P1.c：按 task_done 是否带 error 下发成功/失败成效信号（skill/model-任务 打点）。
-                // 模型解不出时（unknown）无真实归属，跳过打点避免误伤。
-                if model != "unknown" && role != "unknown" {
-                    let kind = if obj
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|s| !s.is_empty())
-                    {
-                        QualitySignalKind::SubtaskFail
-                    } else {
-                        QualitySignalKind::Success
-                    };
-                    db.upsert_model_task_score_signal(&model, &role, kind).ok();
-                }
-                // P4：子任务升档（P4.c）把被跳过的轻量模型按 P3 相同语义记 Escalation 信号——
-                // 其质量信号不达标（零成本判别），让路由学习少用该模型。final model 仍记 Success。
-                if let Some(ef) = obj.get("escalated_from").and_then(|v| v.as_str()) {
-                    if !ef.is_empty() && ef != model && role != "unknown" {
-                        db.upsert_model_task_score_signal(ef, &role, QualitySignalKind::Escalation)
-                            .ok();
-                    }
-                }
-                // P1.d：按 shadow_ratio 概率后台采样双跑（以主 query 作路由样本），不改返回。
-                maybe_shadow_sample(db.clone(), models.clone(), role, shadow_query.clone());
-            }
+        // P2-3：事件里的副作用落库（摘要写入 / 缓存校准 / usage / 健康 / 质量信号）
+        // 全部挪到 blocking 线程执行，流式转发主循环零 SQLite 等待。
+        // 副作用与事件顺序解耦，失败均非致命。
+        if ev.event == "summary_updated"
+            || ev.event == "task_done"
+            || ev.data.get("cache_sim").is_some()
+        {
+            let persist_db = db.clone();
+            let event_name = ev.event.clone();
+            let persist_data = ev.data.clone();
+            let persist_models = models.clone();
+            let persist_conv = conv_for_events.clone();
+            let persist_query = shadow_query.clone();
+            let persist_rid = orchestrate_rid.clone();
+            tokio::spawn(async move {
+                // rusqlite 是同步 IO，必须进 blocking 线程池（P2-3）。
+                let _ = tokio::task::spawn_blocking(move || {
+                    persist_orchestrate_event(
+                        persist_db,
+                        &event_name,
+                        persist_data,
+                        persist_models,
+                        persist_conv,
+                        &persist_query,
+                        &persist_rid,
+                    );
+                })
+                .await;
+            });
         }
         let data = serde_json::to_string(&ev.data).unwrap_or_default();
         Ok::<_, std::io::Error>(bytes::Bytes::from(format!(
@@ -1372,6 +1313,168 @@ async fn orchestrate_stream(
         )
         .body(body)
         .unwrap()
+}
+
+/// P2-3：编排 SSE 事件携带的副作用落库（摘要回写 / 缓存校准 / usage 明细 /
+/// 健康哨点 / 成效质量信号 / 影子采样）集中在此，经由调用方的
+/// `spawn_blocking` 在线程池执行；失败均非致命，不影响流式转发。
+fn persist_orchestrate_event(
+    db: db::Db,
+    event: &str,
+    data: Value,
+    models: Vec<Model>,
+    conversation_id: Option<String>,
+    shadow_query: &str,
+    orchestrate_rid: &str,
+) {
+    // Rolling-summary persistence: the AI service recomputed the L2
+    // summary because the token budget dropped older turns.
+    if event == "summary_updated" {
+        if let (Some(cid), Some(text), Some(upto)) = (
+            conversation_id.as_deref(),
+            data.get("text").and_then(|v| v.as_str()),
+            data.get("upto").and_then(|v| v.as_i64()),
+        ) {
+            let _ = conversations::set_summary(&db, cid, text, upto);
+        }
+    }
+    // Semantic-cache calibration: log whenever the chat pipeline reports a
+    // similarity (hit or miss). Pure side-effect; failures non-fatal.
+    if let Some(sim) = data.get("cache_sim").and_then(|v| v.as_f64()) {
+        let is_hit = data
+            .get("cache_hit")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let decision = if is_hit { "hit" } else { "miss" };
+        let model = data
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default")
+            .to_string();
+        let _ = db.insert_cache_calibration(sim, decision, &model, None, "passive");
+    }
+    // Real usage accounting (PRICING-PLAN PR-1 + ROUTING P1.a): one row
+    // per LLM 动作的真实用量，按事件携带的 role（task_type）细分——
+    // 轻量=general、子任务=各自 task_type、汇总=aggregate，便于按角色成本归因。
+    // 只记带用量的 task_done（每个成功 LLM 调用都会发）；不记失败。
+    if event == "task_done" {
+        // 读取 role/task_type：1) 事件显式字段；2) 汇总(agg, id=0)；3) 未知
+        let role = data
+            .get("task_type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                data.get("id")
+                    .and_then(|v| v.as_i64())
+                    .filter(|&id| id == 0)
+                    .map(|_| "aggregate".to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let model = data
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let in_tok = data
+            .get("input_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let out_tok = data
+            .get("output_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        // task_done 事件不带 cached/reasoning/field_missing，走 0 默认
+        let is_hit = data
+            .get("cache_hit")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // duration 为秒，换算毫秒落库
+        let latency_ms = data
+            .get("duration")
+            .and_then(|v| v.as_f64())
+            .map(|d| d * 1000.0);
+        let provider = models
+            .iter()
+            .find(|m| m.name == model)
+            .map(|m| m.provider_name())
+            .unwrap_or("unknown");
+        let usage_detail = pricing::UsageDetail {
+            prompt_tokens: in_tok,
+            completion_tokens: out_tok,
+            cached_tokens: 0,
+            reasoning_tokens: 0,
+            cache_creation_tokens: 0,
+            field_missing: false,
+        };
+        let (mut act_cost, act_input_cost, zm) = priced_usage(&db, provider, &model, &usage_detail);
+        // P2.b 语义缓存命中省下的金额：未真正调用供应商费用为 0，但本应花费的 act_cost 保留，
+        // 用作「缓存为您节省 ¥X」的账实来源（cost 仍记 0）。
+        let cache_saved_cost = if is_hit { act_cost } else { 0.0 };
+        if is_hit {
+            act_cost = 0.0;
+        }
+        // C2：子任务级 est_input_cost 由 plan-subtask 响应经 task_done 事件透传
+        let est_input_cost = data
+            .get("est_input_cost")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let _ = db.insert_usage(&db::UsageRecord {
+            model_name: &model,
+            user_id: "default",
+            input_tokens: in_tok,
+            output_tokens: out_tok,
+            cost: act_cost,
+            task_type: Some(&role),
+            cache_hit: is_hit,
+            latency_ms,
+            request_id: Some(orchestrate_rid),
+            extra: Some(db::UsageExtra {
+                cached_tokens: 0,
+                reasoning_tokens: 0,
+                est_cost: 0.0,
+                act_cost,
+                zone_multiplier: zm,
+                conversation_id: conversation_id.clone(),
+                field_missing: false,
+                cache_saved_cost,
+                api_source: None,
+                est_input_cost,
+                act_input_cost,
+            }),
+        });
+        // P3：按 task_done 成功/失败喂健康哨点（模型可达性，无 role 归属冲突）
+        if model != "unknown" {
+            let ok = data
+                .get("error")
+                .and_then(|v| v.as_str())
+                .is_none_or(|s| s.is_empty());
+            crate::health::record_outcome(&db, &model, ok);
+        }
+        // P1.c：按 task_done 是否带 error 下发成功/失败成效信号（skill/model-任务 打点）。
+        // 模型解不出时（unknown）无真实归属，跳过打点避免误伤。
+        if model != "unknown" && role != "unknown" {
+            let kind = if data
+                .get("error")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty())
+            {
+                QualitySignalKind::SubtaskFail
+            } else {
+                QualitySignalKind::Success
+            };
+            db.upsert_model_task_score_signal(&model, &role, kind).ok();
+        }
+        // P4：子任务升档（P4.c）把被跳过的轻量模型按 P3 相同语义记 Escalation 信号——
+        // 其质量信号不达标（零成本判别），让路由学习少用该模型。final model 仍记 Success。
+        if let Some(ef) = data.get("escalated_from").and_then(|v| v.as_str()) {
+            if !ef.is_empty() && ef != model && role != "unknown" {
+                db.upsert_model_task_score_signal(ef, &role, QualitySignalKind::Escalation)
+                    .ok();
+            }
+        }
+        // P1.d：按 shadow_ratio 概率后台采样双跑（以主 query 作路由样本），不改返回。
+        maybe_shadow_sample(db.clone(), models.clone(), role, shadow_query.to_string());
+    }
 }
 
 // ── Services (process management) ──
@@ -2191,6 +2294,7 @@ async fn remote_api_guard(
 #[cfg(test)]
 mod remote_api_tests {
     use super::remote_api_allowed;
+    use super::validated_since;
 
     #[test]
     fn management_is_local_only_and_remote_proxy_requires_keys() {
@@ -2201,6 +2305,36 @@ mod remote_api_tests {
         assert!(!remote_api_allowed("/v1/models", false, false));
         assert!(remote_api_allowed("/v1/models", false, true));
         assert!(remote_api_allowed("/api/health", false, false));
+    }
+
+    #[test]
+    fn usage_since_is_normalized_not_passed_through() {
+        assert_eq!(validated_since(None).unwrap(), None);
+        assert_eq!(validated_since(Some("")).unwrap(), None);
+        assert_eq!(validated_since(Some("  ")).unwrap(), None);
+        assert_eq!(
+            validated_since(Some("2026-10-19")).unwrap(),
+            Some("2026-10-19".to_string())
+        );
+        assert_eq!(
+            validated_since(Some("2026-10-19T08:00:00Z")).unwrap(),
+            Some("2026-10-19T08:00:00Z".to_string())
+        );
+        // Unix 秒归一化为当前格式的 UTC ISO 串（CURRENT_TIMESTAMP 语义）
+        assert_eq!(
+            validated_since(Some("0")).unwrap(),
+            Some("1970-01-01 00:00:00".to_string())
+        );
+        // 无效输入被拒绝而不是被透传
+        for bad in [
+            "DROP TABLE usage_records",
+            "9999-99-99x",
+            "2026/10/19",
+            "abc",
+            &"x".repeat(64),
+        ] {
+            assert!(validated_since(Some(bad)).is_err(), "应拒绝: {bad}");
+        }
     }
 }
 
