@@ -3,16 +3,21 @@
 use reqwest::{header::RETRY_AFTER, RequestBuilder, Response};
 use std::time::Duration;
 
+const MAX_RETRIES: usize = 2;
+const MAX_RETRY_AFTER_SECS: u64 = 120;
+const INITIAL_BACKOFF_MS: u64 = 500;
+const JITTER_DIVISOR: u64 = 4;
+
 fn retryable(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 408 | 409 | 429) || status.is_server_error()
 }
 
 pub(crate) async fn send(mut request: RequestBuilder) -> Result<Response, reqwest::Error> {
-    for attempt in 0..=2 {
+    for attempt in 0..=MAX_RETRIES {
         let repeat = request.try_clone();
         match request.send().await {
             Ok(response) => {
-                if attempt == 2 || !retryable(response.status()) || repeat.is_none() {
+                if attempt == MAX_RETRIES || !retryable(response.status()) || repeat.is_none() {
                     return Ok(response);
                 }
                 let after = response
@@ -20,13 +25,16 @@ pub(crate) async fn send(mut request: RequestBuilder) -> Result<Response, reqwes
                     .get(RETRY_AFTER)
                     .and_then(|v| v.to_str().ok())
                     .and_then(|s| s.parse::<u64>().ok())
-                    .filter(|secs| *secs <= 120)
+                    .filter(|secs| *secs <= MAX_RETRY_AFTER_SECS)
                     .map(Duration::from_secs);
                 drop(response);
                 tokio::time::sleep(after.unwrap_or_else(|| backoff(attempt))).await;
             }
             Err(error) => {
-                if attempt == 2 || repeat.is_none() || !(error.is_connect() || error.is_timeout()) {
+                if attempt == MAX_RETRIES
+                    || repeat.is_none()
+                    || !(error.is_connect() || error.is_timeout())
+                {
                     return Err(error);
                 }
                 tokio::time::sleep(backoff(attempt)).await;
@@ -38,8 +46,8 @@ pub(crate) async fn send(mut request: RequestBuilder) -> Result<Response, reqwes
 }
 
 fn backoff(attempt: usize) -> Duration {
-    let base = 500_u64 << attempt;
-    let jitter = rand::random::<u64>() % (base / 4 + 1);
+    let base = INITIAL_BACKOFF_MS << attempt;
+    let jitter = rand::random::<u64>() % (base / JITTER_DIVISOR + 1);
     Duration::from_millis(base + jitter)
 }
 

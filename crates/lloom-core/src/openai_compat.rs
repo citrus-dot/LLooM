@@ -743,6 +743,11 @@ pub async fn models_list(State(state): State<AppState>, headers: HeaderMap) -> R
 
 // ── API Key management ──
 
+const API_KEY_NAME_MAX_CHARS: usize = 128;
+const API_KEY_DEFAULT_RPM: i64 = 60;
+const API_KEY_MIN_RPM: i64 = 1;
+const API_KEY_MAX_RPM: i64 = 10_000;
+
 /// 代理接入信息投影（base_url 恒用 127.0.0.1——0.0.0.0 下的真实局域网 IP
 /// 服务端不可知，前端按 `bind` 字段提示替换）。
 fn proxy_config_json(state: &AppState) -> Value {
@@ -791,7 +796,10 @@ fn validate_api_key_fields(
     expires_at: Option<&str>,
 ) -> Result<(), &'static str> {
     let name = name.trim();
-    if name.is_empty() || name.chars().count() > 128 || name.chars().any(char::is_control) {
+    if name.is_empty()
+        || name.chars().count() > API_KEY_NAME_MAX_CHARS
+        || name.chars().any(char::is_control)
+    {
         return Err("名称必须为 1-128 个非控制字符");
     }
     if !matches!(status, "active" | "disabled") {
@@ -800,7 +808,7 @@ fn validate_api_key_fields(
     if quota_usd.is_some_and(|quota| !quota.is_finite() || quota < 0.0) {
         return Err("额度必须为非负有限数字");
     }
-    if !(1..=10_000).contains(&rpm) {
+    if !(API_KEY_MIN_RPM..=API_KEY_MAX_RPM).contains(&rpm) {
         return Err("RPM 必须在 1-10000 之间");
     }
     if expires_at.is_some_and(|date| {
@@ -853,7 +861,7 @@ pub async fn api_key_create(
         &body.name,
         "active",
         body.quota_usd,
-        body.rpm.unwrap_or(60),
+        body.rpm.unwrap_or(API_KEY_DEFAULT_RPM),
         body.expires_at.as_deref(),
     ) {
         return validation_error(message);
@@ -873,7 +881,7 @@ pub async fn api_key_create(
         name: body.name.trim(),
         status: "active",
         quota_usd: body.quota_usd,
-        rpm: body.rpm.unwrap_or(60),
+        rpm: body.rpm.unwrap_or(API_KEY_DEFAULT_RPM),
         allowed_models: &models,
         expires_at: body.expires_at.as_deref(),
     };

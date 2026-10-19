@@ -35,6 +35,15 @@ pub use cli::*;
 // ── settings KV（运行时动态调参，落 SQLite） ──
 
 mod settings {
+    const DEFAULT_SHADOW_RATIO: f64 = 0.10;
+    const DEFAULT_HEALTH_FAIL_WINDOW: i64 = 5;
+    const DEFAULT_HEALTH_DEGRADED_FAILS: u32 = 2;
+    const DEFAULT_HEALTH_DOWN_CONSECUTIVE: u32 = 3;
+    const DEFAULT_HEALTH_CIRCUIT_THRESHOLD: u32 = 5;
+    const DEFAULT_HEALTH_PROBE_SEC: u64 = 60;
+    const MIN_HEALTH_PROBE_SEC: u64 = 5;
+    const MAX_HEALTH_PROBE_SEC: u64 = 86_400;
+
     fn setting(db: &crate::db::Db, key: &str) -> Option<String> {
         db.get_setting(key).ok().flatten()
     }
@@ -44,7 +53,7 @@ mod settings {
     pub fn shadow_ratio(db: &crate::db::Db) -> f64 {
         setting(db, "routing.shadow_ratio")
             .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(0.10)
+            .unwrap_or(DEFAULT_SHADOW_RATIO)
             .clamp(0.0, 1.0)
     }
 
@@ -55,7 +64,7 @@ mod settings {
     pub fn health_fail_window(db: &crate::db::Db) -> i64 {
         setting(db, "health.fail_window")
             .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(5)
+            .unwrap_or(DEFAULT_HEALTH_FAIL_WINDOW)
             .clamp(1, 1000)
     }
 
@@ -63,7 +72,7 @@ mod settings {
     pub fn health_degraded_fails(db: &crate::db::Db) -> u32 {
         setting(db, "health.degraded_fails")
             .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(2)
+            .unwrap_or(DEFAULT_HEALTH_DEGRADED_FAILS)
             .clamp(1, 1000)
     }
 
@@ -71,7 +80,7 @@ mod settings {
     pub fn health_down_consecutive(db: &crate::db::Db) -> u32 {
         setting(db, "health.down_consecutive")
             .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(3)
+            .unwrap_or(DEFAULT_HEALTH_DOWN_CONSECUTIVE)
             .clamp(1, 10000)
     }
 
@@ -79,7 +88,7 @@ mod settings {
     pub fn health_circuit_threshold(db: &crate::db::Db) -> u32 {
         setting(db, "health.circuit_threshold")
             .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(5)
+            .unwrap_or(DEFAULT_HEALTH_CIRCUIT_THRESHOLD)
             .clamp(1, 10000)
     }
 
@@ -87,8 +96,8 @@ mod settings {
     pub fn health_probe_sec(db: &crate::db::Db) -> u64 {
         setting(db, "health.probe_sec")
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(60)
-            .clamp(5, 86400)
+            .unwrap_or(DEFAULT_HEALTH_PROBE_SEC)
+            .clamp(MIN_HEALTH_PROBE_SEC, MAX_HEALTH_PROBE_SEC)
     }
 }
 pub use settings::*;
