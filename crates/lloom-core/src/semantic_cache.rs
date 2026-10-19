@@ -33,10 +33,13 @@ fn new_embedder_session() -> std::result::Result<TextEmbedding, String> {
         // dlopen 失败。聊天会静默降级无 L2，这里给一条可执行的修复提示。
         if cfg!(all(target_os = "macos", target_arch = "x86_64")) && msg.contains("libonnxruntime")
         {
-            eprintln!(
-                "[core] L2 语义缓存不可用：{msg}\n\
-                 [core] Intel Mac 版需 ONNX Runtime：brew install onnxruntime\n\
-                 [core] （不装也能用：L1 精确缓存与云端/本地模型路由不受影响）"
+            crate::logging::warn(
+                "core",
+                &format!(
+                    "L2 语义缓存不可用：{msg}\n\
+                     [core] Intel Mac 版需 ONNX Runtime：brew install onnxruntime\n\
+                     [core] （不装也能用：L1 精确缓存与云端/本地模型路由不受影响）"
+                ),
             );
         }
         msg

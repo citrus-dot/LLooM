@@ -549,11 +549,11 @@ pub async fn chat_completions(
                     act_input_cost: input_cost,
                 }),
             }) {
-                eprintln!("[proxy] 保存流式用量失败: {error}");
+                crate::logging::error("proxy", &format!("保存流式用量失败: {error}"));
             }
             if api_key_id > 0 {
                 if let Err(error) = db.settle_api_key_budget(&request_id, cost) {
-                    eprintln!("[proxy] 结算 API Key 额度失败: {error}");
+                    crate::logging::error("proxy", &format!("结算 API Key 额度失败: {error}"));
                 }
             }
             if let Some(detail) = stream_error {
@@ -658,7 +658,7 @@ pub async fn chat_completions(
             });
             if api_key_id > 0 {
                 if let Err(error) = state.db.settle_api_key_budget(&request_id, act_cost) {
-                    eprintln!("[proxy] 结算 API Key 额度失败: {error}");
+                    crate::logging::error("proxy", &format!("结算 API Key 额度失败: {error}"));
                 }
             }
             state

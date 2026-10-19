@@ -92,27 +92,6 @@ pub async fn start_ollama() -> Result<Option<Child>> {
     Ok(Some(child))
 }
 
-/// Stop a running Ollama regardless of who started it. If this process spawned
-/// it (child handle held), the caller kills the handle; otherwise find and
-/// terminate the `ollama serve` process (external / system-managed instance).
-/// Platform-native process kill: `pkill` on Unix, `taskkill` on Windows.
-pub fn stop_ollama() -> String {
-    let status = if cfg!(windows) {
-        Command::new("taskkill")
-            .args(["/IM", "ollama.exe", "/T", "/F"])
-            .status()
-    } else {
-        Command::new("pkill")
-            .args(["-f", "ollama serve"])
-            .status()
-    };
-    match status {
-        Ok(s) if s.success() => "Ollama stopped".to_string(),
-        Ok(_) => "Ollama not running".to_string(),
-        Err(e) => format!("Failed to stop Ollama: {e}"),
-    }
-}
-
 // ── Health helpers ──
 
 /// Open a URL in the user's default browser (cross-platform; used by
@@ -175,7 +154,12 @@ pub fn ollama_installed() -> bool {
         )];
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             // Ollama installer default per-user location.
-            roots.push(std::path::PathBuf::from(local).join("Programs").join("Ollama").join("ollama.exe"));
+            roots.push(
+                std::path::PathBuf::from(local)
+                    .join("Programs")
+                    .join("Ollama")
+                    .join("ollama.exe"),
+            );
         }
         return roots.iter().any(|r| r.exists());
     }

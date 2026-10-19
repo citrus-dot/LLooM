@@ -110,7 +110,7 @@ mod paths {
             _ => install_dir().join("data"),
         };
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            eprintln!("[config] failed to create data dir {dir:?}: {e}");
+            crate::logging::error("config", &format!("failed to create data dir {dir:?}: {e}"));
         }
         dir
     }
@@ -122,7 +122,10 @@ mod paths {
     pub fn conversations_dir() -> PathBuf {
         let dir = data_dir().join("conversations");
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            eprintln!("[config] failed to create conversations dir {dir:?}: {e}");
+            crate::logging::error(
+                "config",
+                &format!("failed to create conversations dir {dir:?}: {e}"),
+            );
         }
         dir
     }

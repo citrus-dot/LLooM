@@ -150,7 +150,10 @@ pub fn migrate_json_dir(db: &crate::db::Db) -> Result<usize> {
         }
     }
     if imported > 0 {
-        println!("[conversations] migrated {imported} JSON conversation(s) into SQLite");
+        crate::logging::info(
+            "conversations",
+            &format!("migrated {imported} JSON conversation(s) into SQLite"),
+        );
     }
     Ok(imported)
 }
@@ -297,7 +300,10 @@ pub fn delete(db: &crate::db::Db, id: &str) -> Result<()> {
     let snapshot = config::conversations_dir().join(format!("{id}.json"));
     if snapshot.exists() {
         if let Err(e) = std::fs::remove_file(&snapshot) {
-            eprintln!("[core] delete conversation {id}: remove legacy snapshot failed: {e}");
+            crate::logging::error(
+                "conversations",
+                &format!("delete conversation {id}: remove legacy snapshot failed: {e}"),
+            );
         }
     }
     Ok(())

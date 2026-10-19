@@ -52,7 +52,7 @@ fn main() {
     let state = match AppState::new() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("[core] db init failed: {e}");
+            lloom_core::logging::error("core", &format!("db init failed: {e}"));
             std::process::exit(1);
         }
     };
@@ -60,7 +60,10 @@ fn main() {
     // One-time (idempotent) import of legacy JSON conversations into SQLite.
     // Files stay in place as a rollback backup; already-imported ids are skipped.
     if let Err(e) = lloom_core::conversations::migrate_json_dir(&state.db) {
-        eprintln!("[core] conversation migration failed (non-fatal): {e}");
+        lloom_core::logging::error(
+            "core",
+            &format!("conversation migration failed (non-fatal): {e}"),
+        );
     }
 
     let state_for_spawn = state.clone();
@@ -71,10 +74,10 @@ fn main() {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
         rt.block_on(async move {
-            println!("[core] starting Ollama...");
+            lloom_core::logging::info("core", "starting Ollama...");
             match lloom_core::processes::start_ollama().await {
                 Ok(child) => state_for_spawn.children.lock().unwrap().ollama = child,
-                Err(e) => eprintln!("[core] ⚠ Ollama start failed: {e}"),
+                Err(e) => lloom_core::logging::warn("core", &format!("Ollama start failed: {e}")),
             }
 
             let bind_addr = config::bind_addr();
@@ -85,8 +88,11 @@ fn main() {
                 .map(|ip| ip.is_loopback())
                 .unwrap_or_else(|_| bind_addr.eq_ignore_ascii_case("localhost"));
             if !loopback_bind && !server::non_loopback_bind_permitted(false, state_for_spawn.db.list_api_keys().map(|k| !k.is_empty()).unwrap_or(false)) {
-                eprintln!(
-                    "[core] refusing to start: 非环回绑定 {bind_addr} 需要先配置至少一个 API Key（防止管理面无鉴权暴露到局域网）"
+                lloom_core::logging::error(
+                    "core",
+                    &format!(
+                        "refusing to start: 非环回绑定 {bind_addr} 需要先配置至少一个 API Key（防止管理面无鉴权暴露到局域网）"
+                    ),
                 );
                 server::shutdown_all(&state_for_spawn);
                 std::process::exit(1);
@@ -94,10 +100,16 @@ fn main() {
             let listener = tokio::net::TcpListener::bind((bind_addr.as_str(), web_port))
                 .await
                 .unwrap_or_else(|e| {
-                    eprintln!("[core] failed to bind {bind_addr}:{web_port}: {e}");
+                    lloom_core::logging::error(
+                        "core",
+                        &format!("failed to bind {bind_addr}:{web_port}: {e}"),
+                    );
                     std::process::exit(1);
                 });
-            println!("[core] REST server on {bind_addr}:{web_port}");
+            lloom_core::logging::info(
+                    "core",
+                    &format!("REST server on {bind_addr}:{web_port}"),
+                );
 
             // --open: fire the default browser once the port is live, so the
             // page never races the listener (start.sh / start.bat pass this).
@@ -106,7 +118,7 @@ fn main() {
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(300));
                     if !lloom_core::processes::open_browser(&url) {
-                        eprintln!("[core] ⚠ failed to open browser for {url}");
+                        lloom_core::logging::warn("core", &format!("failed to open browser for {url}"));
                     }
                 });
             }
@@ -122,14 +134,14 @@ fn main() {
             let shutdown_signal = async move {
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
-                        println!("[core] SIGINT received, shutting down...");
+                        lloom_core::logging::info("core", "SIGINT received, shutting down...");
                     }
                     _ = sigterm() => {
-                        println!("[core] SIGTERM received, shutting down...");
+                        lloom_core::logging::info("core", "SIGTERM received, shutting down...");
                     }
                 }
                 server::shutdown_all(&s);
-                println!("[core] all services stopped.");
+                lloom_core::logging::info("core", "all services stopped.");
             };
 
             axum::serve(
@@ -144,9 +156,9 @@ fn main() {
         });
     });
 
-    println!("[server] LLooM running");
-    println!("[server] Web UI: http://localhost:{web_port}/");
-    println!("[server] Press Ctrl+C to stop");
+    lloom_core::logging::info("server", "LLooM running");
+    lloom_core::logging::info("server", &format!("Web UI: http://localhost:{web_port}/"));
+    lloom_core::logging::info("server", "Press Ctrl+C to stop");
 
     std::thread::park();
 }

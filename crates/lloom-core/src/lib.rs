@@ -21,6 +21,7 @@ pub mod db;
 pub mod error;
 pub mod exact_cache;
 pub mod health;
+pub mod logging;
 pub mod metadata;
 pub mod metrics;
 pub mod model_dto;

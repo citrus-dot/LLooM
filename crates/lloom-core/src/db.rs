@@ -963,13 +963,6 @@ impl Db {
         Ok(())
     }
 
-    /// 删除一条 settings KV（不存在时静默成功）。清空 UI 管理的配置后回落 env 后备。
-    pub fn delete_setting(&self, key: &str) -> Result<()> {
-        let conn = self.conn()?;
-        conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
-        Ok(())
-    }
-
     pub fn list_api_keys(&self) -> Result<Vec<ApiKeyRow>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -1164,14 +1157,6 @@ impl Db {
         }
         tx.commit()?;
         Ok(expired.len())
-    }
-
-    pub fn add_api_key_usage(&self, id: i64, cost: f64) -> Result<()> {
-        self.conn()?.execute(
-            "UPDATE api_keys SET used_usd=used_usd+?2 WHERE id=?1",
-            params![id, cost],
-        )?;
-        Ok(())
     }
 
     // ── Semantic-cache calibration ──
@@ -1452,17 +1437,6 @@ impl Db {
             Some(row) => Ok(Some(routing_policy_from_row(row)?)),
             None => Ok(None),
         }
-    }
-
-    pub fn list_routing_policy(&self) -> Result<Vec<RoutingPolicy>> {
-        let conn = self.conn()?;
-        let mut stmt = conn.prepare("SELECT * FROM routing_policy ORDER BY task_type")?;
-        let rows = stmt.query_map([], routing_policy_from_row)?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
-        }
-        Ok(out)
     }
 
     pub fn upsert_routing_policy(&self, p: &RoutingPolicy) -> Result<()> {

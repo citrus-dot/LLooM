@@ -9,16 +9,6 @@ use std::sync::OnceLock;
 
 // ── PII patterns (7 types) ──
 
-pub const PII_TYPES: [&str; 7] = [
-    "EMAIL_ADDRESS",
-    "PHONE_NUMBER",
-    "US_SSN",
-    "CREDIT_CARD",
-    "IP_ADDRESS",
-    "ID_CARD",
-    "BANK_ACCOUNT",
-];
-
 const PII_PATTERNS: [(&str, &str); 7] = [
     (
         "EMAIL_ADDRESS",

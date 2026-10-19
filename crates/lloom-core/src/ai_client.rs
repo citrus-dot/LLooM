@@ -28,7 +28,7 @@ fn exact_cache(path: &std::path::Path) -> Option<Arc<crate::exact_cache::ExactCa
             Some(store)
         }
         Err(error) => {
-            eprintln!("[cache] 打开精确缓存失败: {error}");
+            crate::logging::warn("cache", &format!("打开精确缓存失败: {error}"));
             None
         }
     }
@@ -58,7 +58,7 @@ fn semantic_cache(
             Some(store)
         }
         Err(error) => {
-            eprintln!("[cache] 打开语义缓存失败: {error}");
+            crate::logging::warn("cache", &format!("打开语义缓存失败: {error}"));
             None
         }
     }
@@ -235,14 +235,14 @@ pub async fn chat_stream(
                             &content,
                             (!conversation_id.is_empty()).then_some(conversation_id.as_str()),
                         ) {
-                            eprintln!("[cache] 保存精确缓存失败: {e}");
+                            crate::logging::error("cache", &format!("保存精确缓存失败: {e}"));
                         }
                     }
                     if let Some((store, vector)) = &semantic {
                         if let Err(e) =
                             store.store(&name, &system_hash, temperature, &query, &content, vector)
                         {
-                            eprintln!("[cache] 保存语义缓存失败: {e}");
+                            crate::logging::error("cache", &format!("保存语义缓存失败: {e}"));
                         }
                     }
                 }
@@ -297,15 +297,18 @@ async fn embed_query(query: String) -> Option<Vec<f32>> {
     {
         Ok(Ok(Ok(vector))) => Some(vector),
         Ok(Ok(Err(error))) => {
-            eprintln!("[cache] L2 向量生成失败，继续无缓存调用: {error}");
+            crate::logging::warn(
+                "cache",
+                &format!("L2 向量生成失败，继续无缓存调用: {error}"),
+            );
             None
         }
         Ok(Err(error)) => {
-            eprintln!("[cache] L2 后台任务失败: {error}");
+            crate::logging::error("cache", &format!("L2 后台任务失败: {error}"));
             None
         }
         Err(_) => {
-            eprintln!("[cache] L2 向量生成超过 2 秒，继续无缓存调用");
+            crate::logging::warn("cache", "L2 向量生成超过 2 秒，继续无缓存调用");
             None
         }
     }
@@ -437,11 +440,6 @@ fn cache_key(
         ),
         temperature.to_bits()
     ))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClassifyResult {
-    pub task_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -975,42 +973,4 @@ pub async fn orchestrate_native(
     Ok(Box::pin(futures::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|e| (e, rx))
     })))
-}
-
-/// Parse an SSE body into a Vec of {event, data} events.
-pub fn parse_sse(text: &str) -> Vec<SseEvent> {
-    let mut events: Vec<SseEvent> = Vec::new();
-    let mut current: Option<(String, String)> = None;
-
-    for line in text.lines() {
-        if let Some(ev) = line.strip_prefix("event:") {
-            if let Some((name, data)) = current.take() {
-                events.push(mk_event(name, &data));
-            }
-            current = Some((ev.trim().to_string(), String::new()));
-        } else if let Some(data) = line.strip_prefix("data: ") {
-            if let Some((name, existing)) = current.as_mut() {
-                if existing.is_empty() {
-                    *existing = data.to_string();
-                } else {
-                    events.push(mk_event(name.clone(), existing));
-                    *existing = data.to_string();
-                }
-            } else {
-                current = Some(("message".to_string(), data.to_string()));
-            }
-        }
-    }
-    if let Some((name, data)) = current.take() {
-        events.push(mk_event(name, &data));
-    }
-    events
-}
-
-fn mk_event(name: String, data: &str) -> SseEvent {
-    let parsed = serde_json::from_str::<Value>(data).unwrap_or(Value::String(data.to_string()));
-    SseEvent {
-        event: name,
-        data: parsed,
-    }
 }

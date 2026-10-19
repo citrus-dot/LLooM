@@ -94,12 +94,14 @@ pub fn load_frozen(
     let out_path = norm_dir.join("outcomes.jsonl");
     let selected: Option<std::collections::HashSet<String>> = match selection_path {
         Some(p) => {
-            let text = std::fs::read_to_string(p)
-                .map_err(|e| AppError::InvalidRequest(format!("core_selection 读取失败 {p:?}: {e}")))?;
+            let text = std::fs::read_to_string(p).map_err(|e| {
+                AppError::InvalidRequest(format!("core_selection 读取失败 {p:?}: {e}"))
+            })?;
             let mut set = std::collections::HashSet::new();
             for l in text.lines().filter(|l| !l.trim().is_empty()) {
-                let v: Value = serde_json::from_str(l)
-                    .map_err(|e| AppError::InvalidRequest(format!("core_selection 行解析失败: {e}")))?;
+                let v: Value = serde_json::from_str(l).map_err(|e| {
+                    AppError::InvalidRequest(format!("core_selection 行解析失败: {e}"))
+                })?;
                 set.insert(v["sample_id"].as_str().unwrap_or_default().to_string());
             }
             Some(set)
@@ -127,7 +129,10 @@ pub fn load_frozen(
         };
         match v["split"].as_str() {
             Some("test") => {
-                let in_core = selected.as_ref().map(|s| s.contains(&sample_id)).unwrap_or(true);
+                let in_core = selected
+                    .as_ref()
+                    .map(|s| s.contains(&sample_id))
+                    .unwrap_or(true);
                 if in_core {
                     test_instances.push(inst);
                 }
@@ -169,7 +174,9 @@ pub fn load_frozen(
 
 impl FrozenMatrix {
     pub fn lookup(&self, sample_id: &str, model_id: &str) -> Option<(f64, f64)> {
-        self.outcomes.get(&(sample_id.to_string(), model_id.to_string())).copied()
+        self.outcomes
+            .get(&(sample_id.to_string(), model_id.to_string()))
+            .copied()
     }
 
     /// calibration 统计：(dataset_id, model_id) → (mean_score, n)。只读 calibration split——
@@ -208,7 +215,11 @@ pub fn bench_policy(task_type: &str) -> RoutingPolicy {
 }
 
 /// 指定 cost/quality 权重的 bench policy（latency 恒 0.1 生产缺省；cost+quality 由调用方分配）。
-pub fn policy_with_weights(task_type: &str, cost_weight: f64, quality_weight: f64) -> RoutingPolicy {
+pub fn policy_with_weights(
+    task_type: &str,
+    cost_weight: f64,
+    quality_weight: f64,
+) -> RoutingPolicy {
     RoutingPolicy {
         task_type: task_type.to_string(),
         min_capability_tier: 1,
@@ -297,7 +308,12 @@ pub fn calibration_stats(
         .into_iter()
         .map(|(m, (sum, n))| (m.to_string(), if n > 0 { sum / n as f64 } else { 0.5 }))
         .collect();
-    CalibrationStats { unit_price, dataset_mean, task_quality, model_quality }
+    CalibrationStats {
+        unit_price,
+        dataset_mean,
+        task_quality,
+        model_quality,
+    }
 }
 
 pub fn est_in_tokens(prompt: &str) -> i64 {
@@ -388,11 +404,23 @@ pub struct ReplayCtx {
 }
 
 impl ReplayCtx {
-    pub fn new(pool: BenchPool, models: Vec<Model>, specs: HashMap<(String, String), PriceSpec>, stats: CalibrationStats) -> Self {
+    pub fn new(
+        pool: BenchPool,
+        models: Vec<Model>,
+        specs: HashMap<(String, String), PriceSpec>,
+        stats: CalibrationStats,
+    ) -> Self {
         Self {
-            pool, models, specs, zones: ZoneResolver::new(), stats,
-            use_calibration: false, weights: None, soft_gate: None,
-            matched_target: None, strong_budget: None,
+            pool,
+            models,
+            specs,
+            zones: ZoneResolver::new(),
+            stats,
+            use_calibration: false,
+            weights: None,
+            soft_gate: None,
+            matched_target: None,
+            strong_budget: None,
         }
     }
 
@@ -407,7 +435,11 @@ impl ReplayCtx {
         let mut m = HashMap::new();
         if self.use_calibration {
             for model_id in self.pool.model_ids() {
-                if let Some((q, n)) = self.stats.task_quality.get(&(model_id.to_string(), task_type.to_string())) {
+                if let Some((q, n)) = self
+                    .stats
+                    .task_quality
+                    .get(&(model_id.to_string(), task_type.to_string()))
+                {
                     if *n >= CALIBRATION_MIN_SAMPLES {
                         m.insert(model_id.to_string(), q.clamp(0.0, 1.0));
                     }
@@ -538,7 +570,9 @@ pub fn replay(
     let mr_weights: Option<(f64, f64, f64)> = match strategy {
         Strategy::CostMatchedRandom => {
             let target = ctx.matched_target.ok_or_else(|| {
-                AppError::InvalidRequest("cost_matched_random 需要 --matched-target（目标期望成本）".into())
+                AppError::InvalidRequest(
+                    "cost_matched_random 需要 --matched-target（目标期望成本）".into(),
+                )
             })?;
             let mean = |m: &str| {
                 let mut s = 0.0;
@@ -549,19 +583,32 @@ pub fn replay(
                         n += 1;
                     }
                 }
-                if n == 0 { 0.0 } else { s / n as f64 }
+                if n == 0 {
+                    0.0
+                } else {
+                    s / n as f64
+                }
             };
             let (cw, cs) = (mean(&ctx.pool.weak), mean(&ctx.pool.strong));
-            let raw = if cs - cw > 1e-15 { (target - cw) / (cs - cw) } else { 0.5 };
+            let raw = if cs - cw > 1e-15 {
+                (target - cw) / (cs - cw)
+            } else {
+                0.5
+            };
             let ps = raw.clamp(0.0, 1.0);
             if (ps - raw).abs() > 1e-12 {
-                eprintln!("⚠ 目标成本 {target} 超出 [{cw}, {cs}] 可达区间，已截断（期望成本将偏离目标）");
+                crate::logging::warn(
+                    "bench",
+                    &format!("目标成本 {target} 超出 [{cw}, {cs}] 可达区间，已截断（期望成本将偏离目标）"),
+                );
             }
             Some((1.0 - ps, 0.0, ps)) // 两点混合 {weak, strong}：成本杠杆最大
         }
         Strategy::StrongShareMatchedRandom => {
             let target = ctx.matched_target.ok_or_else(|| {
-                AppError::InvalidRequest("strong_share_matched_random 需要 --matched-target（目标 P(strong)）".into())
+                AppError::InvalidRequest(
+                    "strong_share_matched_random 需要 --matched-target（目标 P(strong)）".into(),
+                )
             })?;
             let ps = target.clamp(0.0, 1.0);
             Some((0.0, 1.0 - ps, ps)) // 其余填 mid：隔离"weak 使用是否真有收益"
@@ -585,7 +632,10 @@ pub fn replay(
                     Strategy::AlwaysMid => ctx.pool.mid.clone(),
                     _ => ctx.pool.strong.clone(),
                 };
-                (m, json!({ "strategy": strategy.name(), "rule": "constant" }))
+                (
+                    m,
+                    json!({ "strategy": strategy.name(), "rule": "constant" }),
+                )
             }
             Strategy::Cheapest => {
                 // §12.2：成本只来自 calibration 导出单价，不看 test score
@@ -602,12 +652,18 @@ pub fn replay(
                     })
                     .map(|s| s.to_string())
                     .ok_or_else(|| AppError::InvalidRequest("空池".into()))?;
-                (m, json!({ "strategy": strategy.name(), "rule": "argmin unit_price(calibration)" }))
+                (
+                    m,
+                    json!({ "strategy": strategy.name(), "rule": "argmin unit_price(calibration)" }),
+                )
             }
             Strategy::Random => {
                 let ids = ctx.pool.model_ids();
                 let m = ids[rng.below(3) as usize].to_string();
-                (m, json!({ "strategy": strategy.name(), "seed": RANDOM_SEED, "rule": "uniform" }))
+                (
+                    m,
+                    json!({ "strategy": strategy.name(), "seed": RANDOM_SEED, "rule": "uniform" }),
+                )
             }
             Strategy::BandOnly => {
                 // V1 消融：band 直接映射模型（easy→weak / medium→mid / hard→strong），无评分
@@ -617,8 +673,11 @@ pub fn replay(
                     "medium" => ctx.pool.mid.clone(),
                     _ => ctx.pool.strong.clone(),
                 };
-                (m, json!({ "strategy": strategy.name(), "band": band,
-                            "rule": "band→tier→model direct map (no scoring)" }))
+                (
+                    m,
+                    json!({ "strategy": strategy.name(), "band": band,
+                            "rule": "band→tier→model direct map (no scoring)" }),
+                )
             }
             Strategy::BestSingle => {
                 let m = best_single_cache
@@ -629,15 +688,28 @@ pub fn replay(
                             .iter()
                             .copied()
                             .max_by(|a, b| {
-                                let va = ctx.stats.dataset_mean.get(&(inst.dataset_id.clone(), a.to_string())).copied().unwrap_or(f64::NEG_INFINITY);
-                                let vb = ctx.stats.dataset_mean.get(&(inst.dataset_id.clone(), b.to_string())).copied().unwrap_or(f64::NEG_INFINITY);
+                                let va = ctx
+                                    .stats
+                                    .dataset_mean
+                                    .get(&(inst.dataset_id.clone(), a.to_string()))
+                                    .copied()
+                                    .unwrap_or(f64::NEG_INFINITY);
+                                let vb = ctx
+                                    .stats
+                                    .dataset_mean
+                                    .get(&(inst.dataset_id.clone(), b.to_string()))
+                                    .copied()
+                                    .unwrap_or(f64::NEG_INFINITY);
                                 va.total_cmp(&vb)
                             })
                             .unwrap_or(&ctx.pool.strong)
                             .to_string()
                     })
                     .clone();
-                (m, json!({ "strategy": strategy.name(), "rule": "argmax calibration mean per dataset" }))
+                (
+                    m,
+                    json!({ "strategy": strategy.name(), "rule": "argmax calibration mean per dataset" }),
+                )
             }
             Strategy::Oracle => {
                 let ids = ctx.pool.model_ids();
@@ -647,7 +719,10 @@ pub fn replay(
                     .filter_map(|(i, m)| matrix.lookup(&inst.sample_id, m).map(|(s, _)| (s, i, m)))
                     .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1))) // 并列取列表序前者（确定性）
                     .ok_or_else(|| {
-                        AppError::InvalidRequest(format!("oracle lookup 失败（矩阵覆盖缺口）: {}", inst.sample_id))
+                        AppError::InvalidRequest(format!(
+                            "oracle lookup 失败（矩阵覆盖缺口）: {}",
+                            inst.sample_id
+                        ))
                     })?;
                 (
                     best.2.to_string(),
@@ -688,7 +763,11 @@ pub fn replay(
                 if ctx.strong_budget.is_some() && selected_model == ctx.pool.strong {
                     if strong_used < budget_total {
                         strong_used += 1;
-                    } else if let Some(alt) = outcome.fallback_chain.iter().find(|m| **m != ctx.pool.strong) {
+                    } else if let Some(alt) = outcome
+                        .fallback_chain
+                        .iter()
+                        .find(|m| **m != ctx.pool.strong)
+                    {
                         // 预算耗尽：降级到 fallback_chain 中首个非 strong 合格模型（hard 带无替代则超支）
                         selected_model = alt.clone();
                         budget_downgrade = true;
@@ -728,21 +807,22 @@ pub fn replay(
                 } else {
                     ctx.pool.strong.clone()
                 };
-                (m, json!({ "strategy": strategy.name(), "seed": RANDOM_SEED,
+                (
+                    m,
+                    json!({ "strategy": strategy.name(), "seed": RANDOM_SEED,
                             "target": ctx.matched_target,
                             "weights": {"weak": pw, "mid": pm, "strong": ps},
-                            "rule": "deterministic weighted sampling（期望成本/strong 占比对齐 LLooM）" }))
+                            "rule": "deterministic weighted sampling（期望成本/strong 占比对齐 LLooM）" }),
+                )
             }
         };
 
-        let (score, cost) = matrix
-            .lookup(&inst.sample_id, &selected)
-            .ok_or_else(|| {
-                AppError::InvalidRequest(format!(
-                    "冻结矩阵缺 outcome：({}/{})——Gate 1 coverage 缺口，拒绝进入 headline",
-                    inst.sample_id, selected
-                ))
-            })?;
+        let (score, cost) = matrix.lookup(&inst.sample_id, &selected).ok_or_else(|| {
+            AppError::InvalidRequest(format!(
+                "冻结矩阵缺 outcome：({}/{})——Gate 1 coverage 缺口，拒绝进入 headline",
+                inst.sample_id, selected
+            ))
+        })?;
         // oracle 参照（regret 计算；lloom/全部策略统一带）
         let ids = ctx.pool.model_ids();
         let (oracle_model, oracle_score) = ids
@@ -761,8 +841,7 @@ pub fn replay(
             oracle_model,
             oracle_score,
             regret: oracle_score - score,
-            decision_json: serde_json::to_string(&decision)
-                .unwrap_or_else(|_| "{}".to_string()),
+            decision_json: serde_json::to_string(&decision).unwrap_or_else(|_| "{}".to_string()),
         });
     }
     Ok(items)
@@ -795,10 +874,12 @@ pub fn route_single(
     let q = ctx.quality_override(task_type);
     let empty_hit: HashMap<String, f64> = HashMap::new();
     let input = ctx.build_plan_input(&inst, &policy, &q, &empty_hit);
-    let outcome = router::plan(&input).map_err(|e| {
-        AppError::InvalidRequest(format!("route_single plan() 失败: {e}"))
-    })?;
-    Ok((outcome.primary, router::band_for(task_type, prompt).to_string()))
+    let outcome = router::plan(&input)
+        .map_err(|e| AppError::InvalidRequest(format!("route_single plan() 失败: {e}")))?;
+    Ok((
+        outcome.primary,
+        router::band_for(task_type, prompt).to_string(),
+    ))
 }
 
 /// 单条回放结果（bench_run_items 行）。
@@ -820,7 +901,9 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
     }
-    let idx = ((sorted.len() as f64 * p).ceil() as usize).saturating_sub(1).min(sorted.len() - 1);
+    let idx = ((sorted.len() as f64 * p).ceil() as usize)
+        .saturating_sub(1)
+        .min(sorted.len() - 1);
     sorted[idx]
 }
 
@@ -950,9 +1033,15 @@ mod tests {
     fn matrix_fixture() -> FrozenMatrix {
         // 3 实例 × 3 模型手工矩阵（覆盖全池）
         let rows = [
-            ("s1", "weak_m", 0.0, 0.0001), ("s1", "mid_m", 1.0, 0.0005), ("s1", "strong_m", 1.0, 0.003),
-            ("s2", "weak_m", 1.0, 0.0001), ("s2", "mid_m", 0.0, 0.0004), ("s2", "strong_m", 1.0, 0.004),
-            ("s3", "weak_m", 0.0, 0.0001), ("s3", "mid_m", 1.0, 0.0006), ("s3", "strong_m", 0.0, 0.002),
+            ("s1", "weak_m", 0.0, 0.0001),
+            ("s1", "mid_m", 1.0, 0.0005),
+            ("s1", "strong_m", 1.0, 0.003),
+            ("s2", "weak_m", 1.0, 0.0001),
+            ("s2", "mid_m", 0.0, 0.0004),
+            ("s2", "strong_m", 1.0, 0.004),
+            ("s3", "weak_m", 0.0, 0.0001),
+            ("s3", "mid_m", 1.0, 0.0006),
+            ("s3", "strong_m", 0.0, 0.002),
         ];
         let mut outcomes = HashMap::new();
         for (s, m, sc, c) in rows {
@@ -976,7 +1065,11 @@ mod tests {
 
     fn ctx_with(weak_nominal_tier: i64) -> ReplayCtx {
         let m = matrix_fixture();
-        let calib = vec![instance("s1", "math_logic"), instance("s2", "math_logic"), instance("s3", "math_logic")];
+        let calib = vec![
+            instance("s1", "math_logic"),
+            instance("s2", "math_logic"),
+            instance("s3", "math_logic"),
+        ];
         let stats = calibration_stats(&m, &pool(), &calib);
         let (models, specs) = build_pool_models_gated(&pool(), &stats, weak_nominal_tier);
         ReplayCtx::new(pool(), models, specs, stats)
@@ -987,7 +1080,11 @@ mod tests {
     fn coverage_full_or_reject() {
         let m = matrix_fixture();
         let ctx = ctx();
-        let insts = vec![instance("s1", "general"), instance("s2", "general"), instance("s3", "general")];
+        let insts = vec![
+            instance("s1", "general"),
+            instance("s2", "general"),
+            instance("s3", "general"),
+        ];
         for st in Strategy::ALL {
             let items = replay(&ctx, &m, &insts, st).unwrap_or_else(|e| panic!("{st:?}: {e}"));
             assert_eq!(items.len(), 3);
@@ -1061,24 +1158,40 @@ mod tests {
     #[test]
     fn soft_gate_and_band_only_semantics() {
         let m = matrix_fixture();
-        let general = vec![instance("s1", "general"), instance("s2", "general"), instance("s3", "general")];
+        let general = vec![
+            instance("s1", "general"),
+            instance("s2", "general"),
+            instance("s3", "general"),
+        ];
 
         // V0：weak nominal tier 1，medium（tier_req=2）把 weak 拒之门外
         let c0 = ctx_with(1);
         let v0 = replay(&c0, &m, &general, Strategy::Lloom).unwrap();
         let d0: Value = serde_json::from_str(&v0[0].decision_json).unwrap();
-        assert!(!d0["candidates"].as_array().unwrap().iter().any(|x| x["model"] == "weak_m"));
+        assert!(!d0["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["model"] == "weak_m"));
 
         // V2：soft gate Some(0.0) → weak nominal tier 2 进 medium；hard（complex_reasoning）仍拒
         let mut c2 = ctx_with(2);
         c2.soft_gate = Some(0.0);
         let v2 = replay(&c2, &m, &general, Strategy::Lloom).unwrap();
         let d2: Value = serde_json::from_str(&v2[0].decision_json).unwrap();
-        assert!(d2["candidates"].as_array().unwrap().iter().any(|x| x["model"] == "weak_m"));
+        assert!(d2["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["model"] == "weak_m"));
         let hard = vec![instance("s1", "complex_reasoning")];
         let vh = replay(&c2, &m, &hard, Strategy::Lloom).unwrap();
         let dh: Value = serde_json::from_str(&vh[0].decision_json).unwrap();
-        assert!(!dh["candidates"].as_array().unwrap().iter().any(|x| x["model"] == "weak_m"));
+        assert!(!dh["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["model"] == "weak_m"));
 
         // penalty 单调折减 weak 的质量估计（fixture weak calibration 均分 1/3）
         let mut cp = ctx_with(2);
@@ -1086,8 +1199,12 @@ mod tests {
         let vp = replay(&cp, &m, &general, Strategy::Lloom).unwrap();
         let dp: Value = serde_json::from_str(&vp[0].decision_json).unwrap();
         let qw = |d: &Value| {
-            d["candidates"].as_array().unwrap().iter()
-                .find(|x| x["model"] == "weak_m").map(|x| x["quality"].as_f64().unwrap())
+            d["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|x| x["model"] == "weak_m")
+                .map(|x| x["quality"].as_f64().unwrap())
         };
         let q2 = qw(&d2).expect("V2 应含 weak 候选");
         let qp = qw(&dp).expect("penalty 版应含 weak 候选");
@@ -1110,7 +1227,11 @@ mod tests {
     fn strategy_semantics() {
         let c = ctx();
         let m = matrix_fixture();
-        let insts = vec![instance("s1", "general"), instance("s2", "general"), instance("s3", "general")];
+        let insts = vec![
+            instance("s1", "general"),
+            instance("s2", "general"),
+            instance("s3", "general"),
+        ];
 
         let oracle = replay(&c, &m, &insts, Strategy::Oracle).unwrap();
         assert_eq!(oracle[0].selected_model, "mid_m"); // s1: mid/strong 并列 1.0，取列表序前者（mid）
@@ -1122,13 +1243,19 @@ mod tests {
 
         let a = replay(&c, &m, &insts, Strategy::Random).unwrap();
         let b = replay(&c, &m, &insts, Strategy::Random).unwrap();
-        assert_eq!(a.iter().map(|i| &i.selected_model).collect::<Vec<_>>(),
-                   b.iter().map(|i| &i.selected_model).collect::<Vec<_>>());
+        assert_eq!(
+            a.iter().map(|i| &i.selected_model).collect::<Vec<_>>(),
+            b.iter().map(|i| &i.selected_model).collect::<Vec<_>>()
+        );
 
         // lloom 策略 decision_json 含全候选评分（candidates 序列化，10 号 §二十三）。
         // simple_qa → band=easy → tier_req=1 全池放行；general（medium）会按生产门槛淘汰 weak，
         // 恰是 B0 要测量的行为，故全池断言用 simple_qa。
-        let simple = vec![instance("s1", "simple_qa"), instance("s2", "simple_qa"), instance("s3", "simple_qa")];
+        let simple = vec![
+            instance("s1", "simple_qa"),
+            instance("s2", "simple_qa"),
+            instance("s3", "simple_qa"),
+        ];
         let lloom = replay(&c, &m, &simple, Strategy::Lloom).unwrap();
         let d: Value = serde_json::from_str(&lloom[0].decision_json).unwrap();
         assert_eq!(d["candidates"].as_array().unwrap().len(), 3);

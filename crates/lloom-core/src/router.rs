@@ -131,7 +131,10 @@ pub async fn classify(text: &str, classifier: Option<&ModelSpec>) -> (String, St
         Some(spec) => match crate::ai_client::classify(text, spec, &VALID_TASK_TYPES).await {
             Ok(task) => (task, "llm".to_string()),
             Err(e) => {
-                eprintln!("[router] 分类器 {} 失败，回落 general: {e}", spec.name);
+                crate::logging::warn(
+                    "router",
+                    &format!("分类器 {} 失败，回落 general: {e}", spec.name),
+                );
                 ("general".to_string(), "llm_fallback".to_string())
             }
         },
@@ -647,7 +650,7 @@ pub async fn route(
     }
     // PR-5 §5.1：真实缓存命中率喂 effective_input_cost（缺省 0 = 不偏袒）
     for (k, v) in db.model_cache_hit_rate(&task_type).unwrap_or_else(|e| {
-        eprintln!("[router] 读取模型缓存命中率失败: {e}");
+        crate::logging::warn("router", &format!("读取模型缓存命中率失败: {e}"));
         HashMap::new()
     }) {
         hit_rate.insert(k, v);
@@ -793,7 +796,7 @@ pub fn plan_for_task(
     }
     // PR-5 §5.1：真实缓存命中率喂 effective_input_cost
     for (k, v) in db.model_cache_hit_rate(task_type).unwrap_or_else(|e| {
-        eprintln!("[router] 读取模型缓存命中率失败: {e}");
+        crate::logging::warn("router", &format!("读取模型缓存命中率失败: {e}"));
         HashMap::new()
     }) {
         hit_rate.insert(k, v);

@@ -32,7 +32,7 @@ pub async fn aiq_report_loop(db: crate::db::Db) {
     loop {
         ticker.tick().await;
         if let Err(e) = run_review(&db).await {
-            eprintln!("[review] aiq report job failed: {e}");
+            crate::logging::error("review", &format!("aiq report job failed: {e}"));
         }
     }
 }
@@ -137,7 +137,7 @@ fn prepare_replay_inputs(db: &crate::db::Db, task_type: &str, models: &[Model]) 
         }
     }
     let hit_rate = db.model_cache_hit_rate(task_type).unwrap_or_else(|e| {
-        eprintln!("[review] 读取模型缓存命中率失败: {e}");
+        crate::logging::warn("review", &format!("读取模型缓存命中率失败: {e}"));
         HashMap::new()
     });
     let est_out = db.task_avg_out_tokens(task_type).round() as i64;

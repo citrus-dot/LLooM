@@ -1012,7 +1012,7 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
                 decision_id,
                 if partial { "partial" } else { "success" },
             ) {
-                eprintln!("[stream] update decision failed: {error}");
+                crate::logging::error("stream", &format!("update decision failed: {error}"));
             }
         }
         let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -1045,7 +1045,7 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
                 act_input_cost,
             }),
         }) {
-            eprintln!("[stream] usage persistence failed: {error}");
+            crate::logging::error("stream", &format!("usage persistence failed: {error}"));
         }
         if !cache_hit && !partial {
             if let Err(error) = db.upsert_model_task_score_signal(
@@ -1053,7 +1053,7 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
                 &routing_task_type,
                 QualitySignalKind::Success,
             ) {
-                eprintln!("[stream] quality signal failed: {error}");
+                crate::logging::error("stream", &format!("quality signal failed: {error}"));
             }
         }
         if !cache_hit && !partial {
@@ -1623,9 +1623,9 @@ async fn shutdown_server(
     let s = state.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        println!("[core] shutdown requested via API, cleaning up...");
+        crate::logging::info("core", "shutdown requested via API, cleaning up...");
         shutdown_all(&s);
-        println!("[core] all services stopped, exiting.");
+        crate::logging::info("core", "all services stopped, exiting.");
         std::process::exit(0);
     });
     Json(json!({ "shutting_down": true })).into_response()
@@ -1686,10 +1686,10 @@ async fn api_key_request_cleanup(db: db::Db) {
     loop {
         ticker.tick().await;
         if let Err(e) = db.prune_api_key_requests() {
-            eprintln!("[core] 清理过期 API Key RPM 记录失败: {e}");
+            crate::logging::error("core", &format!("清理过期 API Key RPM 记录失败: {e}"));
         }
         if let Err(e) = db.prune_api_key_reservations() {
-            eprintln!("[core] 清理过期额度预留失败: {e}");
+            crate::logging::error("core", &format!("清理过期额度预留失败: {e}"));
         }
     }
 }
@@ -1702,7 +1702,7 @@ async fn calibration_job(db: db::Db) {
     loop {
         ticker.tick().await;
         if let Err(e) = run_daily_calibration(&db).await {
-            eprintln!("[core] calibration job failed: {e}");
+            crate::logging::error("core", &format!("calibration job failed: {e}"));
         }
     }
 }
@@ -2192,7 +2192,7 @@ async fn probe_down_models(db: &db::Db) {
     let models = match db.list_models(true) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("[health] list_models failed: {e}");
+            crate::logging::error("health", &format!("list_models failed: {e}"));
             return;
         }
     };
@@ -2218,7 +2218,7 @@ async fn probe_down_models(db: &db::Db) {
             .is_ok();
         let state = crate::health::record_outcome(db, &m.name, ok);
         if ok {
-            eprintln!("[health] probe recovered {} → {state}", m.name);
+            crate::logging::info("health", &format!("probe recovered {} → {state}", m.name));
         }
     }
 }
@@ -2850,8 +2850,11 @@ async fn run_shadow_pair(
                             && !spec_model.is_empty()
                         {
                             // 护栏（历史 bug）：收费模型 tokens>0 却计价 0 → spec 查找失败，样本不可信
-                            eprintln!(
-                                    "[shadow] ⚠ {spec_model} tokens>0 但计价为 0（PriceSpec 缺失或 provider 不匹配）"
+                            crate::logging::warn(
+                                    "shadow",
+                                    &format!(
+                                        "{spec_model} tokens>0 但计价为 0（PriceSpec 缺失或 provider 不匹配）"
+                                    ),
                                 );
                         }
                         c

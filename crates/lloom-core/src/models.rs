@@ -431,30 +431,6 @@ pub struct SecurityReport {
     pub processed_text: String,
 }
 
-// ── Service status ──
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceStatus {
-    pub name: String,
-    pub status: String,
-    pub healthy: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SuiteStatus {
-    pub services: Vec<ServiceStatus>,
-    pub total: usize,
-    pub healthy: usize,
-    pub running: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SmartRestartResult {
-    pub ok: bool,
-    pub restarted: Vec<String>,
-    pub errors: Vec<String>,
-}
-
 // ── Routing ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -605,9 +581,3 @@ impl QualitySignalKind {
 }
 
 // ── Env / Config ──
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EnvConfig {
-    #[serde(flatten)]
-    pub values: std::collections::HashMap<String, String>,
-}

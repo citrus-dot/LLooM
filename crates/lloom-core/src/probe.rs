@@ -202,13 +202,16 @@ pub async fn probe_loop(db: crate::db::Db) {
             crate::server::zone_resolver(&db),
             crate::server::now_epoch_secs(),
         ) {
-            eprintln!(
-                "[core] probe deferring {wait}s to next valley window (peak-hour cost avoidance)"
+            crate::logging::info(
+                "core",
+                &format!(
+                    "probe deferring {wait}s to next valley window (peak-hour cost avoidance)"
+                ),
             );
             tokio::time::sleep(Duration::from_secs(wait)).await;
         }
         if let Err(e) = run_probe_round(&db).await {
-            eprintln!("[core] probe round failed: {e}");
+            crate::logging::error("core", &format!("probe round failed: {e}"));
         }
     }
 }
@@ -243,10 +246,13 @@ async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::e
             Err(e) => {
                 let n = budget().note_failure(m.provider_name(), &m.name);
                 record_probe_failure(db, m);
-                eprintln!(
-                    "[core] probe {}/{} failed ({n} consecutive): {e}",
-                    m.provider_name(),
-                    m.name
+                crate::logging::warn(
+                    "core",
+                    &format!(
+                        "probe {}/{} failed ({n} consecutive): {e}",
+                        m.provider_name(),
+                        m.name
+                    ),
                 );
                 continue;
             }
@@ -259,20 +265,26 @@ async fn run_probe_round(db: &crate::db::Db) -> std::result::Result<(), crate::e
                 let cost = record_probe_usage(db, m, &res.usage, hit);
                 budget().charge(m.provider_name(), &m.name, cost);
                 if !hit {
-                    eprintln!(
-                        "[core] probe {}/{} cache-verify MISS (cached_tokens=0) — 校准层将核对表价",
-                        m.provider_name(),
-                        m.name
+                    crate::logging::warn(
+                        "core",
+                        &format!(
+                            "probe {}/{} cache-verify MISS (cached_tokens=0) — 校准层将核对表价",
+                            m.provider_name(),
+                            m.name
+                        ),
                     );
                 }
             }
             Err(e) => {
                 let n = budget().note_failure(m.provider_name(), &m.name);
                 record_probe_failure(db, m);
-                eprintln!(
-                    "[core] probe {}/{} round-2 failed ({n} consecutive): {e}",
-                    m.provider_name(),
-                    m.name
+                crate::logging::warn(
+                    "core",
+                    &format!(
+                        "probe {}/{} round-2 failed ({n} consecutive): {e}",
+                        m.provider_name(),
+                        m.name
+                    ),
                 );
             }
         }
