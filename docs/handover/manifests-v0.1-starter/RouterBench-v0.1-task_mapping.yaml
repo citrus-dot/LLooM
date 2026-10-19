@@ -1,0 +1,44 @@
+version: "0.1"
+source_of_truth: "benchmark manifest + LLooM task enum"
+
+mapping:
+  mmlu-pro:
+    task_family: knowledge_reasoning
+    lloom_task_type: general
+    default_band: medium
+  math500:
+    task_family: mathematics
+    lloom_task_type: math_logic
+    default_band: medium
+  gsm8k:
+    task_family: mathematics
+    lloom_task_type: math_logic
+    default_band: medium
+  mbpp:
+    task_family: coding
+    lloom_task_type: coding
+    default_band: medium
+  ifeval:
+    task_family: instruction_following
+    lloom_task_type: general
+    default_band: medium
+  mt-bench:
+    task_family: dialogue
+    lloom_task_type: general
+    default_band: medium
+  gpqa:
+    task_family: hard_reasoning
+    lloom_task_type: complex_reasoning
+    default_band: hard
+
+band_policy:
+  note: "default_band is only a deterministic Plan Benchmark input. End-to-End Offline Route must use cached/rule-only classifier decisions."
+  levels:
+    - easy
+    - medium
+    - hard
+
+safety:
+  - "Do not derive band from test-set model score."
+  - "Do not derive task_type from ground_truth or response."
+  - "Store original dataset task metadata separately from LLooM mapped task_type."

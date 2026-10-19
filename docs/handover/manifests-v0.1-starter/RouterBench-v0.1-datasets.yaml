@@ -1,0 +1,86 @@
+version: "0.1"
+name: "lloom-routerbench-v0.1"
+
+tracks:
+  public_screening:
+    purpose: "Validate import, screening, replay and metrics before spending API budget"
+    sources:
+      - id: routerbench-0shot-v1
+        source: routerbench
+        priority: 1
+        split: "0shot"
+      - id: llmrouterbench-release-v1
+        source: llmrouterbench
+        priority: 2
+        split: "official-release"
+  native_core:
+    purpose: "Formal headline results on the frozen LLooM-native model pool"
+    scorer_policy: "official_or_explicit_programmatic_scorer"
+    calibration_ratio: 0.20
+    test_ratio: 0.80
+    datasets:
+      - id: mmlu-pro
+        sample_target: 300
+        task_family: knowledge_reasoning
+        task_type: general
+        role: core
+      - id: math500
+        sample_target: 300
+        task_family: mathematics
+        task_type: math_logic
+        role: core
+      - id: gsm8k
+        sample_target: 300
+        task_family: mathematics
+        task_type: math_logic
+        role: core
+      - id: mbpp
+        sample_target: 300
+        task_family: coding
+        task_type: coding
+        role: core
+      - id: ifeval
+        sample_target: 200
+        task_family: instruction_following
+        task_type: general
+        role: core
+        status: "verify lm-eval/chat compatibility before collection"
+  showcase:
+    datasets:
+      - id: mt-bench
+        sample_target: 100
+        task_family: dialogue
+        task_type: general
+        scorer: "frozen judge outcomes; judge model/version must be recorded"
+        role: showcase
+  stress:
+    datasets:
+      - id: gpqa
+        sample_target: 198
+        task_family: hard_reasoning
+        task_type: complex_reasoning
+        role: stress
+      - id: long-context-custom
+        sample_target: 100
+        task_family: long_context
+        task_type: general
+        role: stress
+        status: "v0.2"
+
+screening:
+  required_metrics:
+    - coverage
+    - model_gap
+    - disagreement
+    - upgrade_opportunity
+    - cheap_safe
+    - winner_entropy
+    - cost_ratio
+    - oracle_gain
+  default_thresholds:
+    coverage: 1.0
+    oracle_gain_min: 0.0
+    upgrade_opportunity_min: 0.05
+    cheap_safe_min: 0.10
+    cost_ratio_min: 3.0
+  note: "Thresholds are engineering heuristics for workload selection, not claims of statistical significance."

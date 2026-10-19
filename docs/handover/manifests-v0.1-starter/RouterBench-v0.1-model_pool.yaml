@@ -1,0 +1,50 @@
+version: "0.1"
+name: "lloom-native-3tier-qwen36-v1"
+cost_basis: "provider_official_usd_per_1m_tokens"
+selection_mode: "screen_then_freeze"
+models:
+  - role: weak
+    lloom_model_id: "qwen3.6-flash"
+    provider_model_id: "qwen3.6-flash"
+    capability_tier: 1
+    context_window: 1000000
+    price:
+      input_usd_per_million: 0.165
+      output_usd_per_million: 0.99
+      source_note: "Official Qwen international pricing; verify immediately before native collection"
+  - role: mid
+    lloom_model_id: "qwen3.6-plus"
+    provider_model_id: "qwen3.6-plus"
+    capability_tier: 2
+    context_window: 1000000
+    price:
+      input_usd_per_million: 0.276
+      output_usd_per_million: 1.651
+      source_note: "Official Qwen international pricing; verify immediately before native collection"
+  - role: strong
+    lloom_model_id: "qwen3.6-max-preview"
+    provider_model_id: "qwen3.6-max-preview"
+    capability_tier: 3
+    context_window: 262144
+    price:
+      input_usd_per_million: 1.30
+      output_usd_per_million: 7.80
+      source_note: "Official Qwen international pricing; verify immediately before native collection"
+
+freeze_rules:
+  - "Any model id change creates a new model_pool_id."
+  - "Any capability_tier change creates a new model_pool_id."
+  - "Any context_window change creates a new model_pool_id."
+  - "Any price change creates a new cost_basis_hash and benchmark version."
+  - "Do not modify the production models table for public virtual models."
+
+future_heterogeneous_pool:
+  name: "lloom-native-heterogeneous-v1"
+  models:
+    - role: weak
+      lloom_model_id: "qwen3.6-flash"
+    - role: mid
+      lloom_model_id: "deepseek-flash"
+    - role: strong
+      lloom_model_id: "qwen3.6-max-preview"
+  status: "v0.2-after-qwen36-pool"
