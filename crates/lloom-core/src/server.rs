@@ -571,7 +571,8 @@ async fn check_budget(
                 },
                 None,
             )?;
-            ((spent + prospective) <= b.max_budget, spent)
+            // P2-9：边界比较加 ulp 级容差——0.1+0.2<=0.3 这类 fp 尾差会误拒请求。
+            (spent + prospective <= b.max_budget + 1e-9, spent)
         }
         None => (true, 0.0),
     };
@@ -2394,7 +2395,7 @@ mod api_contract_tests {
         let router = build_router(AppState {
             children: Arc::new(Mutex::new(Children::default())),
             started_at: Instant::now(),
-            db,
+            db: db.clone(),
         });
         let remote = "192.0.2.1:9000";
         let local = "127.0.0.1:9000";
@@ -2484,6 +2485,44 @@ mod api_contract_tests {
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["within_budget"], true);
+        // P2-9 浮点边界：0.1+0.2 的 fp 尾差不能把恰好用满 max_budget 判成超支
+        db.upsert_budget(&BudgetInput {
+            scope: "user",
+            scope_id: "fp",
+            max_budget: 0.3,
+            duration: "30d",
+            scope_task_type: None,
+            soft_limit_ratio: None,
+            action_on_exceed: None,
+        })
+        .unwrap();
+        for cost in [0.1f64, 0.2] {
+            db.insert_usage(&crate::db::UsageRecord {
+                model_name: "checked-model",
+                user_id: "fp",
+                input_tokens: 1,
+                output_tokens: 1,
+                cost,
+                task_type: None,
+                cache_hit: false,
+                latency_ms: None,
+                request_id: None,
+                extra: None,
+            })
+            .unwrap();
+        }
+        assert_eq!(0.1_f64 + 0.2, 0.30000000000000004, "前提：fp 尾差确实存在");
+        let response = router
+            .clone()
+            .oneshot(request(
+                "/api/budgets/check?scope=user&scope_id=fp&prospective_cost=0.0",
+                local,
+            ))
+            .await
+            .unwrap();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["within_budget"], true, "fp 尾差不应触发超预算判定");
         let response = router
             .clone()
             .oneshot(request("/api/models", local))

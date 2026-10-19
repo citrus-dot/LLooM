@@ -1092,7 +1092,7 @@ impl Db {
         let changed = tx.execute(
             "UPDATE api_keys SET used_usd = used_usd + ?2
              WHERE id = ?1 AND status = 'active'
-               AND (quota_usd IS NULL OR used_usd + ?2 <= quota_usd)",
+               AND (quota_usd IS NULL OR used_usd + ?2 <= quota_usd + 1e-9)",
             params![id, estimated_usd],
         )?;
         if changed == 0 {
