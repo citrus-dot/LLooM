@@ -1748,7 +1748,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "lloom-cli"
-version = "2.1.0"
+version = "3.0.2"
 dependencies = [
  "clap",
  "futures-util",
@@ -1760,7 +1760,7 @@ dependencies = [
 
 [[package]]
 name = "lloom-core"
-version = "2.1.0"
+version = "3.0.2"
 dependencies = [
  "axum",
  "bytes",
@@ -1785,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "lloom-server"
-version = "2.1.0"
+version = "3.0.2"
 dependencies = [
  "axum",
  "clap",

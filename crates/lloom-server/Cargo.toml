@@ -1,6 +1,6 @@
 [package]
 name = "lloom-server"
-version = "2.1.0"
+version = "3.0.2"
 edition = "2021"
 description = "LLooM headless server — REST + WebUI on :7861"
 

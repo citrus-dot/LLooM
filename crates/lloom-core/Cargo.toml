@@ -1,6 +1,6 @@
 [package]
 name = "lloom-core"
-version = "2.1.0"
+version = "3.0.2"
 edition = "2021"
 description = "LLooM business core — Rust server, routing, security, process management (UI-agnostic)"
 

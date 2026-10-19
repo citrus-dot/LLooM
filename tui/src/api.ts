@@ -4,6 +4,26 @@ declare const process: { env: Record<string, string | undefined> }
 
 const BASE = (process.env.LLOOM_SERVER_URL || `http://127.0.0.1:${process.env.LLOOM_WEB_PORT || "7861"}`).replace(/\/$/, "")
 
+/**
+ * 校验并返回服务端 URL（SSRF 防线：URL 必须可解析、仅 http/https、
+ * 主机必须显式来自用户配置的 LLOOM_SERVER_URL 或环回地址）。
+ * 服务端 /api/* 管理面只对本机开放（见 server.rs remote_api_guard），
+ * 远程主机上的 /api 请求必然 403，这里提前拦截给出可读错误。
+ */
+function serverUrl(path: string): string {
+  const url = new URL(`${BASE}${path}`)
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`LLOOM_SERVER_URL 协议必须是 http/https，当前为 ${url.protocol}`)
+  }
+  const host = url.hostname
+  const loopback = host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1"
+  const explicit = Boolean(process.env.LLOOM_SERVER_URL)
+  if (!loopback && !explicit) {
+    throw new Error(`拒绝请求非环回主机 ${host}：未显式配置 LLOOM_SERVER_URL`)
+  }
+  return url.toString()
+}
+
 export interface ServiceStatus {
   name: string
   status: string
@@ -88,13 +108,13 @@ export interface ChatMessage {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`)
+  const res = await fetch(serverUrl(path))
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<T>
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(serverUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? "{}" : JSON.stringify(body),
@@ -104,13 +124,13 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 async function del<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { method: "DELETE" })
+  const res = await fetch(serverUrl(path), { method: "DELETE" })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<T>
 }
 
 async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(serverUrl(path), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -136,7 +156,7 @@ export async function deleteModel(name: string): Promise<{ deleted: boolean }> {
 }
 
 export async function updateModel(name: string, patch: ModelPatchPayload): Promise<{ updated: boolean }> {
-  return fetch(`${BASE}/api/models/${encodeURIComponent(name)}`, {
+  return fetch(serverUrl(`/api/models/${encodeURIComponent(name)}`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -198,7 +218,7 @@ export async function checkBudget(scope: string, scopeId: string): Promise<{ wit
 }
 
 export async function deleteBudget(scope: string, scopeId: string): Promise<{ deleted: boolean }> {
-  return fetch(`${BASE}/api/budgets?scope=${encodeURIComponent(scope)}&scope_id=${encodeURIComponent(scopeId)}`, { method: "DELETE" })
+  return fetch(serverUrl(`/api/budgets?scope=${encodeURIComponent(scope)}&scope_id=${encodeURIComponent(scopeId)}`), { method: "DELETE" })
     .then((res) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       return res.json()
@@ -222,7 +242,7 @@ export async function deleteConversation(id: string): Promise<{ deleted: boolean
 }
 
 export async function renameConversation(id: string, title: string): Promise<{ id: string; renamed: boolean }> {
-  return fetch(`${BASE}/api/conversations/${encodeURIComponent(id)}`, {
+  return fetch(serverUrl(`/api/conversations/${encodeURIComponent(id)}`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
@@ -234,7 +254,7 @@ export async function renameConversation(id: string, title: string): Promise<{ i
 
 // SSE chat stream → full response text
 export async function chatStream(messages: ChatMessage[]): Promise<string> {
-  const res = await fetch(`${BASE}/api/chat/stream`, {
+  const res = await fetch(serverUrl("/api/chat/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages }),
@@ -274,7 +294,7 @@ export async function orchestrateStream(
   history: ChatMessage[] = [],
   onEvent?: (ev: SseEvent) => void,
 ): Promise<SseEvent[]> {
-  const res = await fetch(`${BASE}/api/orchestrate/stream`, {
+  const res = await fetch(serverUrl("/api/orchestrate/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, history }),
