@@ -131,7 +131,10 @@ fn replay_once(
             }
         }
     }
-    let hit_rate = db.model_cache_hit_rate(task_type);
+    let hit_rate = db.model_cache_hit_rate(task_type).unwrap_or_else(|e| {
+        eprintln!("[review] 读取模型缓存命中率失败: {e}");
+        HashMap::new()
+    });
     let est_out = db.task_avg_out_tokens(task_type).round() as i64;
     let band = router::band_for(task_type, "");
     let now = SystemTime::now()

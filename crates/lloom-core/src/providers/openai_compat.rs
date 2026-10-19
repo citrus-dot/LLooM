@@ -4,6 +4,7 @@
 use crate::ai_client::{ChatResult, ModelSpec};
 use crate::error::{AppError, Result};
 use crate::pricing::UsageDetail;
+use crate::providers::sse_lines::LineDecoder;
 use futures::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::pin::Pin;
@@ -106,7 +107,7 @@ pub async fn stream(
     let (tx, rx) = tokio::sync::mpsc::channel(64);
     tokio::spawn(async move {
         let mut bytes = response.bytes_stream();
-        let mut buffer = String::new();
+        let mut decoder = LineDecoder::default();
         while let Some(chunk) = bytes.next().await {
             let chunk = match chunk {
                 Ok(chunk) => chunk,
@@ -115,24 +116,29 @@ pub async fn stream(
                     return;
                 }
             };
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end_matches('\r').to_string();
-                buffer.drain(..=pos);
-                let Some(data) = line.strip_prefix("data:").map(str::trim) else {
-                    continue;
-                };
-                if data == "[DONE]" {
-                    let _ = tx.send(Ok(StreamEvent::Done)).await;
+            let lines = match decoder.push(&chunk) {
+                Ok(lines) => lines,
+                Err(error) => {
+                    let _ = tx.send(Err(error)).await;
                     return;
                 }
-                if let Ok(value) = serde_json::from_str::<Value>(data) {
-                    for event in parse_stream_chunk(&value) {
-                        if tx.send(Ok(event)).await.is_err() {
-                            return;
-                        }
-                    }
+            };
+            for line in lines {
+                if !emit_line(&line, &tx).await {
+                    return;
                 }
+            }
+        }
+        match decoder.finish() {
+            Ok(Some(line)) => {
+                if !emit_line(&line, &tx).await {
+                    return;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = tx.send(Err(error)).await;
+                return;
             }
         }
         let _ = tx.send(Ok(StreamEvent::Done)).await;
@@ -140,6 +146,24 @@ pub async fn stream(
     Ok(Box::pin(futures::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|event| (event, rx))
     })))
+}
+
+async fn emit_line(line: &str, tx: &tokio::sync::mpsc::Sender<Result<StreamEvent>>) -> bool {
+    let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+        return true;
+    };
+    if data == "[DONE]" {
+        let _ = tx.send(Ok(StreamEvent::Done)).await;
+        return false;
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(data) {
+        for event in parse_stream_chunk(&value) {
+            if tx.send(Ok(event)).await.is_err() {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn parse_stream_chunk(value: &Value) -> Vec<StreamEvent> {
@@ -303,5 +327,28 @@ mod tests {
         assert!(matches!(&events[0], StreamEvent::Content(v) if v == "hi"));
         assert!(matches!(&events[1], StreamEvent::Reasoning(v) if v == "r"));
         assert!(matches!(&events[2], StreamEvent::Usage(v) if v.prompt_tokens == 2));
+    }
+
+    #[tokio::test]
+    async fn stream_line_decodes_split_chinese_and_unnterminated_final_frame() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let mut decoder = LineDecoder::default();
+        let frames = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\ndata: [DONE]";
+        for byte in frames.as_bytes() {
+            for line in decoder.push(&[*byte]).unwrap() {
+                if !emit_line(&line, &tx).await {
+                    break;
+                }
+            }
+        }
+        let final_line = decoder.finish().unwrap().unwrap();
+        assert!(!emit_line(&final_line, &tx).await);
+        assert!(
+            matches!(rx.recv().await.unwrap().unwrap(), StreamEvent::Content(text) if text == "你好")
+        );
+        assert!(matches!(
+            rx.recv().await.unwrap().unwrap(),
+            StreamEvent::Done
+        ));
     }
 }

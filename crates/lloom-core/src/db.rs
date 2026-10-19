@@ -1728,28 +1728,27 @@ impl Db {
         }
     }
 
-    /// PR-5 §5.1：某 task_type 下各模型的缓存命中率（usage_records 真实 cached/prompt 平均，0..1）。
+    /// PR-5 §5.1：最近 14 天、至少 5 次有效调用的模型缓存命中率。
     /// 无样本的模型不回填——`plan()` 缺省 0，不偏袒任何候选。
-    pub fn model_cache_hit_rate(&self, task_type: &str) -> HashMap<String, f64> {
-        let mut out = HashMap::new();
-        let Ok(conn) = self.conn() else {
-            return out;
-        };
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT model, AVG(CAST(COALESCE(cached_tokens,0) AS REAL) / MAX(prompt_tokens,1))
-         FROM usage_records WHERE task_type = ?1 AND prompt_tokens > 0 GROUP BY model",
-        ) else {
-            return out;
-        };
-        let Ok(rows) = stmt.query_map(params![task_type], |row| {
+    pub fn model_cache_hit_rate(&self, task_type: &str) -> Result<HashMap<String, f64>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT model_name,
+                    AVG(CAST(COALESCE(cached_tokens, 0) AS REAL) / input_tokens)
+             FROM usage_records
+             WHERE task_type = ?1 AND input_tokens > 0
+               AND created_at >= datetime('now', '-14 days')
+             GROUP BY model_name HAVING COUNT(*) >= 5",
+        )?;
+        let rows = stmt.query_map(params![task_type], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-        }) else {
-            return out;
-        };
-        for r in rows.flatten() {
-            out.insert(r.0, r.1.clamp(0.0, 1.0));
+        })?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (name, rate) = row?;
+            out.insert(name, rate.clamp(0.0, 1.0));
         }
-        out
+        Ok(out)
     }
 
     /// PR-5 §5.2 会话亲和：某会话最近一次落库所用模型（usage_records 最新行）。None = 无记录。
@@ -2464,6 +2463,56 @@ mod model_registration_tests {
             db.insert_model(&replacement),
             Err(AppError::Conflict(_))
         ));
+        drop(db);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod cache_hit_rate_tests {
+    use super::*;
+
+    #[test]
+    fn hit_rate_uses_real_columns_and_recent_sufficient_samples() {
+        let path = std::env::temp_dir().join(format!(
+            "lloom_cache_hit_rate_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = Db::new(&path).unwrap();
+        {
+            let conn = db.conn().unwrap();
+            for _ in 0..5 {
+                conn.execute(
+                    "INSERT INTO usage_records (model_name, input_tokens, output_tokens, cost, task_type, cached_tokens)
+                     VALUES ('active', 100, 1, 0, 'general', 40)",
+                    [],
+                ).unwrap();
+            }
+            for _ in 0..4 {
+                conn.execute(
+                    "INSERT INTO usage_records (model_name, input_tokens, output_tokens, cost, task_type, cached_tokens)
+                     VALUES ('too_few', 100, 1, 0, 'general', 100)",
+                    [],
+                ).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO usage_records (model_name, input_tokens, output_tokens, cost, task_type, cached_tokens, created_at)
+                 VALUES ('active', 100, 1, 0, 'general', 100, datetime('now', '-30 days'))",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO usage_records (model_name, input_tokens, output_tokens, cost, task_type, cached_tokens)
+                 VALUES ('active', 100, 1, 0, 'coding', 100)",
+                [],
+            ).unwrap();
+        }
+        let rates = db.model_cache_hit_rate("general").unwrap();
+        assert_eq!(rates.len(), 1);
+        assert!((rates["active"] - 0.4).abs() < 1e-12);
         drop(db);
         std::fs::remove_file(path).unwrap();
     }
