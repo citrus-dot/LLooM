@@ -3,6 +3,7 @@
 
 pub mod anthropic;
 pub mod openai_compat;
+mod retry;
 mod sse_lines;
 
 use crate::ai_client::{ChatResult, ModelSpec};

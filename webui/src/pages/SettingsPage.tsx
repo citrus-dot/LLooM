@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Card, Descriptions, Form, InputNumber, Space, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Descriptions, Form, InputNumber, Space, Switch, Tag, Typography, message } from 'antd';
 import { DatabaseOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { getProxyConfig, getRuntimeSettings, getServicesStatus, saveRuntimeSettings } from '../api';
 import type { ProxyConfig, RuntimeSettings, ServiceStatus } from '../api';
@@ -62,6 +62,14 @@ export default function SettingsPage() {
             rules={[{ required: true, type: 'number', min: 0, max: 1, message: '请输入 0～1' }]}
           >
             <InputNumber min={0} max={1} step={0.01} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="block_pii" label="个人信息处理" valuePropName="checked"
+            extra="关闭时先掩码再发送给模型；开启后检测到有效证件或卡号即拒绝请求。">
+            <Switch checkedChildren="拒绝" unCheckedChildren="掩码" />
+          </Form.Item>
+          <Form.Item name="block_jailbreak" label="拦截提示词注入" valuePropName="checked"
+            extra="关闭后不再自动拒绝疑似越狱提示词。">
+            <Switch />
           </Form.Item>
           <Button type="primary" htmlType="submit" loading={saving}>保存运行参数</Button>
         </Form>

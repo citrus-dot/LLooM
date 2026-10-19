@@ -4,10 +4,76 @@
 use crate::config;
 use crate::error::{AppError, Result};
 use crate::models::Model;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock};
+
+fn exact_cache(path: &std::path::Path) -> Option<Arc<crate::exact_cache::ExactCache>> {
+    static CACHES: OnceLock<
+        Mutex<std::collections::HashMap<std::path::PathBuf, Arc<crate::exact_cache::ExactCache>>>,
+    > = OnceLock::new();
+    let mut caches = CACHES
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(store) = caches.get(path) {
+        return Some(store.clone());
+    }
+    match crate::exact_cache::ExactCache::open(path, 86_400) {
+        Ok(store) => {
+            let store = Arc::new(store);
+            caches.insert(path.to_path_buf(), store.clone());
+            Some(store)
+        }
+        Err(error) => {
+            eprintln!("[cache] 打开精确缓存失败: {error}");
+            None
+        }
+    }
+}
+
+fn semantic_cache(
+    path: &std::path::Path,
+    threshold: f32,
+) -> Option<Arc<crate::semantic_cache::SemanticCache>> {
+    type CacheMap = std::collections::HashMap<
+        (std::path::PathBuf, u32),
+        Arc<crate::semantic_cache::SemanticCache>,
+    >;
+    static CACHES: OnceLock<Mutex<CacheMap>> = OnceLock::new();
+    let key = (path.to_path_buf(), threshold.to_bits());
+    let mut caches = CACHES
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(store) = caches.get(&key) {
+        return Some(store.clone());
+    }
+    match crate::semantic_cache::SemanticCache::open(path, 86_400, threshold) {
+        Ok(store) => {
+            let store = Arc::new(store);
+            caches.insert(key, store.clone());
+            Some(store)
+        }
+        Err(error) => {
+            eprintln!("[cache] 打开语义缓存失败: {error}");
+            None
+        }
+    }
+}
+
+fn semantic_threshold() -> f32 {
+    static THRESHOLD: OnceLock<f32> = OnceLock::new();
+    *THRESHOLD.get_or_init(|| {
+        std::env::var("LLOOM_SEMANTIC_THRESHOLD")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite() && (0.5..=1.0).contains(value))
+            .unwrap_or(0.88)
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSpec {
@@ -63,29 +129,287 @@ pub struct ChatResult {
 
 pub type ChatStream = Pin<Box<dyn Stream<Item = Result<crate::providers::StreamEvent>> + Send>>;
 
+fn cache_model_id(spec: &ModelSpec) -> String {
+    format!("{}|{}|{}", spec.name, spec.provider_model, spec.api_base)
+}
+
 pub async fn chat_stream(
     spec: &ModelSpec,
     messages: &[Value],
     max_tokens: i64,
     temperature: f64,
+    cache: Option<&ChatCacheCtx<'_>>,
 ) -> Result<ChatStream> {
-    crate::providers::stream(spec, messages, max_tokens, temperature).await
+    let Some(cache) = cache else {
+        return crate::providers::stream(spec, messages, max_tokens, temperature).await;
+    };
+    let query = messages
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let Some(key) = cache_key(spec, messages, cache.conversation_id, temperature) else {
+        return crate::providers::stream(spec, messages, max_tokens, temperature).await;
+    };
+    let exact = exact_cache(&cache.cache_dir.join("cache_exact.sqlite3"));
+    if let Some(store) = &exact {
+        if let Ok(Some(content)) = store.lookup(&key) {
+            return Ok(cached_stream(content, messages));
+        }
+    }
+
+    let history: Vec<Value> = messages
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.get("role").and_then(Value::as_str),
+                Some("user" | "assistant")
+            )
+        })
+        .cloned()
+        .collect();
+    let system_hash = crate::context::system_id(messages);
+    let semantic = if exact.is_some()
+        && !query.is_empty()
+        && crate::context::is_context_free(query, &history[..history.len().saturating_sub(1)])
+    {
+        match semantic_cache(
+            &cache.cache_dir.join("cache_semantic.sqlite3"),
+            semantic_threshold(),
+        ) {
+            Some(store) => embed_query(query.to_string())
+                .await
+                .map(|vector| (store, vector)),
+            None => None,
+        }
+    } else {
+        None
+    };
+    if let Some((store, vector)) = &semantic {
+        if let Ok(Some((content, _))) =
+            store.lookup(&cache_model_id(spec), &system_hash, temperature, vector)
+        {
+            return Ok(cached_stream(content, messages));
+        }
+    }
+
+    let upstream = crate::providers::stream(spec, messages, max_tokens, temperature).await?;
+    let name = cache_model_id(spec);
+    let query = query.to_string();
+    let conversation_id = cache.conversation_id.to_string();
+    Ok(Box::pin(futures::stream::unfold(
+        (
+            upstream,
+            exact,
+            semantic,
+            key,
+            name,
+            query,
+            system_hash,
+            temperature,
+            conversation_id,
+            String::new(),
+        ),
+        |(
+            mut upstream,
+            exact,
+            semantic,
+            key,
+            name,
+            query,
+            system_hash,
+            temperature,
+            conversation_id,
+            mut content,
+        )| async move {
+            let event = upstream.next().await?;
+            match &event {
+                Ok(crate::providers::StreamEvent::Content(delta)) => content.push_str(delta),
+                Ok(crate::providers::StreamEvent::Done) if !content.is_empty() => {
+                    if let Some(store) = &exact {
+                        if let Err(e) = store.store(
+                            &key,
+                            &name,
+                            &content,
+                            (!conversation_id.is_empty()).then_some(conversation_id.as_str()),
+                        ) {
+                            eprintln!("[cache] 保存精确缓存失败: {e}");
+                        }
+                    }
+                    if let Some((store, vector)) = &semantic {
+                        if let Err(e) =
+                            store.store(&name, &system_hash, temperature, &query, &content, vector)
+                        {
+                            eprintln!("[cache] 保存语义缓存失败: {e}");
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Some((
+                event,
+                (
+                    upstream,
+                    exact,
+                    semantic,
+                    key,
+                    name,
+                    query,
+                    system_hash,
+                    temperature,
+                    conversation_id,
+                    content,
+                ),
+            ))
+        },
+    )))
+}
+
+fn cached_stream(content: String, messages: &[Value]) -> ChatStream {
+    let prompt_tokens = messages
+        .iter()
+        .map(|m| crate::context::message_tokens(m) as i64)
+        .sum();
+    let output_tokens = crate::context::count_tokens(&content) as i64;
+    Box::pin(futures::stream::iter(vec![
+        Ok(crate::providers::StreamEvent::CacheHit),
+        Ok(crate::providers::StreamEvent::Content(content)),
+        Ok(crate::providers::StreamEvent::Usage(
+            crate::pricing::UsageDetail {
+                prompt_tokens,
+                completion_tokens: output_tokens,
+                field_missing: true,
+                ..Default::default()
+            },
+        )),
+        Ok(crate::providers::StreamEvent::Done),
+    ]))
+}
+
+async fn embed_query(query: String) -> Option<Vec<f32>> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || crate::semantic_cache::SemanticCache::embed(&query)),
+    )
+    .await
+    {
+        Ok(Ok(Ok(vector))) => Some(vector),
+        Ok(Ok(Err(error))) => {
+            eprintln!("[cache] L2 向量生成失败，继续无缓存调用: {error}");
+            None
+        }
+        Ok(Err(error)) => {
+            eprintln!("[cache] L2 后台任务失败: {error}");
+            None
+        }
+        Err(_) => {
+            eprintln!("[cache] L2 向量生成超过 2 秒，继续无缓存调用");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod stream_cache_tests {
+    use super::*;
+    use axum::{http::header, routing::post, Router};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    #[tokio::test]
+    async fn second_stream_is_served_from_exact_cache_without_provider_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    ([(header::CONTENT_TYPE, "text/event-stream")],
+                 "data: {\"choices\":[{\"delta\":{\"content\":\"缓存回答\"}}]}\n\ndata: [DONE]\n\n")
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = std::env::temp_dir().join(format!(
+            "lloom_stream_cache_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let spec = ModelSpec {
+            name: "fixture".into(),
+            provider: "openai".into(),
+            provider_model: "fixture".into(),
+            api_base: format!("http://127.0.0.1:{port}/v1"),
+            api_key: String::new(),
+            input_cost_per_token: 0.0,
+            output_cost_per_token: 0.0,
+        };
+        let messages = [
+            json!({"role":"user","content":"上文内容"}),
+            json!({"role":"assistant","content":"好的"}),
+            json!({"role":"user","content":"继续之前的问题"}),
+        ];
+        let context = ChatCacheCtx {
+            conversation_id: "test-conv",
+            cache_dir: &dir,
+        };
+        for expected_hit in [false, true] {
+            let mut stream = chat_stream(&spec, &messages, 16, 0.3, Some(&context))
+                .await
+                .unwrap();
+            let mut hit = false;
+            let mut content = String::new();
+            while let Some(item) = stream.next().await {
+                match item.unwrap() {
+                    crate::providers::StreamEvent::CacheHit => hit = true,
+                    crate::providers::StreamEvent::Content(delta) => content.push_str(&delta),
+                    crate::providers::StreamEvent::Done => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(hit, expected_hit);
+            assert_eq!(content, "缓存回答");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        server.abort();
+        let _ = std::fs::remove_file(dir.join("cache_exact.sqlite3"));
+        let _ = std::fs::remove_dir(dir);
+    }
 }
 
 /// chat 主路径的两层缓存装配（opt-in）。probe/shadow 必须传 None——
 /// 缓存命中会把成本样本污染成 0，校准数据全部失真。
 pub struct ChatCacheCtx<'a> {
     pub conversation_id: &'a str,
-    pub cache_dir: &'a str,
+    pub cache_dir: &'a std::path::Path,
 }
 
-fn cache_key(spec: &ModelSpec, messages: &[Value], conversation_id: &str) -> Option<String> {
+fn cache_key(
+    spec: &ModelSpec,
+    messages: &[Value],
+    conversation_id: &str,
+    temperature: f64,
+) -> Option<String> {
     let query = messages
         .iter()
         .rev()
         .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))?
         .get("content")?
         .as_str()?;
+    if !crate::context::cacheable(query, temperature) {
+        return None;
+    }
     let history: Vec<Value> = messages
         .iter()
         .filter(|m| {
@@ -103,11 +427,15 @@ fn cache_key(spec: &ModelSpec, messages: &[Value], conversation_id: &str) -> Opt
     } else {
         crate::context::fingerprint(conversation_id, &history)
     };
-    Some(crate::context::exact_key(
-        &spec.name,
-        &crate::context::system_id(messages),
-        &fingerprint,
-        query,
+    Some(format!(
+        "{}:{:016x}",
+        crate::context::exact_key(
+            &cache_model_id(spec),
+            &crate::context::system_id(messages),
+            &fingerprint,
+            query,
+        ),
+        temperature.to_bits()
     ))
 }
 
@@ -141,26 +469,19 @@ pub async fn chat(
 ) -> Result<ChatResult> {
     if crate::providers::supports_native(spec) {
         let exact = match cache {
-            Some(c) => crate::exact_cache::ExactCache::open(
-                crate::config::data_dir().join("cache_exact.sqlite3"),
-                86_400,
-            )
-            .ok()
-            .map(|store| (store, c)),
+            Some(c) => {
+                exact_cache(&c.cache_dir.join("cache_exact.sqlite3")).map(|store| (store, c))
+            }
             None => None,
         };
         let key = exact
             .as_ref()
-            .and_then(|(_, c)| cache_key(spec, messages, c.conversation_id));
+            .and_then(|(_, c)| cache_key(spec, messages, c.conversation_id, temperature));
         if let (Some((store, _)), Some(key)) = (&exact, &key) {
             if let Ok(Some(content)) = store.lookup(key) {
                 let prompt_tokens = messages
                     .iter()
-                    .map(|m| {
-                        crate::context::count_tokens(
-                            m.get("content").and_then(Value::as_str).unwrap_or(""),
-                        ) as i64
-                    })
+                    .map(|m| crate::context::message_tokens(m) as i64)
                     .sum();
                 return Ok(ChatResult {
                     content,
@@ -197,20 +518,20 @@ pub async fn chat(
             .collect();
         let context_free =
             crate::context::is_context_free(query, &history[..history.len().saturating_sub(1)]);
-        let semantic = if exact.is_some() && context_free && !query.is_empty() {
-            let threshold = std::env::var("LLOOM_SEMANTIC_THRESHOLD")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0.88);
-            match crate::semantic_cache::SemanticCache::open(
-                crate::config::data_dir().join("cache_semantic.sqlite3"),
-                86_400,
-                threshold,
-            )
-            .ok()
-            {
-                Some(cache) => crate::semantic_cache::SemanticCache::embed(query)
-                    .ok()
+        let semantic = if exact.is_some()
+            && context_free
+            && !query.is_empty()
+            && crate::context::cacheable(query, temperature)
+        {
+            match semantic_cache(
+                &cache
+                    .expect("exact cache requires context")
+                    .cache_dir
+                    .join("cache_semantic.sqlite3"),
+                semantic_threshold(),
+            ) {
+                Some(cache) => embed_query(query.to_string())
+                    .await
                     .map(|vector| (cache, vector)),
                 None => None,
             }
@@ -218,7 +539,12 @@ pub async fn chat(
             None
         };
         if let Some((cache, vector)) = &semantic {
-            if let Ok(Some((content, _similarity))) = cache.lookup(&spec.name, vector) {
+            if let Ok(Some((content, _similarity))) = cache.lookup(
+                &cache_model_id(spec),
+                &crate::context::system_id(messages),
+                temperature,
+                vector,
+            ) {
                 return Ok(ChatResult {
                     content,
                     usage: crate::pricing::UsageDetail {
@@ -245,7 +571,7 @@ pub async fn chat(
             if crate::context::cacheable(query, temperature) {
                 let _ = store.store(
                     key,
-                    &spec.name,
+                    &cache_model_id(spec),
                     &result.content,
                     (!c.conversation_id.is_empty()).then_some(c.conversation_id),
                 );
@@ -258,7 +584,14 @@ pub async fn chat(
         }
         if crate::context::cacheable(query, temperature) {
             if let Some((cache, vector)) = &semantic {
-                let _ = cache.store(&spec.name, query, &result.content, vector);
+                let _ = cache.store(
+                    &cache_model_id(spec),
+                    &crate::context::system_id(messages),
+                    temperature,
+                    query,
+                    &result.content,
+                    vector,
+                );
                 let max = std::env::var("LLOOM_CACHE_MAX_ENTRIES")
                     .ok()
                     .and_then(|v| v.parse().ok())
@@ -274,33 +607,31 @@ pub async fn chat(
     )))
 }
 
-/// LLM-based task classification (fallback layer). Never fails hard.
-pub async fn classify(text: &str, classifier: &ModelSpec, valid_types: &[&str]) -> String {
+/// LLM-based task classification. The caller chooses an observable fallback.
+pub async fn classify(text: &str, classifier: &ModelSpec, valid_types: &[&str]) -> Result<String> {
     const PROMPT: &str = "将用户请求分类，只返回一个类别名称，不要解释。";
     let valid = valid_types.join(" / ");
-    match chat(
-        classifier,
-        &[
-            json!({"role":"system","content":format!("{PROMPT} 可选类别：{valid}")}),
-            json!({"role":"user","content":text.chars().take(500).collect::<String>()}),
-        ],
-        20,
-        0.0,
-        None,
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        chat(
+            classifier,
+            &[
+                json!({"role":"system","content":format!("{PROMPT} 可选类别：{valid}")}),
+                json!({"role":"user","content":text.chars().take(500).collect::<String>()}),
+            ],
+            20,
+            0.0,
+            None,
+        ),
     )
     .await
-    {
-        Ok(result) => {
-            let lower = result.content.to_lowercase();
-            valid_types
-                .iter()
-                .find(|t| lower.contains(**t))
-                .copied()
-                .unwrap_or("general")
-                .to_string()
-        }
-        Err(_) => "general".to_string(),
-    }
+    .map_err(|_| AppError::AiService("分类模型调用超时（8 秒）".into()))??;
+    let lower = result.content.to_lowercase();
+    valid_types
+        .iter()
+        .find(|t| lower.contains(**t))
+        .map(|task| (*task).to_string())
+        .ok_or_else(|| AppError::AiService("分类模型输出不在允许的类别中".into()))
 }
 
 /// Generate/extend a rolling conversation summary. The policy and persistence
@@ -412,7 +743,7 @@ pub async fn orchestrate_native(
         {
             return Err(AppError::Internal("orchestration receiver closed".into()));
         }
-        let mut provider_stream = chat_stream(spec, prepared_messages, 2000, 0.3).await?;
+        let mut provider_stream = chat_stream(spec, prepared_messages, 2000, 0.3, None).await?;
         let spec_name = spec.name.clone();
         tokio::spawn(async move {
             use futures::StreamExt;
@@ -422,6 +753,7 @@ pub async fn orchestrate_native(
             let mut usage = crate::pricing::UsageDetail::default();
             while let Some(item) = provider_stream.next().await {
                 match item {
+                    Ok(crate::providers::StreamEvent::CacheHit) => {}
                     Ok(crate::providers::StreamEvent::Content(delta)) => {
                         content.push_str(&delta);
                         if tx
@@ -601,7 +933,8 @@ pub async fn orchestrate_native(
         json!({"role":"system","content":"将子任务结果汇总成连贯、完整的最终回答；如实保留失败信息，不得编造。"}),
         json!({"role":"user","content":format!("原始任务：{query}\n\n子任务执行结果：\n{summary}")}),
     ];
-    let mut aggregate_stream = chat_stream(aggregate, &aggregation_messages, 4096, 0.3).await?;
+    let mut aggregate_stream =
+        chat_stream(aggregate, &aggregation_messages, 4096, 0.3, None).await?;
     let aggregate_name = aggregate.name.clone();
     tokio::spawn(async move {
         use futures::StreamExt;
@@ -610,6 +943,7 @@ pub async fn orchestrate_native(
         let mut agg_usage = crate::pricing::UsageDetail::default();
         while let Some(item) = aggregate_stream.next().await {
             match item {
+                Ok(crate::providers::StreamEvent::CacheHit) => {}
                 Ok(crate::providers::StreamEvent::Content(delta)) => {
                     final_text.push_str(&delta);
                     if tx

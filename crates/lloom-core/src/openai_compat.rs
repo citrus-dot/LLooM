@@ -179,6 +179,42 @@ fn authenticate(db: &db::Db, headers: &HeaderMap, model: &str) -> Option<i64> {
         .flatten()
 }
 
+fn estimate_proxy_hold(
+    db: &db::Db,
+    models: &[Model],
+    routing: &crate::models::RoutingDecision,
+    messages: &[Value],
+    max_tokens: i64,
+) -> crate::error::Result<f64> {
+    let input_tokens: i64 = messages
+        .iter()
+        .map(|m| crate::context::message_tokens(m) as i64)
+        .sum();
+    let mut upper: f64 = 0.0;
+    for name in std::iter::once(&routing.model).chain(routing.fallback_chain.iter()) {
+        let Some(model) = models.iter().find(|m| &m.name == name) else {
+            continue;
+        };
+        let cost = match db.get_price_spec(model.provider_name(), &model.name)? {
+            Some(price) if price.stale_reason.as_deref() != Some("invalid_cost") => price.est_cost(
+                0.0,
+                input_tokens,
+                max_tokens,
+                crate::server::now_epoch_secs(),
+                crate::server::zone_resolver(db),
+            ),
+            _ => model.calculate_cost(input_tokens, max_tokens),
+        };
+        if !cost.is_finite() || cost < 0.0 {
+            return Err(crate::error::AppError::InvalidRequest(
+                "无法估算请求费用".into(),
+            ));
+        }
+        upper = upper.max(cost);
+    }
+    Ok(upper * 1.1)
+}
+
 /// `POST /v1/chat/completions`
 pub async fn chat_completions(
     State(state): State<AppState>,
@@ -205,7 +241,8 @@ pub async fn chat_completions(
         );
     }
     let user_text = security::extract_user_text(&req.messages);
-    let sec = security::check(&user_text, true, true);
+    let (block_pii, block_jailbreak) = security::policy(&state.db);
+    let sec = security::check(&user_text, block_pii, block_jailbreak);
     if sec.blocked {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -269,6 +306,14 @@ pub async fn chat_completions(
             "model_not_found",
         );
     };
+    if !crate::server::model_has_price(&state.db, primary).unwrap_or(false) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "云模型价格未知：请先在定价页录入价格",
+            "invalid_request_error",
+            "unknown_price",
+        );
+    }
     let primary_provider = primary.provider_name().to_string();
 
     // 审计落库（与 chat_stream 同款：决策快照 + 耗时，outcome 调用后回填）
@@ -276,11 +321,12 @@ pub async fn chat_completions(
     // C2：plan 路径主选的输入侧事前估算（direct 为 0）
     let routing_est_input_cost = routing.est_input_cost;
     let request_id = format!(
-        "proxy-{}",
+        "proxy-{}-{:016x}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+        rand::random::<u64>()
     );
     let decision_id = if routing.method != "direct" {
         let signals_json = serde_json::to_string(&json!({
@@ -311,6 +357,55 @@ pub async fn chat_completions(
     // 路径仍为 500）；temperature 沿用 OpenAI 语义缺省 1.0（客户端显式值优先）
     let max_tokens = req.max_tokens.unwrap_or(4096);
     let temperature = req.temperature.unwrap_or(1.0);
+    if !(1..=65536).contains(&max_tokens) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "max_tokens 必须在 1～65536 之间",
+            "invalid_request_error",
+            "invalid_max_tokens",
+        );
+    }
+    if api_key_id > 0 {
+        let estimated = match estimate_proxy_hold(
+            &state.db,
+            &models,
+            &routing,
+            &processed_messages,
+            max_tokens,
+        ) {
+            Ok(amount) => amount,
+            Err(e) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &e.to_string(),
+                    "server_error",
+                    "pricing_error",
+                )
+            }
+        };
+        match state
+            .db
+            .reserve_api_key_budget(api_key_id, &request_id, estimated)
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return error_response(
+                    StatusCode::PAYMENT_REQUIRED,
+                    "API Key 额度不足",
+                    "invalid_request_error",
+                    "insufficient_quota",
+                )
+            }
+            Err(e) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &e.to_string(),
+                    "server_error",
+                    "reservation_error",
+                )
+            }
+        }
+    }
 
     if req.stream.unwrap_or(false) {
         let mut names = vec![routing.model.clone()];
@@ -338,6 +433,9 @@ pub async fn chat_completions(
             }
         }
         let Some((selected_model, mut stream)) = selected else {
+            if api_key_id > 0 {
+                let _ = state.db.settle_api_key_budget(&request_id, 0.0);
+            }
             let detail = first_error.unwrap_or_else(|| "all providers failed".into());
             return sse_response(format!(
                 "data: {}\n\ndata: [DONE]\n\n",
@@ -349,6 +447,10 @@ pub async fn chat_completions(
         let db = state.db.clone();
         let id = new_completion_id();
         let created = now_secs();
+        let estimated_input_tokens: i64 = processed_messages
+            .iter()
+            .map(|m| crate::context::message_tokens(m) as i64)
+            .sum();
         let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
         if !send_frame(
             &tx,
@@ -362,14 +464,24 @@ pub async fn chat_completions(
         )
         .await
         {
+            if api_key_id > 0 {
+                let _ = db.settle_api_key_budget(&request_id, 0.0);
+            }
             return sse_response(String::new());
         }
         tokio::spawn(async move {
             use futures::StreamExt;
+            let started = std::time::Instant::now();
             let mut usage = crate::pricing::UsageDetail::default();
+            let mut content = String::new();
+            let mut stream_error = None;
+            let mut disconnected = false;
+            let mut completed = false;
             while let Some(item) = stream.next().await {
                 match item {
+                    Ok(crate::providers::StreamEvent::CacheHit) => {}
                     Ok(crate::providers::StreamEvent::Content(delta)) => {
+                        content.push_str(&delta);
                         if !send_frame(
                             &tx,
                             openai_chunk(
@@ -382,30 +494,92 @@ pub async fn chat_completions(
                         )
                         .await
                         {
-                            return;
+                            disconnected = true;
+                            break;
                         }
                     }
                     Ok(crate::providers::StreamEvent::Usage(value)) => usage = value,
-                    Ok(crate::providers::StreamEvent::Done) => break,
+                    Ok(crate::providers::StreamEvent::Done) => {
+                        completed = true;
+                        break;
+                    }
                     Ok(crate::providers::StreamEvent::Reasoning(_)) => {}
                     Err(error) => {
-                        send_frame(
-                            &tx,
-                            format!(
-                                "data: {}\n\n",
-                                error_body(&error.to_string(), "server_error", "upstream_failure")
-                            ),
-                        )
-                        .await;
-                        return;
+                        stream_error = Some(error.to_string());
+                        break;
                     }
                 }
             }
-            let (cost, _, _) = priced_usage(&db, &provider, &model_name, &usage);
-            if api_key_id > 0 {
-                if let Err(error) = db.add_api_key_usage(api_key_id, cost) {
-                    eprintln!("[proxy] key usage update failed: {error}");
+            let partial = stream_error.is_some() || disconnected || !completed;
+            if partial
+                || (usage.prompt_tokens == 0 && estimated_input_tokens > 0)
+                || (usage.completion_tokens == 0 && !content.is_empty())
+            {
+                usage.field_missing = true;
+                if usage.prompt_tokens <= 0 {
+                    usage.prompt_tokens = estimated_input_tokens;
                 }
+                if usage.completion_tokens <= 0 {
+                    usage.completion_tokens = crate::context::count_tokens(&content) as i64;
+                }
+            }
+            let (cost, input_cost, zone_multiplier) =
+                priced_usage(&db, &provider, &model_name, &usage);
+            if let Err(error) = db.insert_usage(&db::UsageRecord {
+                model_name: &model_name,
+                user_id: "default",
+                input_tokens: usage.prompt_tokens,
+                output_tokens: usage.completion_tokens,
+                cost,
+                task_type: Some(&routing_task_type),
+                cache_hit: false,
+                latency_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
+                request_id: Some(&request_id),
+                extra: Some(db::UsageExtra {
+                    cached_tokens: usage.cached_tokens,
+                    reasoning_tokens: usage.reasoning_tokens,
+                    est_cost: 0.0,
+                    act_cost: cost,
+                    zone_multiplier,
+                    conversation_id: None,
+                    field_missing: usage.field_missing,
+                    cache_saved_cost: 0.0,
+                    api_source: Some("proxy".into()),
+                    est_input_cost: routing_est_input_cost,
+                    act_input_cost: input_cost,
+                }),
+            }) {
+                eprintln!("[proxy] 保存流式用量失败: {error}");
+            }
+            if api_key_id > 0 {
+                if let Err(error) = db.settle_api_key_budget(&request_id, cost) {
+                    eprintln!("[proxy] 结算 API Key 额度失败: {error}");
+                }
+            }
+            if let Some(detail) = stream_error {
+                let _ = send_frame(
+                    &tx,
+                    format!(
+                        "data: {}\n\n",
+                        error_body(&detail, "server_error", "upstream_failure")
+                    ),
+                )
+                .await;
+                return;
+            }
+            if disconnected {
+                return;
+            }
+            if !completed {
+                let _ = send_frame(
+                    &tx,
+                    format!(
+                        "data: {}\n\n",
+                        error_body("上游流提前结束", "server_error", "upstream_failure")
+                    ),
+                )
+                .await;
+                return;
             }
             let final_frame = format!(
                 "{}data: [DONE]\n\n",
@@ -483,7 +657,9 @@ pub async fn chat_completions(
                 }),
             });
             if api_key_id > 0 {
-                let _ = state.db.add_api_key_usage(api_key_id, act_cost);
+                if let Err(error) = state.db.settle_api_key_budget(&request_id, act_cost) {
+                    eprintln!("[proxy] 结算 API Key 额度失败: {error}");
+                }
             }
             state
                 .db
@@ -507,6 +683,9 @@ pub async fn chat_completions(
             .into_response()
         }
         Err(e) => {
+            if api_key_id > 0 {
+                let _ = state.db.settle_api_key_budget(&request_id, 0.0);
+            }
             if decision_id > 0 {
                 let _ = state
                     .db
@@ -747,6 +926,9 @@ pub async fn proxy_selftest(State(_state): State<AppState>) -> Response {
 mod tests {
     use super::*;
 
+    use crate::models::{Backend, Provider};
+    use sha2::Digest;
+
     #[test]
     fn resolve_model_registered_name_direct_else_auto() {
         let reg = ["qwen-plus", "deepseek-v3"];
@@ -789,5 +971,100 @@ mod tests {
         assert_eq!(f3["choices"][0]["delta"].as_object().unwrap().len(), 0);
         // 帧 4：[DONE]
         assert_eq!(frames[3].trim(), "[DONE]");
+    }
+
+    #[tokio::test]
+    async fn proxy_stream_without_provider_usage_still_records_and_settles_cost() {
+        use axum::{body::to_bytes, http::header, routing::post, Router};
+        use std::sync::{Arc, Mutex};
+        let provider =
+            Router::new().route(
+                "/v1/chat/completions",
+                post(|| async {
+                    ([(header::CONTENT_TYPE, "text/event-stream")],
+             "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\ndata: [DONE]\n\n")
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+        let path = std::env::temp_dir().join(format!(
+            "lloom_proxy_meter_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = db::Db::new(&path).unwrap();
+        let mut model = Model::fixture("metered", "custom");
+        model.backend = Backend::Cloud {
+            provider: Provider::Custom("custom".into()),
+            api_base: Some(format!("http://127.0.0.1:{port}/v1")),
+            api_key: None,
+        };
+        model.input_cost_per_token = 1e-6;
+        model.output_cost_per_token = 2e-6;
+        db.insert_model(&model).unwrap();
+        let token = "test-token";
+        let hash = format!("{:x}", sha2::Sha256::digest(token.as_bytes()));
+        let key_id = db
+            .insert_api_key(
+                &hash,
+                "ll-",
+                &db::ApiKeyWrite {
+                    name: "test",
+                    status: "active",
+                    quota_usd: Some(0.001),
+                    rpm: 60,
+                    allowed_models: "[]",
+                    expires_at: None,
+                },
+            )
+            .unwrap();
+        let state = AppState {
+            db: db.clone(),
+            started_at: std::time::Instant::now(),
+            children: Arc::new(Mutex::new(crate::server::Children::default())),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        let response = chat_completions(
+            State(state),
+            headers,
+            Json(OpenAiChatRequest {
+                model: "metered".into(),
+                messages: vec![json!({"role":"user","content":"中文提问"})],
+                temperature: Some(0.0),
+                max_tokens: Some(10),
+                stream: Some(true),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("[DONE]"));
+        let conn = db.conn().unwrap();
+        let (used, pending): (f64, i64) = conn.query_row(
+            "SELECT used_usd, (SELECT COUNT(*) FROM api_key_reservations) FROM api_keys WHERE id=?1",
+            rusqlite::params![key_id], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert!(used > 0.0 && used < 0.001, "实际费用应结算: {used}");
+        assert_eq!(pending, 0);
+        let counted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM usage_records WHERE api_source='proxy' AND field_missing=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(counted, 1);
+        drop(conn);
+        server.abort();
+        drop(db);
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Select, message, Popconfirm } from 'antd';
+import { Alert, Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Select, message, Popconfirm } from 'antd';
 import { PlusOutlined, ReloadOutlined, EditOutlined } from '@ant-design/icons';
 import { getModels, addModel, updateModel, removeModel, probeModel } from '../api';
 import type { Model, ModelCreatePayload, ModelPatchPayload, ModelProbeResult } from '../api';
@@ -277,6 +277,9 @@ export default function ModelsPage() {
           </Button>
         </Space>
       </div>
+
+      <Alert type="info" showIcon message="云模型需要可靠定价才能参与自动路由"
+        description="在「定价」页新增与模型名称完全一致的供应商/模型价格；未配置价格时仍可查看模型，但自动路由不会把未知成本当作免费。" />
 
       <Table rowKey="name" loading={loading} columns={columns} dataSource={models} pagination={false} />
 

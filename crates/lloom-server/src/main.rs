@@ -78,6 +78,19 @@ fn main() {
             }
 
             let bind_addr = config::bind_addr();
+            // P0-4 fail-closed：非环回绑定的管理端口要求已配置 API Key，
+            // 否则拒绝启动（避免静默暴露无鉴权的管理面）。
+            let loopback_bind = bind_addr
+                .parse::<std::net::IpAddr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or_else(|_| bind_addr.eq_ignore_ascii_case("localhost"));
+            if !loopback_bind && !server::non_loopback_bind_permitted(false, state_for_spawn.db.list_api_keys().map(|k| !k.is_empty()).unwrap_or(false)) {
+                eprintln!(
+                    "[core] refusing to start: 非环回绑定 {bind_addr} 需要先配置至少一个 API Key（防止管理面无鉴权暴露到局域网）"
+                );
+                server::shutdown_all(&state_for_spawn);
+                std::process::exit(1);
+            }
             let listener = tokio::net::TcpListener::bind((bind_addr.as_str(), web_port))
                 .await
                 .unwrap_or_else(|e| {

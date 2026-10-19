@@ -107,7 +107,7 @@ fn band_tier(band: &str) -> i64 {
 
 /// Regex-tier classification. Returns task type or None.
 pub fn rule_classify(text: &str) -> Option<String> {
-    let lower = text.to_lowercase();
+    let lower = text.trim().to_lowercase();
     if lower.trim().is_empty() {
         return None;
     }
@@ -127,11 +127,16 @@ pub async fn classify(text: &str, classifier: Option<&ModelSpec>) -> (String, St
     if let Some(task) = rule_classify(text) {
         return (task, "rule".to_string());
     }
-    let task = match classifier {
-        Some(spec) => crate::ai_client::classify(text, spec, &VALID_TASK_TYPES).await,
-        None => "general".to_string(),
-    };
-    (task, "llm".to_string())
+    match classifier {
+        Some(spec) => match crate::ai_client::classify(text, spec, &VALID_TASK_TYPES).await {
+            Ok(task) => (task, "llm".to_string()),
+            Err(e) => {
+                eprintln!("[router] 分类器 {} 失败，回落 general: {e}", spec.name);
+                ("general".to_string(), "llm_fallback".to_string())
+            }
+        },
+        None => ("general".to_string(), "llm_fallback".to_string()),
+    }
 }
 
 // ── plan(): 注册表驱动评分路由（ROUTING-PLAN §4.6） ──
@@ -236,11 +241,14 @@ pub enum PinnedMode {
 }
 
 fn pinned_mode_from_env() -> PinnedMode {
-    if std::env::var("LLOOM_PINNED_MODE").ok().as_deref() == Some("hard") {
-        PinnedMode::Hard
-    } else {
-        PinnedMode::Soft
-    }
+    static MODE: OnceLock<PinnedMode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        if std::env::var("LLOOM_PINNED_MODE").ok().as_deref() == Some("hard") {
+            PinnedMode::Hard
+        } else {
+            PinnedMode::Soft
+        }
+    })
 }
 
 /// 默认入口：pinned 模式读 `LLOOM_PINNED_MODE`（缺省 soft）。
@@ -281,9 +289,21 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
             ));
             continue;
         }
-        let ec = input
+        let price = input
             .price_specs
-            .get(&(m.provider_name().to_string(), m.name.clone()))
+            .get(&(m.provider_name().to_string(), m.name.clone()));
+        if price.is_some_and(|spec| spec.stale_reason.as_deref() == Some("invalid_cost")) {
+            rejected.push(format!("{}: 定价数据损坏，需人工修正", m.name));
+            continue;
+        }
+        if price.is_none()
+            && !m.is_local()
+            && (m.input_cost_per_token <= 0.0 || m.output_cost_per_token <= 0.0)
+        {
+            rejected.push(format!("{}: 云模型缺少可靠价格，需先录入定价", m.name));
+            continue;
+        }
+        let ec = price
             .map(|s| {
                 s.est_cost(
                     hit_of(input, m),
@@ -293,7 +313,11 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
                     input.zones,
                 )
             })
-            .unwrap_or(0.0);
+            .unwrap_or_else(|| m.calculate_cost(input.est_in_tokens, input.est_out_tokens));
+        if !ec.is_finite() || ec < 0.0 {
+            rejected.push(format!("{}: 无效价格", m.name));
+            continue;
+        }
         // P5.a protect：仅本地免费或零成本模型（预算耗尽推本地 Ollama 的最后一档）。
         if input.budget_tier == "protect" && !m.is_local() && ec > 0.0 {
             rejected.push(format!("{}: protect 仅本地/零成本", m.name));
@@ -360,8 +384,8 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
     }
     candidates.sort_by(|a, b| {
         b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&a.score)
+            .then_with(|| a.name.cmp(&b.name))
     });
 
     let primary = candidates[0].name.clone();
@@ -390,19 +414,27 @@ fn winner_est_input_cost(input: &PlanInput, m: &Model) -> f64 {
         .price_specs
         .get(&(m.provider_name().to_string(), m.name.clone()))
         .map(|s| {
-            s.effective_input_cost(hit_of(input, m), cost_epoch(input), input.zones)
-                * input.est_in_tokens as f64
+            s.effective_input_cost(
+                hit_of(input, m),
+                input.est_in_tokens,
+                cost_epoch(input),
+                input.zones,
+            ) * input.est_in_tokens as f64
         })
-        .unwrap_or(0.0)
+        .unwrap_or_else(|| m.input_cost_per_token * input.est_in_tokens as f64)
 }
 
 fn quality_of(input: &PlanInput, m: &Model) -> f64 {
-    input
+    let score = input
         .quality_override
         .get(&m.name)
         .copied()
-        .unwrap_or(m.quality_score)
-        .clamp(0.0, 1.0)
+        .unwrap_or(m.quality_score);
+    if score.is_finite() {
+        score.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
 }
 
 /// PR-5 §5.1：model → 缓存命中率（缺省 0，不偏袒）。
@@ -492,7 +524,8 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
                         input.zones,
                     )
                 })
-                .unwrap_or(0.0)
+                .unwrap_or_else(|| m.calculate_cost(input.est_in_tokens, input.est_out_tokens))
+                .max(0.0)
         })
         .collect();
     let mut sorted_ecs = ecs.clone();
@@ -505,7 +538,9 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
         .zip(ecs.iter())
         .map(|(m, &ec)| {
             let q = quality_of(input, m);
-            let norm_cost = if ec + med_ec > 0.0 {
+            let norm_cost = if !ec.is_finite() {
+                1.0
+            } else if ec + med_ec > 0.0 {
                 ec / (ec + med_ec)
             } else {
                 0.0
@@ -518,6 +553,9 @@ fn score_all(input: &PlanInput, gated: &[&Model]) -> Vec<Candidate> {
                 + sticky_bonus(input, m, med_ec); // PR-5 §5.2 + B15 会话级缓存感知
             if m.needs_calibration != 0 && tier_req > 1 {
                 s -= 0.3;
+            }
+            if !s.is_finite() {
+                s = f64::NEG_INFINITY;
             }
             Candidate {
                 name: m.name.clone(),
@@ -943,6 +981,19 @@ mod tests {
             &empty, &specs, "general", "medium", &policy, 100, &ctx,
         ));
         assert!(matches!(r, Err(PlanError::NoCandidates { .. })));
+    }
+
+    #[test]
+    fn unknown_cloud_price_is_not_treated_as_free() {
+        let models = vec![model("cloud-unpriced", "openai", 2, 32768)];
+        let specs = HashMap::new();
+        let policy = RoutingPolicy::default();
+        let ctx = Ctx::new();
+        let err = plan(&base_input(
+            &models, &specs, "general", "medium", &policy, 100, &ctx,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("缺少可靠价格"));
     }
 
     /// C2：PlanOutcome 暴露主选模型输入侧事前估算（est_in × effective_input_cost）。

@@ -65,6 +65,22 @@ pub fn count_tokens(text: &str) -> usize {
     cjk + ((other as f64) / 3.5) as usize
 }
 
+pub(crate) fn message_tokens(message: &Value) -> usize {
+    match message.get("content") {
+        Some(Value::String(text)) => count_tokens(text),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .map(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .map(count_tokens)
+                    .unwrap_or(2048)
+            })
+            .sum(),
+        _ => 0,
+    }
+}
+
 pub fn build_context(
     query: &str,
     history: &[Value],
@@ -78,17 +94,24 @@ pub fn build_context(
     let available =
         budget.saturating_sub(query_tokens + count_tokens(system_prompt) + summary_tokens);
 
-    let mut kept_rev = Vec::new();
+    let mut turns = Vec::new();
+    for (index, message) in history.iter().enumerate() {
+        if message.get("role").and_then(Value::as_str) == Some("user") {
+            turns.push(index);
+        }
+    }
+    let mut start = history.len();
     let mut used = 0usize;
-    for message in history.iter().rev() {
-        let tokens = count_tokens(message.get("content").and_then(Value::as_str).unwrap_or(""));
+    for &turn_start in turns.iter().rev() {
+        let turn = &history[turn_start..start];
+        let tokens: usize = turn.iter().map(message_tokens).sum();
         if used + tokens > available {
             break;
         }
-        kept_rev.push(message.clone());
+        start = turn_start;
         used += tokens;
     }
-    kept_rev.reverse();
+    let kept_rev = &history[start..];
     let kept = kept_rev.len();
     let dropped = history.len().saturating_sub(kept);
     let upto = summary_upto.min(history.len());
@@ -102,7 +125,7 @@ pub fn build_context(
             "content": format!("以下是本对话早前内容的摘要，供你参考：\n{summary}")
         }));
     }
-    messages.extend(kept_rev);
+    messages.extend_from_slice(kept_rev);
     messages.push(json!({"role": "user", "content": query}));
 
     ContextWindow {
@@ -209,6 +232,25 @@ mod tests {
         assert_eq!(out.stats.dropped, 2);
         assert_eq!(out.messages[1]["content"], "最新历史");
         assert!(out.stats.needs_summary);
+    }
+
+    #[test]
+    fn context_never_keeps_orphan_tool_or_assistant_messages() {
+        let history = vec![
+            json!({"role":"user","content":"甲乙丙丁甲乙丙丁"}),
+            json!({"role":"assistant","content":"调用工具"}),
+            json!({"role":"tool","content":"工具响应"}),
+            json!({"role":"user","content":"最新"}),
+        ];
+        let out = build_context("问题", &history, "", 0, "系统", 8);
+        assert_eq!(out.stats.kept, 1);
+        assert_eq!(out.messages[1]["role"], "user");
+    }
+
+    #[test]
+    fn multimodal_input_consumes_context_budget() {
+        let message = json!({"content":[{"type":"text","text":"你好"}, {"type":"image_url","image_url":{"url":"data:..."}}]});
+        assert!(message_tokens(&message) >= 514);
     }
 
     #[test]

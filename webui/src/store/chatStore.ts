@@ -76,6 +76,7 @@ let state: StoreState = {
 };
 
 const listeners = new Set<() => void>();
+const loadSeq = new Map<string, number>();
 const emit = () => listeners.forEach((l) => l());
 const subscribe = (cb: () => void) => {
   listeners.add(cb);
@@ -114,9 +115,12 @@ export async function refreshConvs() {
 export async function selectConv(id: string) {
   update((s) => ({ ...s, activeId: id }));
   if (state.convMap[id]?.loaded) return;
+  const seq = (loadSeq.get(id) ?? 0) + 1;
+  loadSeq.set(id, seq);
   setConv(id, (c) => ({ ...c, loading: true }));
   try {
     const conv = await loadConversation(id);
+    if (loadSeq.get(id) !== seq || state.convMap[id]?.loaded) return;
     // Map persisted messages — including their meta (model/tokens/cost/plan/
     // status) — so reloaded conversations keep their plan cards and cost tags
     // instead of collapsing to bare role/content.
@@ -149,7 +153,7 @@ export async function selectConv(id: string) {
       },
     }));
   } catch {
-    setConv(id, (c) => ({ ...c, loading: false }));
+    if (loadSeq.get(id) === seq) setConv(id, (c) => ({ ...c, loading: false }));
   }
 }
 
@@ -255,8 +259,8 @@ export async function send() {
     const draftMsgs = [...cur.messages, userMsg, placeholder];
     update((s) => ({
       ...s,
-      activeId: phase.id,
-      draft: emptyState(),
+      activeId: s.activeId === null ? phase.id : s.activeId,
+      draft: s.activeId === null ? emptyState() : s.draft,
       convMap: {
         ...s.convMap,
         [phase.id]: {

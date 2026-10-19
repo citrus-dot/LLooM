@@ -467,13 +467,15 @@ impl PriceSpec {
     pub fn effective_input_cost(
         &self,
         hit_rate_ewma: f64,
+        prompt_tokens: i64,
         t_epoch_secs: i64,
         zr: &ZoneResolver,
     ) -> f64 {
         let z = self.zone_multiplier(t_epoch_secs, zr);
-        let p_read = self.cache_read_cost.unwrap_or(self.input_cost); // 无区分=不优惠
+        let band = self.band(prompt_tokens);
+        let p_read = band.cache_read(); // 无区分=不优惠
         let h = hit_rate_ewma.clamp(0.0, 1.0);
-        z * (h * p_read + (1.0 - h) * self.input_cost)
+        z * (h * p_read + (1.0 - h) * band.in_cost())
     }
 
     /// 事前估算成本（喂 plan() 门槛；输出按顶层价，不含 cache_write——保守）。
@@ -487,8 +489,8 @@ impl PriceSpec {
         zr: &ZoneResolver,
     ) -> f64 {
         let z = self.zone_multiplier(t_epoch_secs, zr);
-        let eff_in = self.effective_input_cost(hit_rate_ewma, t_epoch_secs, zr);
-        est_in as f64 * eff_in + z * est_out as f64 * self.output_cost
+        let eff_in = self.effective_input_cost(hit_rate_ewma, est_in, t_epoch_secs, zr);
+        est_in as f64 * eff_in + z * est_out as f64 * self.band(est_in).out_cost()
     }
 }
 
@@ -550,12 +552,18 @@ impl Zone {
     }
 
     /// PR-8：在 `horizon_secs` 内（严格未来）首个折扣系数 (<1.0) 的起始时刻。
-    /// 30 分钟步进扫描；当前已在谷时（multiplier<1）不返回 now，仅返回未来的谷时窗口。
+    /// 分时规则以整点为界，直接检查未来整点（不将 17:40→18:00 误报为 18:10）。
     /// 无谷时窗口 → None。
     pub fn first_valley_epoch(&self, t_epoch_secs: i64, horizon_secs: i64) -> Option<i64> {
-        let step: i64 = 1800; // 30-min 粒度，能对齐半小时/整点边界
-        let end = t_epoch_secs.saturating_add(horizon_secs.max(step));
-        let mut t = t_epoch_secs.saturating_add(step);
+        if horizon_secs <= 0 {
+            return None;
+        }
+        let step: i64 = 3600;
+        let end = t_epoch_secs.saturating_add(horizon_secs);
+        let mut t = t_epoch_secs
+            .div_euclid(step)
+            .saturating_add(1)
+            .saturating_mul(step);
         while t <= end {
             if self.multiplier_at(t) < 1.0 {
                 return Some(t);
@@ -836,11 +844,37 @@ mod tests {
         let s = test_spec();
         let zr = ZoneResolver::new();
         // h=0.6, cache_read=0.2×input → eff_in = 0.6*0.2*in + 0.4*in = 0.52*in
-        let eff = s.effective_input_cost(0.6, 0, &zr);
+        let eff = s.effective_input_cost(0.6, 100, 0, &zr);
         assert!((eff - 0.52 * 3.47e-7).abs() < 1e-15);
         let ec = s.est_cost(0.6, 1000, 200, 0, &zr);
         let expected = 1000.0 * 0.52 * 3.47e-7 + 200.0 * 1.389e-6;
         assert!((ec - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn tiered_price_is_used_for_estimated_input_and_output() {
+        let mut s = test_spec();
+        s.tiered = Some(vec![
+            TierBand {
+                max_input: 1000,
+                input_cost: 1e-7,
+                output_cost: 2e-7,
+                cache_read_cost: Some(5e-8),
+                ..Default::default()
+            },
+            TierBand {
+                max_input: i64::MAX,
+                input_cost: 4e-7,
+                output_cost: 8e-7,
+                cache_read_cost: Some(2e-7),
+                ..Default::default()
+            },
+        ]);
+        let zr = ZoneResolver::new();
+        assert!((s.effective_input_cost(0.5, 2000, 0, &zr) - 3e-7).abs() < 1e-15);
+        assert!(
+            (s.est_cost(0.5, 2000, 100, 0, &zr) - (2000.0 * 3e-7 + 100.0 * 8e-7)).abs() < 1e-12
+        );
     }
 
     #[test]
@@ -864,6 +898,11 @@ mod tests {
         let t = beijing_epoch(2026, 8, 24, 17, 0, 8);
         assert_eq!(
             z.first_valley_epoch(t, 7200),
+            Some(beijing_epoch(2026, 8, 24, 18, 0, 8))
+        );
+        let late = beijing_epoch(2026, 8, 24, 17, 40, 8);
+        assert_eq!(
+            z.first_valley_epoch(late, 1800),
             Some(beijing_epoch(2026, 8, 24, 18, 0, 8))
         );
     }

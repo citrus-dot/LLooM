@@ -20,6 +20,8 @@ impl ExactCache {
         let conn = Connection::open(&path)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
+             PRAGMA busy_timeout=5000;
+             PRAGMA synchronous=NORMAL;
              CREATE TABLE IF NOT EXISTS exact_cache (
                key TEXT PRIMARY KEY, model TEXT NOT NULL, response TEXT NOT NULL,
                conv_id TEXT, created_at INTEGER NOT NULL, hits INTEGER NOT NULL DEFAULT 0
@@ -38,7 +40,7 @@ impl ExactCache {
     }
 
     pub fn lookup(&self, key: &str) -> rusqlite::Result<Option<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let row: Option<(String, i64)> = conn
             .query_row(
                 "SELECT response, created_at FROM exact_cache WHERE key = ?1",
@@ -67,18 +69,21 @@ impl ExactCache {
         response: &str,
         conv_id: Option<&str>,
     ) -> rusqlite::Result<()> {
-        self.conn.lock().unwrap().execute(
-            "INSERT INTO exact_cache (key, model, response, conv_id, created_at, hits)
+        self.conn
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .execute(
+                "INSERT INTO exact_cache (key, model, response, conv_id, created_at, hits)
              VALUES (?1, ?2, ?3, ?4, ?5, 0)
              ON CONFLICT(key) DO UPDATE SET model=excluded.model, response=excluded.response,
                conv_id=excluded.conv_id, created_at=excluded.created_at, hits=0",
-            params![key, model, response, conv_id, now()],
-        )?;
+                params![key, model, response, conv_id, now()],
+            )?;
         Ok(())
     }
 
     pub fn sweep(&self, max_entries: usize) -> rusqlite::Result<usize> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let mut removed = 0usize;
         if self.ttl_secs > 0 {
             removed += conn.execute(

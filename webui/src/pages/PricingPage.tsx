@@ -6,6 +6,7 @@ import {
   Tag,
   Modal,
   Form,
+  Input,
   InputNumber,
   Switch,
   Popconfirm,
@@ -120,6 +121,7 @@ export default function PricingPage() {
 
   const openEdit = (s: PriceSpec) => {
     setEditing(s);
+    form.resetFields();
     form.setFieldsValue({
       input_price: s.input_cost * 1000,
       output_price: s.output_cost * 1000,
@@ -128,12 +130,24 @@ export default function PricingPage() {
     setEditOpen(true);
   };
 
+  const openAdd = () => {
+    setEditing(null);
+    form.resetFields();
+    setEditOpen(true);
+  };
+
   const handleSave = async () => {
     const v = await form.validateFields();
-    if (!editing) return;
+    const provider = editing?.provider ?? v.provider?.trim();
+    const model = editing?.model ?? v.model?.trim();
+    if (!provider || !model) return;
     try {
+      if (!editing && specs.some((s) => s.provider === provider && s.model === model)) {
+        message.error('该模型已存在价格，请使用改价');
+        return;
+      }
       // 录入口以 $/1K token 输入，转回 per-token；改价强制 source=manual
-      await updatePriceSpec(editing.provider, editing.model, {
+      await updatePriceSpec(provider, model, {
         input_cost: v.input_price / 1000,
         output_cost: v.output_price / 1000,
         cache_read_cost: v.cache_read_price == null ? null : v.cache_read_price / 1000,
@@ -293,6 +307,7 @@ export default function PricingPage() {
           </span>
         </Space>
         <Space>
+          <Button type="primary" onClick={openAdd}>新增价格</Button>
           <Button icon={<ReloadOutlined />} loading={refreshing} onClick={handleRefreshRemote}>
             刷新远端价
           </Button>
@@ -304,7 +319,7 @@ export default function PricingPage() {
         type="info"
         showIcon
         message="价格口径说明"
-        description="价格按「倒排来源优先级」维护：manual > overlay > litellm_remote > litellm_packaged > heuristic。manual 为人工锚定，刷新 job 永不覆盖；标红色 ● 表示该价已过期（对账比值连续 3 天超出 [0.8, 1.2] 且当日调用 ≥50 才触发，日常看不到属正常），悬停红点可见原因，需人工核对后「采纳」或「改价」。「参考价」列为 OpenRouter 第三方转售价，独立对账层：不参与计价、不覆盖任何本地价，偏差 ≥20% 高亮提示（转售价天然偏高，仅供发现供应商调价/锚定价脱节的线索）。"
+        description="缺少价格的云模型不会参与自动路由，请先新增对应 provider/模型名称的价格。manual 人工价和 overlay 显式价不会被远端刷新覆盖；其他来源的现有行可被远端匹配价覆盖。标红 ● 表示价格已过期。OpenRouter 参考价只用于对照，不参与计价。"
       />
 
       <Table
@@ -372,7 +387,7 @@ export default function PricingPage() {
       </Card>
 
       <Modal
-        title={`改价 ${editing ? `${editing.provider}/${editing.model}` : ''}`}
+        title={editing ? `改价 ${editing.provider}/${editing.model}` : '新增模型价格'}
         open={editOpen}
         onOk={handleSave}
         onCancel={() => setEditOpen(false)}
@@ -380,6 +395,16 @@ export default function PricingPage() {
         okText="保存"
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          {!editing && (
+            <Space size={12} style={{ display: 'flex' }}>
+              <Form.Item name="provider" label="供应商标识" rules={[{ required: true, message: '必填' }]}>
+                <Input placeholder="如 openai / dashscope / custom" />
+              </Form.Item>
+              <Form.Item name="model" label="已注册模型名称" rules={[{ required: true, message: '必填' }]}>
+                <Input placeholder="与模型页的名称完全一致" />
+              </Form.Item>
+            </Space>
+          )}
           <Space size={12} style={{ display: 'flex' }}>
             <Form.Item
               name="input_price"

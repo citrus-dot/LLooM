@@ -7,6 +7,7 @@ use crate::providers::openai_compat::{ProviderStream, StreamEvent};
 use crate::providers::sse_lines::LineDecoder;
 use futures::StreamExt;
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 
 fn endpoint(api_base: &str) -> String {
     let base = if api_base.trim().is_empty() {
@@ -69,10 +70,16 @@ fn payload(
 }
 
 fn request(spec: &ModelSpec) -> Result<reqwest::RequestBuilder> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .read_timeout(std::time::Duration::from_secs(120))
-        .build()
+    static CLIENT: OnceLock<std::result::Result<reqwest::Client, String>> = OnceLock::new();
+    let client = CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .read_timeout(std::time::Duration::from_secs(120))
+                .build()
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
         .map_err(|e| AppError::AiService(format!("Anthropic client init failed: {e}")))?;
     Ok(client
         .post(endpoint(&spec.api_base))
@@ -87,11 +94,15 @@ pub async fn chat(
     max_tokens: i64,
     temperature: f64,
 ) -> Result<ChatResult> {
-    let response = request(spec)?
-        .json(&payload(spec, messages, max_tokens, temperature, false))
-        .send()
-        .await
-        .map_err(|e| transport(&e))?;
+    let response = super::retry::send(request(spec)?.json(&payload(
+        spec,
+        messages,
+        max_tokens,
+        temperature,
+        false,
+    )))
+    .await
+    .map_err(|e| transport(&e))?;
     let status = response.status();
     let text = response
         .text()
@@ -135,11 +146,15 @@ pub async fn stream(
     max_tokens: i64,
     temperature: f64,
 ) -> Result<ProviderStream> {
-    let response = request(spec)?
-        .json(&payload(spec, messages, max_tokens, temperature, true))
-        .send()
-        .await
-        .map_err(|e| transport(&e))?;
+    let response = super::retry::send(request(spec)?.json(&payload(
+        spec,
+        messages,
+        max_tokens,
+        temperature,
+        true,
+    )))
+    .await
+    .map_err(|e| transport(&e))?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
         return Err(http_error(
@@ -151,6 +166,7 @@ pub async fn stream(
     tokio::spawn(async move {
         let mut source = response.bytes_stream();
         let mut decoder = LineDecoder::default();
+        let mut usage_snapshot = UsageDetail::default();
         while let Some(chunk) = source.next().await {
             let chunk = match chunk {
                 Ok(v) => v,
@@ -167,14 +183,14 @@ pub async fn stream(
                 }
             };
             for line in lines {
-                if !emit_line(&line, &tx).await {
+                if !emit_line(&line, &tx, &mut usage_snapshot).await {
                     return;
                 }
             }
         }
         match decoder.finish() {
             Ok(Some(line)) => {
-                if !emit_line(&line, &tx).await {
+                if !emit_line(&line, &tx, &mut usage_snapshot).await {
                     return;
                 }
             }
@@ -194,6 +210,7 @@ pub async fn stream(
 async fn emit_line(
     line: &str,
     tx: &tokio::sync::mpsc::Sender<crate::error::Result<StreamEvent>>,
+    usage: &mut UsageDetail,
 ) -> bool {
     let Some(data) = line.strip_prefix("data:").map(str::trim) else {
         return true;
@@ -201,7 +218,7 @@ async fn emit_line(
     let Ok(value) = serde_json::from_str::<Value>(data) else {
         return true;
     };
-    for event in parse_event(&value) {
+    for event in parse_event(&value, usage) {
         if tx.send(Ok(event)).await.is_err() {
             return false;
         }
@@ -209,7 +226,7 @@ async fn emit_line(
     value.get("type").and_then(Value::as_str) != Some("message_stop")
 }
 
-fn parse_event(value: &Value) -> Vec<StreamEvent> {
+fn parse_event(value: &Value, usage: &mut UsageDetail) -> Vec<StreamEvent> {
     match value.get("type").and_then(Value::as_str) {
         Some("content_block_delta") => {
             let delta = value.get("delta").unwrap_or(&Value::Null);
@@ -229,14 +246,42 @@ fn parse_event(value: &Value) -> Vec<StreamEvent> {
         }
         Some("message_start") => value
             .pointer("/message/usage")
-            .map(|u| vec![StreamEvent::Usage(parse_usage(Some(u)))])
+            .map(|u| {
+                *usage = parse_usage(Some(u));
+                vec![StreamEvent::Usage(usage.clone())]
+            })
             .unwrap_or_default(),
         Some("message_delta") => value
             .get("usage")
-            .map(|u| vec![StreamEvent::Usage(parse_usage(Some(u)))])
+            .map(|u| {
+                merge_usage(usage, u);
+                vec![StreamEvent::Usage(usage.clone())]
+            })
             .unwrap_or_default(),
         Some("message_stop") => vec![StreamEvent::Done],
         _ => Vec::new(),
+    }
+}
+
+fn merge_usage(current: &mut UsageDetail, update: &Value) {
+    if let Some(v) = update.get("input_tokens").and_then(Value::as_i64) {
+        current.prompt_tokens = v;
+    }
+    if let Some(v) = update.get("output_tokens").and_then(Value::as_i64) {
+        current.completion_tokens = v;
+    }
+    if let Some(v) = update
+        .get("cache_read_input_tokens")
+        .and_then(Value::as_i64)
+    {
+        current.cached_tokens = v;
+        current.field_missing = false;
+    }
+    if let Some(v) = update
+        .get("cache_creation_input_tokens")
+        .and_then(Value::as_i64)
+    {
+        current.cache_creation_tokens = v;
     }
 }
 
@@ -326,26 +371,47 @@ mod tests {
 
     #[test]
     fn parses_anthropic_stream_event() {
+        let mut usage = UsageDetail::default();
         let events = parse_event(
             &json!({"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}),
+            &mut usage,
         );
         assert!(matches!(&events[0], StreamEvent::Content(v) if v == "hi"));
+    }
+
+    #[test]
+    fn message_delta_preserves_message_start_input_and_cache_usage() {
+        let mut usage = UsageDetail::default();
+        parse_event(
+            &json!({"type":"message_start", "message":{"usage":{
+                "input_tokens":100,"cache_read_input_tokens":20,"output_tokens":1
+            }}}),
+            &mut usage,
+        );
+        let events = parse_event(
+            &json!({"type":"message_delta","usage":{"output_tokens":5}}),
+            &mut usage,
+        );
+        assert!(
+            matches!(&events[0], StreamEvent::Usage(u) if u.prompt_tokens == 100 && u.cached_tokens == 20 && u.completion_tokens == 5)
+        );
     }
 
     #[tokio::test]
     async fn stream_line_decodes_split_chinese_and_final_message_stop() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         let mut decoder = LineDecoder::default();
+        let mut usage = UsageDetail::default();
         let frames = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n\ndata: {\"type\":\"message_stop\"}";
         for byte in frames.as_bytes() {
             for line in decoder.push(&[*byte]).unwrap() {
-                if !emit_line(&line, &tx).await {
+                if !emit_line(&line, &tx, &mut usage).await {
                     break;
                 }
             }
         }
         let final_line = decoder.finish().unwrap().unwrap();
-        assert!(!emit_line(&final_line, &tx).await);
+        assert!(!emit_line(&final_line, &tx, &mut usage).await);
         assert!(
             matches!(rx.recv().await.unwrap().unwrap(), StreamEvent::Content(text) if text == "你好")
         );

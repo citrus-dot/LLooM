@@ -77,7 +77,10 @@ enum BenchCmd {
         #[arg(long)]
         selection: Option<std::path::PathBuf>,
         /// frozen manifest（benchmark_id/manifest_hash 溯源；缺键时回退占位 identity）
-        #[arg(long, default_value = "benchmarks/routerbench/manifests/frozen_manifest.json")]
+        #[arg(
+            long,
+            default_value = "benchmarks/routerbench/manifests/frozen_manifest.json"
+        )]
         manifest: std::path::PathBuf,
         /// bench.db 落点（决策 P1a：独立库，生产零接触）
         #[arg(long, default_value = "benchmarks/routerbench/bench.db")]
@@ -110,7 +113,10 @@ enum BenchCmd {
         #[arg(long, num_args = 3)]
         models: Vec<String>,
         /// 冻结矩阵目录（取 calibration 侧统计：质量先验/等效单价）
-        #[arg(long, default_value = "benchmarks/routerbench/normalized/llmrouterbench")]
+        #[arg(
+            long,
+            default_value = "benchmarks/routerbench/normalized/llmrouterbench"
+        )]
         normalized: std::path::PathBuf,
         /// Soft Gate penalty（给值即启用；SystemBench P2 = 0.0）
         #[arg(long)]
@@ -125,14 +131,23 @@ enum BenchCmd {
         models: Vec<String>,
         #[arg(long, default_value = "benchmarks/routerbench/normalized")]
         normalized: std::path::PathBuf,
-        #[arg(long, default_value = "benchmarks/routerbench/manifests/core_selection.jsonl")]
+        #[arg(
+            long,
+            default_value = "benchmarks/routerbench/manifests/core_selection.jsonl"
+        )]
         selection: std::path::PathBuf,
-        #[arg(long, default_value = "benchmarks/routerbench/manifests/frozen_manifest.json")]
+        #[arg(
+            long,
+            default_value = "benchmarks/routerbench/manifests/frozen_manifest.json"
+        )]
         manifest: std::path::PathBuf,
         #[arg(long, default_value = "benchmarks/routerbench/bench.db")]
         bench_db: std::path::PathBuf,
         /// Pareto 点集输出（json）
-        #[arg(long, default_value = "benchmarks/routerbench/reports/pareto_points.json")]
+        #[arg(
+            long,
+            default_value = "benchmarks/routerbench/reports/pareto_points.json"
+        )]
         output: std::path::PathBuf,
         /// Soft Gate penalty（给值即启用，含 0.0=pure eligibility；weak nominal tier 1→2）
         #[arg(long)]
@@ -330,25 +345,57 @@ async fn bench_ctx(
     manifest: &std::path::Path,
     calibration: bool,
     soft_gate: Option<f64>,
-) -> Result<(String, String, String, bench::BenchPool, bench::ReplayCtx, Vec<bench::BenchInstance>, Vec<bench::BenchInstance>, bench::FrozenMatrix), Box<dyn std::error::Error>> {
+) -> Result<
+    (
+        String,
+        String,
+        String,
+        bench::BenchPool,
+        bench::ReplayCtx,
+        Vec<bench::BenchInstance>,
+        Vec<bench::BenchInstance>,
+        bench::FrozenMatrix,
+    ),
+    Box<dyn std::error::Error>,
+> {
     // manifest 容错：llmrb 等未冻结矩阵没有 benchmark_id/manifest_hash，回退占位 identity
     let (benchmark_id, manifest_hash, pool_id) = match std::fs::read_to_string(manifest) {
         Ok(text) => {
             let frozen: Value = serde_json::from_str(&text)?;
-            let id = frozen["benchmark_id"].as_str().unwrap_or_default().to_string();
-            let hash = frozen["manifest_hash"].as_str().unwrap_or_default().to_string();
+            let id = frozen["benchmark_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let hash = frozen["manifest_hash"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             let pid = frozen["pool_id"].as_str().unwrap_or_default().to_string();
             if id.is_empty() || hash.is_empty() {
                 eprintln!("⚠ manifest 缺 benchmark_id/manifest_hash，回退占位 identity（calibration-only 运行）");
-                ("unfrozen-matrix".to_string(), "unfrozen".to_string(), "unfrozen".to_string())
+                (
+                    "unfrozen-matrix".to_string(),
+                    "unfrozen".to_string(),
+                    "unfrozen".to_string(),
+                )
             } else {
-                let pid = if pid.is_empty() { "public_matrix_top3_v1".to_string() } else { pid };
+                let pid = if pid.is_empty() {
+                    "public_matrix_top3_v1".to_string()
+                } else {
+                    pid
+                };
                 (id, hash, pid)
             }
         }
         Err(_) => {
-            eprintln!("⚠ manifest 不可读（{manifest:?}），回退占位 identity（calibration-only 运行）");
-            ("unfrozen-matrix".to_string(), "unfrozen".to_string(), "unfrozen".to_string())
+            eprintln!(
+                "⚠ manifest 不可读（{manifest:?}），回退占位 identity（calibration-only 运行）"
+            );
+            (
+                "unfrozen-matrix".to_string(),
+                "unfrozen".to_string(),
+                "unfrozen".to_string(),
+            )
         }
     };
 
@@ -371,7 +418,10 @@ async fn bench_ctx(
         0
     };
     if declared > 0 && test.len() != declared {
-        eprintln!("✗ Core 数量不符：名单声明 {declared}，实载 {}（Gate 1 前置失败）", test.len());
+        eprintln!(
+            "✗ Core 数量不符：名单声明 {declared}，实载 {}（Gate 1 前置失败）",
+            test.len()
+        );
         std::process::exit(1);
     }
 
@@ -382,7 +432,16 @@ async fn bench_ctx(
     let mut ctx = bench::ReplayCtx::new(pool.clone(), pool_models, specs, stats);
     ctx.use_calibration = calibration;
     ctx.soft_gate = soft_gate;
-    Ok((benchmark_id, manifest_hash, pool_id, pool, ctx, test, calib, matrix))
+    Ok((
+        benchmark_id,
+        manifest_hash,
+        pool_id,
+        pool,
+        ctx,
+        test,
+        calib,
+        matrix,
+    ))
 }
 
 async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -406,8 +465,15 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
         eprintln!("✗ --split 只支持 test|calibration");
         std::process::exit(1);
     }
-    let (benchmark_id, manifest_hash, pool_id, pool, ctx, test, calib, matrix) =
-        bench_ctx(models, &normalized, selection.as_deref(), &manifest, calibration, soft_gate).await?;
+    let (benchmark_id, manifest_hash, pool_id, pool, ctx, test, calib, matrix) = bench_ctx(
+        models,
+        &normalized,
+        selection.as_deref(),
+        &manifest,
+        calibration,
+        soft_gate,
+    )
+    .await?;
     let mut ctx = ctx;
     ctx.matched_target = matched_target;
     ctx.strong_budget = strong_budget;
@@ -441,7 +507,10 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
         .cloned()
         .collect();
     if covered.len() < n_total {
-        eprintln!("ℹ 池覆盖过滤：{n_total} → {}（Gate 1：缺 outcome 实例不进入）", covered.len());
+        eprintln!(
+            "ℹ 池覆盖过滤：{n_total} → {}（Gate 1：缺 outcome 实例不进入）",
+            covered.len()
+        );
     }
 
     let conn = bench::open_bench_db(&bench_db)?;
@@ -520,7 +589,11 @@ async fn cmd_bench_replay(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error
             let cl = lloom["cost_mean"].as_f64().unwrap_or(0.0);
             let saving = if cs > 0.0 { 1.0 - cl / cs } else { 0.0 };
             let retention = if qs > 0.0 { ql / qs } else { 0.0 };
-            let gap = if qs - qw > 1e-12 { (ql - qw) / (qs - qw) } else { 0.0 };
+            let gap = if qs - qw > 1e-12 {
+                (ql - qw) / (qs - qw)
+            } else {
+                0.0
+            };
             println!(
                 "  ── LLooM vs 基准（{} calibration）──\n  saving={:.1}% retention={:.1}% gap_recovery={:.1}%",
                 if calibration { "w/" } else { "w/o" },
@@ -574,11 +647,12 @@ async fn cmd_bench_route_batch(cmd: BenchCmd) -> Result<(), Box<dyn std::error::
         let query_id = q["query_id"].as_str().unwrap_or_default();
         let task_type = q["task_type"].as_str().unwrap_or("general");
         let prompt = q["prompt"].as_str().unwrap_or_default();
-        let (selected, band) = bench::route_single(&pool, &stats, soft_gate, cost_weight, task_type, prompt)
-            .unwrap_or_else(|e| {
-                eprintln!("✗ route_single 失败 @ {query_id}: {e}");
-                std::process::exit(1);
-            });
+        let (selected, band) =
+            bench::route_single(&pool, &stats, soft_gate, cost_weight, task_type, prompt)
+                .unwrap_or_else(|e| {
+                    eprintln!("✗ route_single 失败 @ {query_id}: {e}");
+                    std::process::exit(1);
+                });
         writeln!(
             out,
             "{}",
@@ -586,7 +660,11 @@ async fn cmd_bench_route_batch(cmd: BenchCmd) -> Result<(), Box<dyn std::error::
         )?;
     }
     out.flush()?;
-    println!("✓ route-batch: {} queries → {}", queries.len(), out_path.display());
+    println!(
+        "✓ route-batch: {} queries → {}",
+        queries.len(),
+        out_path.display()
+    );
     Ok(())
 }
 
@@ -670,7 +748,10 @@ async fn cmd_bench_sweep(cmd: BenchCmd) -> Result<(), Box<dyn std::error::Error>
 // ── helpers ──
 
 async fn get(client: &Client, path: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let res = client.get(format!("{}{path}", server_base())).send().await?;
+    let res = client
+        .get(format!("{}{path}", server_base()))
+        .send()
+        .await?;
     if !res.status().is_success() {
         return Err(format!("HTTP {}", res.status()).into());
     }
@@ -694,7 +775,10 @@ async fn post(
 }
 
 async fn del(client: &Client, path: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let res = client.delete(format!("{}{path}", server_base())).send().await?;
+    let res = client
+        .delete(format!("{}{path}", server_base()))
+        .send()
+        .await?;
     if !res.status().is_success() {
         return Err(format!("HTTP {}", res.status()).into());
     }
@@ -856,7 +940,12 @@ async fn cmd_models(client: &Client, cmd: ModelsCmd) -> Result<(), Box<dyn std::
                 .send()
                 .await?;
             if !res.status().is_success() {
-                return Err(format!("更新模型失败 (HTTP {}): {}", res.status(), res.text().await?).into());
+                return Err(format!(
+                    "更新模型失败 (HTTP {}): {}",
+                    res.status(),
+                    res.text().await?
+                )
+                .into());
             }
             println!("✓ 模型已更新: {name}");
         }
@@ -1050,6 +1139,18 @@ async fn cmd_chat(
             return Ok(());
         }
         history.push(serde_json::json!({ "role": "user", "content": input }));
+        // Keep at most 40 complete dialogue turns; never start with an orphan
+        // assistant message when trimming a long interactive session.
+        if let Some(start) = history
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, msg)| msg["role"] == "user")
+            .nth(39)
+            .map(|(index, _)| index)
+        {
+            history.drain(..start);
+        }
     }
 }
 
@@ -1093,7 +1194,11 @@ async fn stream_chat(
                             reply = content.to_string();
                         }
                     } else if v["error"].as_bool().unwrap_or(false) {
-                        return Err(format!("请求失败: {}", v["detail"].as_str().unwrap_or("未知错误")).into());
+                        return Err(format!(
+                            "请求失败: {}",
+                            v["detail"].as_str().unwrap_or("未知错误")
+                        )
+                        .into());
                     }
                 }
             }
@@ -1333,7 +1438,11 @@ fn handle_orchestrate_event(ev: &str, data: &str) {
 
 /// Preserve a UTF-8 code point split across HTTP chunks instead of replacing it
 /// with U+FFFD (common for Chinese streaming responses).
-fn append_utf8(buf: &mut String, pending: &mut Vec<u8>, chunk: &[u8]) -> Result<(), std::str::Utf8Error> {
+fn append_utf8(
+    buf: &mut String,
+    pending: &mut Vec<u8>,
+    chunk: &[u8],
+) -> Result<(), std::str::Utf8Error> {
     pending.extend_from_slice(chunk);
     match std::str::from_utf8(pending) {
         Ok(text) => {

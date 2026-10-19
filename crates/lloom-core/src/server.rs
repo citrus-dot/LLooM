@@ -67,7 +67,7 @@ pub(crate) fn priced_usage(
     usage: &pricing::UsageDetail,
 ) -> (f64, f64, f64) {
     match db.get_price_spec(provider, model) {
-        Ok(Some(ps)) => {
+        Ok(Some(ps)) if ps.stale_reason.as_deref() != Some("invalid_cost") => {
             let zr = zone_resolver(db);
             let t = now_epoch_secs();
             (
@@ -76,8 +76,31 @@ pub(crate) fn priced_usage(
                 ps.zone_multiplier(t, zr),
             )
         }
-        _ => (0.0, 0.0, 1.0),
+        _ => match db.find_model(model, false) {
+            Ok(m) if m.input_cost_per_token > 0.0 && m.output_cost_per_token > 0.0 => (
+                m.calculate_cost(usage.prompt_tokens, usage.completion_tokens),
+                usage.prompt_tokens as f64 * m.input_cost_per_token,
+                1.0,
+            ),
+            _ => (0.0, 0.0, 1.0),
+        },
     }
+}
+
+/// P0-4 fail-closed：把管理面暴露到非环回地址是显式决策，必须已配置
+/// 至少一个 API Key（/v1 的 bearer 鉴权与 /api 的远程拒绝条件），否则
+/// 拒绝启动而不是静默开放无鉴权的局域网端口。
+pub fn non_loopback_bind_permitted(is_loopback_bind: bool, has_api_keys: bool) -> bool {
+    is_loopback_bind || has_api_keys
+}
+
+pub(crate) fn model_has_price(db: &db::Db, model: &Model) -> Result<bool> {
+    if model.is_local() || (model.input_cost_per_token > 0.0 && model.output_cost_per_token > 0.0) {
+        return Ok(true);
+    }
+    Ok(db
+        .get_price_spec(model.provider_name(), &model.name)?
+        .is_some_and(|price| price.stale_reason.as_deref() != Some("invalid_cost")))
 }
 
 #[derive(Default)]
@@ -181,12 +204,17 @@ async fn health() -> Json<Value> {
 struct RuntimeSettingsUpdate {
     health_probe_sec: u64,
     shadow_ratio: f64,
+    block_pii: Option<bool>,
+    block_jailbreak: Option<bool>,
 }
 
 async fn runtime_settings(State(state): State<AppState>) -> Json<Value> {
+    let (block_pii, block_jailbreak) = security::policy(&state.db);
     Json(json!({
         "health_probe_sec": config::health_probe_sec(&state.db),
         "shadow_ratio": config::shadow_ratio(&state.db),
+        "block_pii": block_pii,
+        "block_jailbreak": block_jailbreak,
     }))
 }
 
@@ -210,6 +238,16 @@ async fn update_runtime_settings(
     state
         .db
         .set_setting("routing.shadow_ratio", &body.shadow_ratio.to_string())?;
+    if let Some(value) = body.block_pii {
+        state
+            .db
+            .set_setting("security.block_pii", &value.to_string())?;
+    }
+    if let Some(value) = body.block_jailbreak {
+        state
+            .db
+            .set_setting("security.block_jailbreak", &value.to_string())?;
+    }
     Ok(runtime_settings(State(state)).await)
 }
 
@@ -546,17 +584,21 @@ async fn append_conversation_message(
     // Defense-in-depth: run the same PII/jailbreak rules the chat path uses on
     // user content that is about to be persisted (append bypasses the
     // orchestrate-time check only for assistant placeholders, which are empty).
-    if role == "user" && !req.content.is_empty() {
-        let sec = security::check(&req.content, true, true);
+    let content = if role == "user" && !req.content.is_empty() {
+        let (block_pii, block_jailbreak) = security::policy(&state.db);
+        let sec = security::check(&req.content, block_pii, block_jailbreak);
         if sec.blocked {
             return Err(AppError::InvalidRequest(format!(
                 "blocked: {}",
                 sec.block_reason
             )));
         }
-    }
+        sec.processed_text
+    } else {
+        req.content
+    };
     let (conv_id, seq) =
-        conversations::append_message(&state.db, &id, &role, &req.content, req.meta.as_ref())?;
+        conversations::append_message(&state.db, &id, &role, &content, req.meta.as_ref())?;
     Ok(Json(json!({ "id": conv_id, "seq": seq, "appended": true })))
 }
 
@@ -692,7 +734,8 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
         return sse_error(&msg);
     }
     let user_text = security::extract_user_text(&req.messages);
-    let sec = security::check(&user_text, true, true);
+    let (block_pii, block_jailbreak) = security::policy(&state.db);
+    let sec = security::check(&user_text, block_pii, block_jailbreak);
     if sec.blocked {
         return blocked_response(&sec);
     }
@@ -743,7 +786,11 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
     // P0.d：路由结果必须落在注册表内；direct 未注册 / plan 无候选 → 明确报错，
     // 不再伪造空 spec 继续调用。
     match models.iter().find(|m| m.name == routing.model) {
-        Some(_) => {}
+        Some(model) => match model_has_price(&state.db, model) {
+            Ok(true) => {}
+            Ok(false) => return sse_error("云模型价格未知：请先在定价页录入价格"),
+            Err(error) => return err_response(error),
+        },
         None => {
             let detail = if let Some(d) = routing.method.strip_prefix("plan_error:") {
                 format!("路由失败：{d}")
@@ -811,7 +858,12 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
             continue;
         };
         let spec = ModelSpec::from(model);
-        match ai_client::chat_stream(&spec, &processed_messages, 500, 0.3).await {
+        let cache_dir = config::data_dir();
+        let cache = ai_client::ChatCacheCtx {
+            conversation_id: req.conversation_id.as_deref().unwrap_or(""),
+            cache_dir: &cache_dir,
+        };
+        match ai_client::chat_stream(&spec, &processed_messages, 500, 0.3, Some(&cache)).await {
             Ok(stream) => {
                 selected = Some((model.clone(), stream));
                 break;
@@ -832,6 +884,10 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
     let db = state.db.clone();
     let models_for_shadow = models.clone();
     let conversation_id = req.conversation_id.clone();
+    let estimated_input_tokens: i64 = processed_messages
+        .iter()
+        .map(|m| crate::context::message_tokens(m) as i64)
+        .sum();
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
     if tx.send(head).await.is_err() {
         return sse_error("客户端已断开");
@@ -842,37 +898,64 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
         let mut content = String::new();
         let mut reasoning = String::new();
         let mut usage = pricing::UsageDetail::default();
+        let mut cache_hit = false;
         let mut stream_error = None;
+        let mut disconnected = false;
+        let mut completed = false;
         while let Some(item) = provider_stream.next().await {
             match item {
+                Ok(crate::providers::StreamEvent::CacheHit) => cache_hit = true,
                 Ok(crate::providers::StreamEvent::Content(delta)) => {
                     content.push_str(&delta);
                     if !send_sse(&tx, json!({"chunk":delta})).await {
-                        return;
+                        disconnected = true;
+                        break;
                     }
                 }
                 Ok(crate::providers::StreamEvent::Reasoning(delta)) => reasoning.push_str(&delta),
                 Ok(crate::providers::StreamEvent::Usage(value)) => usage = value,
-                Ok(crate::providers::StreamEvent::Done) => break,
+                Ok(crate::providers::StreamEvent::Done) => {
+                    completed = true;
+                    break;
+                }
                 Err(e) => {
                     stream_error = Some(e.to_string());
                     break;
                 }
             }
         }
-        if let Some(detail) = stream_error {
-            crate::health::record_outcome(&db, &used_model, false);
-            send_sse(&tx, json!({"error":true,"detail":detail})).await;
-            return;
+        let partial = stream_error.is_some() || disconnected || !completed;
+        if partial
+            || (usage.prompt_tokens <= 0 && estimated_input_tokens > 0)
+            || (usage.completion_tokens <= 0 && !content.is_empty())
+        {
+            usage.field_missing = true;
+            if usage.prompt_tokens <= 0 {
+                usage.prompt_tokens = estimated_input_tokens;
+            }
+            if usage.completion_tokens <= 0 {
+                usage.completion_tokens = crate::context::count_tokens(&content) as i64;
+            }
         }
-        crate::health::record_outcome(&db, &used_model, true);
+        if stream_error.is_some() && content.is_empty() && !cache_hit {
+            crate::health::record_outcome(&db, &used_model, false);
+        } else if !partial && !cache_hit {
+            crate::health::record_outcome(&db, &used_model, true);
+        }
         if decision_id > 0 {
-            if let Err(error) = db.update_routing_decision_outcome(decision_id, "success") {
+            if let Err(error) = db.update_routing_decision_outcome(
+                decision_id,
+                if partial { "partial" } else { "success" },
+            ) {
                 eprintln!("[stream] update decision failed: {error}");
             }
         }
         let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let (act_cost, act_input_cost, zm) = priced_usage(&db, &provider, &used_model, &usage);
+        let (uncached_cost, uncached_input_cost, zm) =
+            priced_usage(&db, &provider, &used_model, &usage);
+        let act_cost = if cache_hit { 0.0 } else { uncached_cost };
+        let act_input_cost = if cache_hit { 0.0 } else { uncached_input_cost };
+        let cache_saved_cost = if cache_hit { uncached_cost } else { 0.0 };
         if let Err(error) = db.insert_usage(&db::UsageRecord {
             model_name: &used_model,
             user_id: "default",
@@ -880,7 +963,7 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
             output_tokens: usage.completion_tokens,
             cost: act_cost,
             task_type: Some(&routing_task_type),
-            cache_hit: false,
+            cache_hit,
             latency_ms: Some(latency_ms),
             request_id: Some(&request_id),
             extra: Some(db::UsageExtra {
@@ -891,7 +974,7 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
                 zone_multiplier: zm,
                 conversation_id,
                 field_missing: usage.field_missing,
-                cache_saved_cost: 0.0,
+                cache_saved_cost,
                 api_source: None,
                 est_input_cost: routing_est_input_cost,
                 act_input_cost,
@@ -899,20 +982,30 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
         }) {
             eprintln!("[stream] usage persistence failed: {error}");
         }
-        if let Err(error) = db.upsert_model_task_score_signal(
-            &used_model,
-            &routing_task_type,
-            QualitySignalKind::Success,
-        ) {
-            eprintln!("[stream] quality signal failed: {error}");
+        if !cache_hit && !partial {
+            if let Err(error) = db.upsert_model_task_score_signal(
+                &used_model,
+                &routing_task_type,
+                QualitySignalKind::Success,
+            ) {
+                eprintln!("[stream] quality signal failed: {error}");
+            }
         }
-        maybe_shadow_sample(
-            db.clone(),
-            models_for_shadow,
-            routing_task_type.clone(),
-            user_text,
-        );
-        send_sse(&tx,json!({"done":true,"content":content,"model":used_model,"cost":act_cost,"input_tokens":usage.prompt_tokens,"output_tokens":usage.completion_tokens,"cached_tokens":usage.cached_tokens,"cache_hit":false,"reasoning":if reasoning.is_empty(){None}else{Some(reasoning)}})).await;
+        if !cache_hit && !partial {
+            maybe_shadow_sample(
+                db.clone(),
+                models_for_shadow,
+                routing_task_type.clone(),
+                user_text,
+            );
+        }
+        if let Some(detail) = stream_error {
+            let _ = send_sse(&tx, json!({"error":true,"detail":detail})).await;
+        } else if !disconnected && !completed {
+            let _ = send_sse(&tx, json!({"error":true,"detail":"模型流提前结束"})).await;
+        } else if !disconnected {
+            send_sse(&tx,json!({"done":true,"content":content,"model":used_model,"cost":act_cost,"input_tokens":usage.prompt_tokens,"output_tokens":usage.completion_tokens,"cached_tokens":usage.cached_tokens,"cache_hit":cache_hit,"cache_saved_cost":cache_saved_cost,"reasoning":if reasoning.is_empty(){None}else{Some(reasoning)}})).await;
+        }
     });
     let body = Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {
         rx.recv()
@@ -932,7 +1025,8 @@ async fn orchestrate_stream(
     State(state): State<AppState>,
     Json(req): Json<OrchestrateBody>,
 ) -> Response {
-    let sec = security::check(&req.query, true, true);
+    let (block_pii, block_jailbreak) = security::policy(&state.db);
+    let sec = security::check(&req.query, block_pii, block_jailbreak);
     if sec.blocked {
         return blocked_response(&sec);
     }
@@ -1406,7 +1500,20 @@ pub fn shutdown_all(state: &AppState) {
     let _ = Command::new("pkill").args(["-f", "ollama serve"]).status();
 }
 
-async fn shutdown_server(State(state): State<AppState>) -> Json<Value> {
+/// `/api/shutdown` kills the whole process — even when the server is bound to a
+/// non-loopback address (LAN exposure with API keys), this endpoint stays
+/// loopback-only at the handler level, independent of the middleware guard.
+fn shutdown_peer_allowed(addr: std::net::SocketAddr) -> bool {
+    addr.ip().is_loopback()
+}
+
+async fn shutdown_server(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+) -> Response {
+    if !shutdown_peer_allowed(addr) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     // Spawn a short-delayed task so the HTTP response is flushed before the
     // process exits. 400ms is enough for axum to write the JSON body back.
     let s = state.clone();
@@ -1417,7 +1524,7 @@ async fn shutdown_server(State(state): State<AppState>) -> Json<Value> {
         println!("[core] all services stopped, exiting.");
         std::process::exit(0);
     });
-    Json(json!({ "shutting_down": true }))
+    Json(json!({ "shutting_down": true })).into_response()
 }
 
 // ── System ──
@@ -1430,8 +1537,29 @@ async fn open_folder(Json(body): Json<Value>) -> Json<Value> {
 
 async fn open_web(Json(body): Json<Value>) -> Json<Value> {
     let url = body.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    let ok = crate::processes::open_browser(url);
+    let ok = if browser_url_allowed(url) {
+        crate::processes::open_browser(url)
+    } else {
+        false
+    };
     Json(json!({ "ok": ok }))
+}
+
+fn browser_url_allowed(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+}
+
+#[cfg(test)]
+mod browser_url_tests {
+    use super::browser_url_allowed;
+
+    #[test]
+    fn only_http_and_https_are_launchable() {
+        assert!(browser_url_allowed("https://example.com/"));
+        assert!(!browser_url_allowed("file:///etc/passwd"));
+        assert!(!browser_url_allowed("javascript:alert(1)"));
+    }
 }
 
 // ── Background jobs (PRICING-PLAN §6.2 / §7) ──
@@ -1444,8 +1572,22 @@ pub fn spawn_background_jobs(db: db::Db) -> Vec<tokio::task::JoinHandle<()>> {
         tokio::spawn(crate::probe::probe_loop(db.clone())),
         tokio::spawn(pricing_refresh_loop(db.clone())),
         tokio::spawn(health_probe_loop(db.clone())), // P3 主动探测
+        tokio::spawn(api_key_request_cleanup(db.clone())),
         tokio::spawn(crate::review::aiq_report_loop(db)), // N2.a 路由体检（6h，首跑立即）
     ]
+}
+
+async fn api_key_request_cleanup(db: db::Db) {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+    loop {
+        ticker.tick().await;
+        if let Err(e) = db.prune_api_key_requests() {
+            eprintln!("[core] 清理过期 API Key RPM 记录失败: {e}");
+        }
+        if let Err(e) = db.prune_api_key_reservations() {
+            eprintln!("[core] 清理过期额度预留失败: {e}");
+        }
+    }
 }
 
 /// 日级校准 job：每天聚合昨天用量 → 写 price_calibration → 更新命中率 EWMA →
@@ -1987,6 +2129,36 @@ fn remote_api_allowed(path: &str, local: bool, has_api_keys: bool) -> bool {
             || (path.starts_with("/v1/") && !has_api_keys))
 }
 
+fn local_origin_allowed(headers: &axum::http::HeaderMap) -> bool {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.parse::<axum::http::uri::Authority>().ok())
+    else {
+        return false;
+    };
+    if !matches!(
+        host.host().to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "[::1]"
+    ) {
+        return false;
+    }
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true; // CLI and other non-browser clients do not send Origin.
+    };
+    let Some(uri) = origin
+        .to_str()
+        .ok()
+        .and_then(|s| s.parse::<axum::http::Uri>().ok())
+    else {
+        return false;
+    };
+    matches!(uri.scheme_str(), Some("http" | "https"))
+        && uri.authority().is_some_and(|authority| authority == &host)
+        && uri.path() == "/"
+        && uri.query().is_none()
+}
+
 /// The browser management API is local-only. Remote OpenAI-compatible clients
 /// may use /v1 only after an API key has been configured locally.
 async fn remote_api_guard(
@@ -2005,6 +2177,12 @@ async fn remote_api_guard(
         false
     };
     if !remote_api_allowed(path, local, has_api_keys) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if local
+        && (path.starts_with("/api/") || path.starts_with("/v1/"))
+        && !local_origin_allowed(request.headers())
+    {
         return StatusCode::FORBIDDEN.into_response();
     }
     next.run(request).await
@@ -2044,7 +2222,11 @@ mod api_contract_tests {
     use tower::ServiceExt;
 
     fn request(path: &str, peer: &str) -> Request<Body> {
-        let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
+        let mut request = Request::builder()
+            .uri(path)
+            .header(axum::http::header::HOST, "127.0.0.1:7861")
+            .body(Body::empty())
+            .unwrap();
         request
             .extensions_mut()
             .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
@@ -2091,6 +2273,33 @@ mod api_contract_tests {
                 .unwrap()
                 .status(),
             StatusCode::FORBIDDEN
+        );
+        let mut rebinding = request("/api/models", local);
+        rebinding.headers_mut().insert(
+            axum::http::header::HOST,
+            "attacker.example:7861".parse().unwrap(),
+        );
+        assert_eq!(
+            router.clone().oneshot(rebinding).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        let mut csrf = request("/api/models", local);
+        csrf.headers_mut().insert(
+            axum::http::header::ORIGIN,
+            "https://attacker.example".parse().unwrap(),
+        );
+        assert_eq!(
+            router.clone().oneshot(csrf).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        let mut same_origin = request("/api/models", local);
+        same_origin.headers_mut().insert(
+            axum::http::header::ORIGIN,
+            "http://127.0.0.1:7861".parse().unwrap(),
+        );
+        assert_eq!(
+            router.clone().oneshot(same_origin).await.unwrap().status(),
+            StatusCode::OK
         );
         assert_eq!(
             router
@@ -2198,6 +2407,50 @@ mod api_contract_tests {
         assert_eq!(
             router.clone().oneshot(local_probe).await.unwrap().status(),
             StatusCode::NOT_FOUND
+        );
+        drop(router);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn shutdown_requires_loopback_peer_and_bind_requires_api_keys() {
+        use super::{non_loopback_bind_permitted, shutdown_peer_allowed};
+        assert!(shutdown_peer_allowed("127.0.0.1:9000".parse().unwrap()));
+        assert!(shutdown_peer_allowed("[::1]:9000".parse().unwrap()));
+        assert!(!shutdown_peer_allowed("192.0.2.1:9000".parse().unwrap()));
+        assert!(non_loopback_bind_permitted(true, false));
+        assert!(!non_loopback_bind_permitted(false, false));
+        assert!(non_loopback_bind_permitted(false, true));
+    }
+
+    #[tokio::test]
+    async fn shutdown_endpoint_is_rejected_for_remote_peers() {
+        let path = std::env::temp_dir().join(format!(
+            "lloom_shutdown_guard_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let router = build_router(AppState {
+            children: Arc::new(Mutex::new(Children::default())),
+            started_at: Instant::now(),
+            db: Db::new(&path).unwrap(),
+        });
+        let post = |peer: &str| {
+            let mut request = request("/api/shutdown", peer);
+            *request.method_mut() = axum::http::Method::POST;
+            request
+        };
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(post("192.0.2.1:9000"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
         );
         drop(router);
         std::fs::remove_file(path).unwrap();

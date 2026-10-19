@@ -8,9 +8,11 @@ use crate::providers::sse_lines::LineDecoder;
 use futures::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::pin::Pin;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
+    CacheHit,
     Content(String),
     Reasoning(String),
     Usage(UsageDetail),
@@ -18,6 +20,24 @@ pub enum StreamEvent {
 }
 
 pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
+
+fn client(stream: bool) -> Result<&'static reqwest::Client> {
+    static REGULAR: OnceLock<std::result::Result<reqwest::Client, String>> = OnceLock::new();
+    static STREAMING: OnceLock<std::result::Result<reqwest::Client, String>> = OnceLock::new();
+    let slot = if stream { &STREAMING } else { &REGULAR };
+    slot.get_or_init(|| {
+        let builder =
+            reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(10));
+        let builder = if stream {
+            builder.read_timeout(std::time::Duration::from_secs(120))
+        } else {
+            builder.timeout(std::time::Duration::from_secs(120))
+        };
+        builder.build().map_err(|e| e.to_string())
+    })
+    .as_ref()
+    .map_err(|e| AppError::AiService(format!("native client init failed: {e}")))
+}
 
 fn endpoint(api_base: &str) -> String {
     let base = api_base.trim_end_matches('/');
@@ -40,27 +60,21 @@ pub async fn chat(
     max_tokens: i64,
     temperature: f64,
 ) -> Result<ChatResult> {
-    let mut request = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| AppError::AiService(format!("native client init failed: {e}")))?
+    let mut request = client(false)?
         .post(endpoint(&spec.api_base))
         .header(reqwest::header::CONTENT_TYPE, "application/json");
     if !spec.api_key.is_empty() {
         request = request.bearer_auth(&spec.api_key);
     }
-    let response = request
-        .json(&json!({
-            "model": provider_model(spec),
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": false,
-        }))
-        .send()
-        .await
-        .map_err(|e| classify_transport_error(&e))?;
+    let response = super::retry::send(request.json(&json!({
+        "model": provider_model(spec),
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": false,
+    })))
+    .await
+    .map_err(|e| classify_transport_error(&e))?;
     let status = response.status();
     let body = response
         .text()
@@ -80,25 +94,19 @@ pub async fn stream(
     max_tokens: i64,
     temperature: f64,
 ) -> Result<ProviderStream> {
-    let mut request = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .read_timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| AppError::AiService(format!("native client init failed: {e}")))?
+    let mut request = client(true)?
         .post(endpoint(&spec.api_base))
         .header(reqwest::header::CONTENT_TYPE, "application/json");
     if !spec.api_key.is_empty() {
         request = request.bearer_auth(&spec.api_key);
     }
-    let response = request
-        .json(&json!({
-            "model": provider_model(spec), "messages": messages,
-            "max_tokens": max_tokens, "temperature": temperature,
-            "stream": true, "stream_options": {"include_usage": true},
-        }))
-        .send()
-        .await
-        .map_err(|e| classify_transport_error(&e))?;
+    let response = super::retry::send(request.json(&json!({
+        "model": provider_model(spec), "messages": messages,
+        "max_tokens": max_tokens, "temperature": temperature,
+        "stream": true, "stream_options": {"include_usage": true},
+    })))
+    .await
+    .map_err(|e| classify_transport_error(&e))?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
@@ -108,6 +116,10 @@ pub async fn stream(
     tokio::spawn(async move {
         let mut bytes = response.bytes_stream();
         let mut decoder = LineDecoder::default();
+        let mut usage_snapshot = UsageDetail {
+            field_missing: true,
+            ..Default::default()
+        };
         while let Some(chunk) = bytes.next().await {
             let chunk = match chunk {
                 Ok(chunk) => chunk,
@@ -124,14 +136,14 @@ pub async fn stream(
                 }
             };
             for line in lines {
-                if !emit_line(&line, &tx).await {
+                if !emit_line(&line, &tx, &mut usage_snapshot).await {
                     return;
                 }
             }
         }
         match decoder.finish() {
             Ok(Some(line)) => {
-                if !emit_line(&line, &tx).await {
+                if !emit_line(&line, &tx, &mut usage_snapshot).await {
                     return;
                 }
             }
@@ -148,7 +160,11 @@ pub async fn stream(
     })))
 }
 
-async fn emit_line(line: &str, tx: &tokio::sync::mpsc::Sender<Result<StreamEvent>>) -> bool {
+async fn emit_line(
+    line: &str,
+    tx: &tokio::sync::mpsc::Sender<Result<StreamEvent>>,
+    usage: &mut UsageDetail,
+) -> bool {
     let Some(data) = line.strip_prefix("data:").map(str::trim) else {
         return true;
     };
@@ -157,7 +173,7 @@ async fn emit_line(line: &str, tx: &tokio::sync::mpsc::Sender<Result<StreamEvent
         return false;
     }
     if let Ok(value) = serde_json::from_str::<Value>(data) {
-        for event in parse_stream_chunk(&value) {
+        for event in parse_stream_chunk(&value, usage) {
             if tx.send(Ok(event)).await.is_err() {
                 return false;
             }
@@ -166,7 +182,7 @@ async fn emit_line(line: &str, tx: &tokio::sync::mpsc::Sender<Result<StreamEvent
     true
 }
 
-fn parse_stream_chunk(value: &Value) -> Vec<StreamEvent> {
+fn parse_stream_chunk(value: &Value, snapshot: &mut UsageDetail) -> Vec<StreamEvent> {
     let mut events = Vec::new();
     if let Some(delta) = value.pointer("/choices/0/delta") {
         if let Some(text) = delta
@@ -187,14 +203,29 @@ fn parse_stream_chunk(value: &Value) -> Vec<StreamEvent> {
     }
     if let Some(usage) = value.get("usage").filter(|u| !u.is_null()) {
         let cached = usage.pointer("/prompt_tokens_details/cached_tokens");
-        events.push(StreamEvent::Usage(UsageDetail {
-            prompt_tokens: number(usage.get("prompt_tokens")),
-            completion_tokens: number(usage.get("completion_tokens")),
-            cached_tokens: number(cached),
-            reasoning_tokens: number(usage.pointer("/completion_tokens_details/reasoning_tokens")),
-            cache_creation_tokens: number(usage.get("cache_creation_input_tokens")),
-            field_missing: cached.is_none(),
-        }));
+        if let Some(v) = usage.get("prompt_tokens").and_then(Value::as_i64) {
+            snapshot.prompt_tokens = v;
+        }
+        if let Some(v) = usage.get("completion_tokens").and_then(Value::as_i64) {
+            snapshot.completion_tokens = v;
+        }
+        if let Some(v) = cached.and_then(Value::as_i64) {
+            snapshot.cached_tokens = v;
+            snapshot.field_missing = false;
+        }
+        if let Some(v) = usage
+            .pointer("/completion_tokens_details/reasoning_tokens")
+            .and_then(Value::as_i64)
+        {
+            snapshot.reasoning_tokens = v;
+        }
+        if let Some(v) = usage
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_i64)
+        {
+            snapshot.cache_creation_tokens = v;
+        }
+        events.push(StreamEvent::Usage(snapshot.clone()));
     }
     events
 }
@@ -320,29 +351,47 @@ mod tests {
 
     #[test]
     fn parses_stream_deltas_and_usage() {
-        let events = parse_stream_chunk(&json!({
-            "choices": [{"delta": {"content":"hi", "reasoning_content":"r"}}],
-            "usage": {"prompt_tokens":2, "completion_tokens":1}
-        }));
+        let mut usage = UsageDetail::default();
+        let events = parse_stream_chunk(
+            &json!({
+                "choices": [{"delta": {"content":"hi", "reasoning_content":"r"}}],
+                "usage": {"prompt_tokens":2, "completion_tokens":1}
+            }),
+            &mut usage,
+        );
         assert!(matches!(&events[0], StreamEvent::Content(v) if v == "hi"));
         assert!(matches!(&events[1], StreamEvent::Reasoning(v) if v == "r"));
         assert!(matches!(&events[2], StreamEvent::Usage(v) if v.prompt_tokens == 2));
+    }
+
+    #[test]
+    fn partial_compatible_usage_frames_preserve_previous_fields() {
+        let mut usage = UsageDetail::default();
+        parse_stream_chunk(
+            &json!({"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":20}}}),
+            &mut usage,
+        );
+        let events = parse_stream_chunk(&json!({"usage":{"completion_tokens":5}}), &mut usage);
+        assert!(
+            matches!(&events[0], StreamEvent::Usage(v) if v.prompt_tokens == 100 && v.cached_tokens == 20 && v.completion_tokens == 5)
+        );
     }
 
     #[tokio::test]
     async fn stream_line_decodes_split_chinese_and_unnterminated_final_frame() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         let mut decoder = LineDecoder::default();
+        let mut usage = UsageDetail::default();
         let frames = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\ndata: [DONE]";
         for byte in frames.as_bytes() {
             for line in decoder.push(&[*byte]).unwrap() {
-                if !emit_line(&line, &tx).await {
+                if !emit_line(&line, &tx, &mut usage).await {
                     break;
                 }
             }
         }
         let final_line = decoder.finish().unwrap().unwrap();
-        assert!(!emit_line(&final_line, &tx).await);
+        assert!(!emit_line(&final_line, &tx, &mut usage).await);
         assert!(
             matches!(rx.recv().await.unwrap().unwrap(), StreamEvent::Content(text) if text == "你好")
         );

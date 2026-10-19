@@ -132,6 +132,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(model_name);
 CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_records(created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_records(user_id);
 CREATE INDEX IF NOT EXISTS idx_usage_req ON usage_records(request_id);
+CREATE INDEX IF NOT EXISTS idx_usage_conv ON usage_records(conversation_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -159,6 +160,13 @@ CREATE TABLE IF NOT EXISTS api_key_requests (
     FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_api_key_requests ON api_key_requests(key_id, requested_at);
+CREATE TABLE IF NOT EXISTS api_key_reservations (
+    request_id TEXT PRIMARY KEY,
+    key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    reserved_usd REAL NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_api_key_reservations_created ON api_key_reservations(created_at);
 
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
@@ -1023,27 +1031,110 @@ impl Db {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        conn.execute(
-            "DELETE FROM api_key_requests WHERE requested_at < ?1",
-            params![now - 60],
-        )?;
-        let recent: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM api_key_requests WHERE key_id=?1 AND requested_at>=?2",
-            params![id, now - 60],
-            |r| r.get(0),
-        )?;
-        if recent >= rpm {
+        if !reserve_rpm_slot(&conn, id, rpm, now)? {
             return Ok(None);
         }
-        conn.execute(
-            "INSERT INTO api_key_requests(key_id,requested_at) VALUES(?1,?2)",
-            params![id, now],
-        )?;
         conn.execute(
             "UPDATE api_keys SET last_used_at=CURRENT_TIMESTAMP WHERE id=?1",
             params![id],
         )?;
         Ok(Some(id))
+    }
+
+    pub fn prune_api_key_requests(&self) -> Result<usize> {
+        Ok(self.conn()?.execute(
+            "DELETE FROM api_key_requests WHERE requested_at < unixepoch() - 60",
+            [],
+        )?)
+    }
+
+    /// Atomically hold the upper-bound request cost before any provider call.
+    pub fn reserve_api_key_budget(
+        &self,
+        id: i64,
+        request_id: &str,
+        estimated_usd: f64,
+    ) -> Result<bool> {
+        if !estimated_usd.is_finite() || estimated_usd < 0.0 {
+            return Err(AppError::InvalidRequest("无效的额度预留金额".into()));
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
+            "UPDATE api_keys SET used_usd = used_usd + ?2
+             WHERE id = ?1 AND status = 'active'
+               AND (quota_usd IS NULL OR used_usd + ?2 <= quota_usd)",
+            params![id, estimated_usd],
+        )?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO api_key_reservations(request_id, key_id, reserved_usd)
+             VALUES(?1, ?2, ?3)",
+            params![request_id, id, estimated_usd],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Replace a hold with the measured (or partial estimated) cost. Idempotent.
+    pub fn settle_api_key_budget(&self, request_id: &str, actual_usd: f64) -> Result<()> {
+        if !actual_usd.is_finite() || actual_usd < 0.0 {
+            return Err(AppError::InvalidRequest("无效的实际费用".into()));
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let reservation: Option<(i64, f64)> = tx
+            .query_row(
+                "SELECT key_id, reserved_usd FROM api_key_reservations WHERE request_id = ?1",
+                params![request_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((key_id, reserved)) = reservation {
+            tx.execute(
+                "UPDATE api_keys SET used_usd = MAX(0, used_usd - ?2 + ?3) WHERE id = ?1",
+                params![key_id, reserved, actual_usd],
+            )?;
+            tx.execute(
+                "DELETE FROM api_key_reservations WHERE request_id = ?1",
+                params![request_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn prune_api_key_reservations(&self) -> Result<usize> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut stmt = tx.prepare(
+            "SELECT request_id, key_id, reserved_usd FROM api_key_reservations
+             WHERE created_at < unixepoch() - 86400",
+        )?;
+        let expired = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        for (request_id, key_id, amount) in &expired {
+            tx.execute(
+                "UPDATE api_keys SET used_usd = MAX(0, used_usd - ?2) WHERE id = ?1",
+                params![key_id, amount],
+            )?;
+            tx.execute(
+                "DELETE FROM api_key_reservations WHERE request_id = ?1",
+                params![request_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(expired.len())
     }
 
     pub fn add_api_key_usage(&self, id: i64, cost: f64) -> Result<()> {
@@ -1225,6 +1316,18 @@ impl Db {
 
     /// 手工更新 PriceSpec（PR-6 WebUI 校对）。全量字段 upsert，强制转正为 manual。
     pub fn upsert_price_spec(&self, spec: &PriceSpecInput<'_>) -> Result<()> {
+        validate_cost(spec.input_cost, spec.output_cost)?;
+        for (label, value) in [
+            ("cache_read_cost", spec.cache_read_cost),
+            ("cache_write_cost", spec.cache_write_cost),
+            ("reasoning_cost", spec.reasoning_cost),
+        ] {
+            if let Some(value) = value {
+                validate_cost(value, 0.0).map_err(|_| {
+                    AppError::InvalidRequest(format!("{label} 超出 USD/token 有效范围"))
+                })?;
+            }
+        }
         let conn = self.conn()?;
         conn.execute(
             "INSERT INTO price_specs (provider, model, input_cost, output_cost, cache_read_cost,
@@ -1262,7 +1365,7 @@ impl Db {
         Ok(())
     }
 
-    /// P2.a 刷新更新：仅覆盖 `price_source != 'manual'` 的行（manual 为人工锚定，永不覆盖），
+    /// P2.a 刷新更新：不覆盖人工价或显式 overlay 价，
     /// 覆盖后 source 标 `litellm_remote`、`price_stale=0`。cache_read 为 None 时保持原值（COALESCE）。
     /// 返回是否命中更新（false = 行不存在或属 manual）。
     pub fn refresh_price_spec(
@@ -1273,6 +1376,10 @@ impl Db {
         output_cost: f64,
         cache_read_cost: Option<f64>,
     ) -> Result<bool> {
+        validate_cost(input_cost, output_cost)?;
+        if let Some(value) = cache_read_cost {
+            validate_cost(value, 0.0)?;
+        }
         let conn = self.conn()?;
         let n = conn.execute(
             "UPDATE price_specs SET
@@ -1284,7 +1391,7 @@ impl Db {
             price_stale     = 0,
             stale_reason    = NULL,
             effective_from  = COALESCE(effective_from, CURRENT_DATE)
-         WHERE provider = ?1 AND model = ?2 AND price_source != 'manual'",
+         WHERE provider = ?1 AND model = ?2 AND price_source NOT IN ('manual', 'overlay')",
             params![provider, model, input_cost, output_cost, cache_read_cost],
         )?;
         Ok(n > 0)
@@ -2125,6 +2232,21 @@ impl Db {
 
 // ── Pure helpers ──
 
+fn reserve_rpm_slot(
+    conn: &rusqlite::Connection,
+    id: i64,
+    rpm: i64,
+    now: i64,
+) -> rusqlite::Result<bool> {
+    let inserted = conn.execute(
+        "INSERT INTO api_key_requests(key_id, requested_at)
+         SELECT ?1, ?2 WHERE (SELECT COUNT(*) FROM api_key_requests
+           WHERE key_id = ?1 AND requested_at >= ?2 - 60) < ?3",
+        params![id, now, rpm],
+    )?;
+    Ok(inserted == 1)
+}
+
 /// P0.a 量纲写入断言：单价必须为 0（本地/未知价）或落在 [1e-9, 1e-3] USD/token。
 /// 防「官方元/M × 汇率」忘除量纲的 10× 错误复发（见 ROUTING-PLAN P0-4）。
 fn validate_cost(in_cost: f64, out_cost: f64) -> Result<()> {
@@ -2249,15 +2371,43 @@ fn price_spec_from_row(row: &rusqlite::Row) -> rusqlite::Result<PriceSpec> {
     let tiered_json: Option<String> = row.get("tiered_json")?;
     let tiered = tiered_json
         .as_deref()
-        .and_then(|j| serde_json::from_str::<Vec<TierBand>>(j).ok());
+        .and_then(|j| serde_json::from_str::<Vec<TierBand>>(j).ok())
+        .filter(|bands| {
+            bands.iter().all(|b| {
+                [
+                    b.input_cost,
+                    b.output_cost,
+                    b.cache_read_cost.unwrap_or(0.0),
+                    b.cache_write_cost.unwrap_or(0.0),
+                    b.reasoning_cost.unwrap_or(0.0),
+                ]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.0)
+            })
+        });
+    let valid = |v: f64| v.is_finite() && v >= 0.0;
+    let safe = |v: f64| if valid(v) { v } else { 0.0 };
+    let safe_opt = |v: Option<f64>| v.filter(|x| valid(*x));
+    let raw_input: f64 = row.get("input_cost")?;
+    let raw_output: f64 = row.get("output_cost")?;
+    let raw_cache_read: Option<f64> = row.get("cache_read_cost")?;
+    let raw_cache_write: Option<f64> = row.get("cache_write_cost")?;
+    let raw_reasoning: Option<f64> = row.get("reasoning_cost")?;
+    let invalid = !valid(raw_input)
+        || !valid(raw_output)
+        || [raw_cache_read, raw_cache_write, raw_reasoning]
+            .iter()
+            .flatten()
+            .any(|v| !valid(*v))
+        || (tiered_json.is_some() && tiered.is_none());
     Ok(PriceSpec {
         provider: row.get("provider")?,
         model: row.get("model")?,
-        input_cost: row.get("input_cost")?,
-        output_cost: row.get("output_cost")?,
-        cache_read_cost: row.get("cache_read_cost")?,
-        cache_write_cost: row.get::<_, Option<f64>>("cache_write_cost")?.or(Some(0.0)),
-        reasoning_cost: row.get("reasoning_cost")?,
+        input_cost: safe(raw_input),
+        output_cost: safe(raw_output),
+        cache_read_cost: safe_opt(raw_cache_read),
+        cache_write_cost: safe_opt(raw_cache_write).or(Some(0.0)),
+        reasoning_cost: safe_opt(raw_reasoning),
         tiered,
         zone_ref: row.get("zone_ref")?,
         batch_multiplier: row
@@ -2266,8 +2416,12 @@ fn price_spec_from_row(row: &rusqlite::Row) -> rusqlite::Result<PriceSpec> {
         price_source: row
             .get::<_, Option<String>>("price_source")?
             .unwrap_or_default(),
-        price_stale: row.get::<_, Option<i64>>("price_stale")?.unwrap_or(0) != 0,
-        stale_reason: row.get::<_, Option<String>>("stale_reason")?,
+        price_stale: invalid || row.get::<_, Option<i64>>("price_stale")?.unwrap_or(0) != 0,
+        stale_reason: if invalid {
+            Some("invalid_cost".into())
+        } else {
+            row.get::<_, Option<String>>("stale_reason")?
+        },
         effective_from: row.get("effective_from")?,
     })
 }
@@ -2347,6 +2501,68 @@ mod cost_assert_tests {
         assert!(validate_cost(0.8, 2.0).is_err()); // 元/M 原值（忘除量纲）被拒
         assert!(validate_cost(-1e-6, 0.0).is_err()); // 负数被拒
         assert!(validate_cost(0.0, 1e-2).is_err()); // 超上限
+        assert!(validate_cost(f64::NAN, 0.0).is_err());
+        assert!(validate_cost(0.0, f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn price_spec_write_rejects_non_finite_and_negative_costs() {
+        let path = std::env::temp_dir().join(format!(
+            "lloom_price_validation_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = Db::new(&path).unwrap();
+        let spec = PriceSpecInput {
+            provider: "test",
+            model: "test",
+            input_cost: f64::NAN,
+            output_cost: 1e-6,
+            cache_read_cost: None,
+            cache_write_cost: None,
+            reasoning_cost: None,
+            tiered_json: None,
+            zone_ref: None,
+            cny_list_price_json: None,
+        };
+        assert!(db.upsert_price_spec(&spec).is_err());
+        assert!(db
+            .refresh_price_spec("test", "test", -1.0, 1e-6, None)
+            .is_err());
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO price_specs(provider,model,input_cost,output_cost)
+             VALUES('test','broken',-1,0.000001)",
+                [],
+            )
+            .unwrap();
+        let dirty = db.get_price_spec("test", "broken").unwrap().unwrap();
+        assert_eq!(dirty.stale_reason.as_deref(), Some("invalid_cost"));
+        assert_eq!(dirty.input_cost, 0.0);
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO price_specs(provider,model,input_cost,output_cost,price_source)
+             VALUES('test','overlay',0.000001,0.000002,'overlay')",
+                [],
+            )
+            .unwrap();
+        assert!(!db
+            .refresh_price_spec("test", "overlay", 3e-6, 4e-6, None)
+            .unwrap());
+        assert_eq!(
+            db.get_price_spec("test", "overlay")
+                .unwrap()
+                .unwrap()
+                .input_cost,
+            1e-6
+        );
+        drop(db);
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -2515,6 +2731,118 @@ mod cache_hit_rate_tests {
         assert!((rates["active"] - 0.4).abs() < 1e-12);
         drop(db);
         std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod rpm_reservation_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn concurrent_requests_cannot_exceed_rpm_limit() {
+        let path = std::env::temp_dir().join(format!(
+            "lloom_rpm_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = Db::new(&path).unwrap();
+        let id = {
+            let conn = db.conn().unwrap();
+            conn.execute(
+                "INSERT INTO api_keys(name,key_hash,key_prefix) VALUES('test','hash','ll-')",
+                [],
+            )
+            .unwrap();
+            conn.last_insert_rowid()
+        };
+        let barrier = Arc::new(Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let db = db.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let conn = db.conn().unwrap();
+                    barrier.wait();
+                    reserve_rpm_slot(&conn, id, 3, 1_000).unwrap()
+                })
+            })
+            .collect();
+        assert_eq!(
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .filter(|&ok| ok)
+                .count(),
+            3
+        );
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(test)]
+mod quota_reservation_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn concurrent_budget_holds_are_atomic_and_settlement_is_idempotent() {
+        let path = std::env::temp_dir().join(format!(
+            "lloom_quota_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = Db::new(&path).unwrap();
+        let id = {
+            let conn = db.conn().unwrap();
+            conn.execute(
+                "INSERT INTO api_keys(name,key_hash,key_prefix,quota_usd)
+                          VALUES('quota','quota-hash','ll-',0.05)",
+                [],
+            )
+            .unwrap();
+            conn.last_insert_rowid()
+        };
+        let barrier = Arc::new(Barrier::new(2));
+        let workers: Vec<_> = (0..2)
+            .map(|n| {
+                let db = db.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let name = format!("reserve-{n}");
+                    (
+                        name.clone(),
+                        db.reserve_api_key_budget(id, &name, 0.03).unwrap(),
+                    )
+                })
+            })
+            .collect();
+        let result: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+        assert_eq!(result.iter().filter(|(_, reserved)| *reserved).count(), 1);
+        let chosen = &result.iter().find(|(_, reserved)| *reserved).unwrap().0;
+        db.settle_api_key_budget(chosen, 0.01).unwrap();
+        db.settle_api_key_budget(chosen, 0.01).unwrap();
+        let used: f64 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT used_usd FROM api_keys WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((used - 0.01).abs() < 1e-12);
+        assert!(db.reserve_api_key_budget(id, "next", 0.03).unwrap());
+        drop(db);
+        let _ = std::fs::remove_file(path);
     }
 }
 

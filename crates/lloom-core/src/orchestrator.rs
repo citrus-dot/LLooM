@@ -13,49 +13,8 @@ pub struct SubTask {
     pub estimated_output_tokens: usize,
 }
 
-fn complex_patterns() -> &'static [Regex] {
-    static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
-    PATTERNS.get_or_init(|| {
-        [
-            r"(然后|接着|之后|最后).{2,}",
-            r"(第[一二三四五1-5]步|(?i:step\s?\d))",
-            r"(同时|并且|此外|另外)",
-            r"(对比|比较|分析|评估).+(和|与|跟|(?i:vs))",
-            r"(首先|其次|然后|再次|最后|第一|第二|第三|第四|第五)",
-            r"(?m)^\s*(?:\d+[\.、]|[-*])\s+\S.*(?:\n.*)^\s*(?:\d+[\.、]|[-*])\s+\S",
-            r"(分别|各自|逐一).{2,}(说明|分析|列出|给出|介绍|总结|处理)",
-            r"(权衡|优缺点|利弊|方案).{2,}(对比|比较|选择)",
-        ]
-        .into_iter()
-        .map(|p| Regex::new(p).unwrap())
-        .collect()
-    })
-}
-
 pub fn is_complex(query: &str) -> bool {
-    if complex_patterns().iter().any(|p| p.is_match(query)) || query.chars().count() > 100 {
-        return true;
-    }
-    let sentence_count = query
-        .split(|c| "。！？.!?".contains(c))
-        .filter(|s| !s.trim().is_empty())
-        .count();
-    sentence_count > 2 || is_comparison(query)
-}
-
-fn is_comparison(query: &str) -> bool {
-    static KW: OnceLock<Regex> = OnceLock::new();
-    static SEP: OnceLock<Regex> = OnceLock::new();
-    let kw = KW
-        .get_or_init(|| Regex::new(r"比较|对比|对照|区别|差异|异同|优缺点|利弊|(?i:vs)").unwrap());
-    if !kw.is_match(query) {
-        return false;
-    }
-    SEP.get_or_init(|| Regex::new(r"[、，,；;／/\s]+|和|与|跟|(?i:vs)").unwrap())
-        .split(query)
-        .filter(|s| s.trim().chars().count() >= 2)
-        .count()
-        >= 2
+    crate::signals::is_complex(query)
 }
 
 pub fn fallback_decompose(query: &str) -> Vec<SubTask> {

@@ -180,6 +180,8 @@ export function getServicesStatus(): Promise<ServicesStatus> {
 export interface RuntimeSettings {
   health_probe_sec: number;
   shadow_ratio: number;
+  block_pii: boolean;
+  block_jailbreak: boolean;
 }
 
 export function getRuntimeSettings(): Promise<RuntimeSettings> {
@@ -535,27 +537,33 @@ export async function chatStream(messages: ChatMessage[]): Promise<SseEvent[]> {
 
 export function parseSse(text: string): SseEvent[] {
   const events: SseEvent[] = [];
-  let cur: SseEvent | null = null;
-  for (const line of text.split('\n')) {
-    if (line.startsWith('event:')) {
-      if (cur) events.push(cur);
-      cur = { event: line.slice(7).trim(), data: undefined };
-    } else if (line.startsWith('data: ')) {
-      const d = line.slice(6);
-      try {
-        const parsed = JSON.parse(d);
-        if (cur && cur.data === undefined) {
-          cur.data = parsed;
-        } else {
-          events.push({ event: 'message', data: parsed });
-        }
-      } catch {
-        /* skip */
-      }
-    }
-  }
-  if (cur) events.push(cur);
+  const parser = createSseParser((event) => events.push(event));
+  for (const line of text.split('\n')) parser.line(line.replace(/\r$/, ''));
+  parser.flush();
   return events;
+}
+
+function createSseParser(onEvent: (event: SseEvent) => void) {
+  let eventName = 'message';
+  let dataLines: string[] = [];
+  const flush = () => {
+    if (dataLines.length) {
+      try {
+        onEvent({ event: eventName, data: JSON.parse(dataLines.join('\n')) });
+      } catch { /* malformed event */ }
+    }
+    eventName = 'message';
+    dataLines = [];
+  };
+  return {
+    line(line: string) {
+      if (!line) flush();
+      else if (line.startsWith(':')) return; // SSE comment/keepalive
+      else if (line.startsWith('event:')) eventName = line.slice(6).trim() || 'message';
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+    },
+    flush,
+  };
 }
 
 /**
@@ -583,21 +591,9 @@ export async function streamOrchestrate(
     return;
   }
   const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let buf = '';
-  let eventName: string | null = null;
-  let dataBuf = '';
-  const flush = () => {
-    if (dataBuf) {
-      try {
-        onEvent({ event: eventName ?? 'message', data: JSON.parse(dataBuf) });
-      } catch {
-        /* ignore malformed */
-      }
-      dataBuf = '';
-    }
-    eventName = null;
-  };
+  const parser = createSseParser(onEvent);
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -607,14 +603,10 @@ export async function streamOrchestrate(
       let line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
       line = line.replace(/\r$/, '');
-      if (line === '') {
-        flush();
-      } else if (line.startsWith('event:')) {
-        eventName = line.slice(6).trim();
-      } else if (line.startsWith('data:')) {
-        dataBuf += line.slice(5).replace(/^ /, '');
-      }
+      parser.line(line);
     }
   }
-  flush();
+  buf += decoder.decode();
+  if (buf) parser.line(buf.replace(/\r$/, ''));
+  parser.flush();
 }

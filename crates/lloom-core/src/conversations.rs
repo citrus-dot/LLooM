@@ -68,14 +68,16 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 }
 
 fn new_id() -> String {
-    // Time-ordered unique-enough id: (ms timestamp << 20) | (pid & 0xfffff).
-    // Cheaper than a uuid dep and monotonically sortable by creation time.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // Time-ordered timestamp + PID + per-process sequence. Two conversations
+    // created in the same millisecond must not reuse the same id.
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
     let pid = std::process::id() as u128;
-    format!("{:016x}", (ms << 20) | (pid & 0xf_ffff))
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u128;
+    format!("{ms:012x}{pid:08x}{seq:016x}")
 }
 
 // ── Migration from legacy JSON files ──
@@ -421,15 +423,15 @@ pub fn append_message(
             "message too large (>512KB)".to_string(),
         ));
     }
-    let conn = db.conn()?;
-    let exists: bool = conn
+    let mut conn = db.conn()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let exists: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ?1)",
             params![conv_id],
             |r| r.get::<_, i64>(0),
         )
-        .map(|n| n == 1)
-        .unwrap_or(false);
+        .map(|n| n == 1)?;
     let now = now_iso();
     if !exists {
         let title = if role == "user" {
@@ -437,19 +439,17 @@ pub fn append_message(
         } else {
             "新对话".to_string()
         };
-        conn.execute(
+        tx.execute(
             "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
             params![conv_id, title, now, now],
         )?;
     }
-    let next_seq: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE conv_id = ?1",
-            params![conv_id],
-            |r| r.get(0),
-        )
-        .unwrap_or(1);
-    conn.execute(
+    let next_seq: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE conv_id = ?1",
+        params![conv_id],
+        |r| r.get(0),
+    )?;
+    tx.execute(
         "INSERT INTO messages (conv_id, seq, role, content, meta, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
@@ -461,10 +461,11 @@ pub fn append_message(
             now
         ],
     )?;
-    conn.execute(
+    tx.execute(
         "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
         params![now, conv_id],
     )?;
+    tx.commit()?;
     Ok((conv_id.to_string(), next_seq))
 }
 
@@ -478,9 +479,10 @@ pub fn update_message(
     meta: Option<&Value>,
 ) -> Result<()> {
     validate_id(conv_id)?;
-    let conn = db.conn()?;
+    let mut conn = db.conn()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if content.is_some() {
-        let n = conn.execute(
+        let n = tx.execute(
             "UPDATE messages SET content = ?1 WHERE conv_id = ?2 AND seq = ?3",
             params![content.unwrap_or(""), conv_id, seq],
         )?;
@@ -489,7 +491,7 @@ pub fn update_message(
         }
     }
     if let Some(m) = meta {
-        let n = conn.execute(
+        let n = tx.execute(
             "UPDATE messages SET meta = ?1 WHERE conv_id = ?2 AND seq = ?3",
             params![m.to_string(), conv_id, seq],
         )?;
@@ -497,10 +499,11 @@ pub fn update_message(
             return Err(AppError::NotFound(format!("message {conv_id}/{seq}")));
         }
     }
-    conn.execute(
+    tx.execute(
         "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
         params![now_iso(), conv_id],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -582,4 +585,50 @@ pub fn set_summary(db: &crate::db::Db, conv_id: &str, text: &str, upto: i64) -> 
 /// append when it needs to pre-allocate the id).
 pub fn generate_id() -> String {
     new_id()
+}
+
+#[cfg(test)]
+mod concurrent_append_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn concurrent_appends_get_distinct_sequential_ids() {
+        let path = std::env::temp_dir().join(format!(
+            "lloom_append_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = crate::db::Db::new(&path).unwrap();
+        let barrier = Arc::new(Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|i| {
+                let db = db.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    append_message(&db, "parallel", "user", &format!("message {i}"), None)
+                        .unwrap()
+                        .1
+                })
+            })
+            .collect();
+        let mut ids: Vec<_> = workers
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (1..=8).collect::<Vec<_>>());
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn generated_ids_are_unique_even_in_one_millisecond() {
+        let ids: std::collections::HashSet<String> = (0..1000).map(|_| generate_id()).collect();
+        assert_eq!(ids.len(), 1000);
+    }
 }
