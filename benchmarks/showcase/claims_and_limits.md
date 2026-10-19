@@ -2,6 +2,9 @@
 
 > showcase snapshot v1（2026-10-09）。每条 claim 标注数据源与分母。
 
+> **执行约束：** `../benchmark_contract.json` 是 Replay/Live/E2E 轨道和
+> headline guardrails 的机器可读真源；当前 snapshot 不是正式 SystemBench v0.2 release。
+
 ## ✅ 可对外引用的 claims（附条件）
 
 | # | Claim | 数据源 | 分母/条件 |

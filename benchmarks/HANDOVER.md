@@ -29,6 +29,9 @@ git checkout v2
 python3 benchmarks/showcase/audit/replay_check.py
 #    预期：检查 31 项：PASS 31 / FAIL 0
 
+# 或使用统一入口（会先检查环境，再执行同一份 replay）
+make -f benchmarks/Makefile replay
+
 # 2) 读三份入口文档（顺序固定）
 open benchmarks/showcase/README.md        # 展示入口：Evidence Tier A-D + 快速复现
 open docs/handover/35-LLooM-Bench成果总结与验收指南.md   # 成果与八步验收
@@ -40,6 +43,22 @@ cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
 
 ## 三、环境补充（GitHub 上没有、必须知道的）
+
+### 3.0 评测轨道边界（机器可读真源）
+
+`benchmarks/benchmark_contract.json` 和 `benchmarks/REPRODUCE.md` 将当前 bench
+明确分成三条轨道：Replay（零 API、冻结结果复核）、Live（新 provider 采集）和
+E2E（真实 workflow/artifact/tool/墙钟执行）。当前只有 Replay 可在普通 clone 后
+无条件运行；E2E 尚未实现。不要把 SystemBench 的 frozen outcome 或 simulated
+makespan 写成线上 E2E 结论。
+
+环境诊断：
+
+```bash
+python3 benchmarks/tools/doctor.py                 # replay 环境，外置盘缺失仅 warning
+python3 benchmarks/tools/doctor.py --run-replay    # 诊断 + 31 项校验
+python3 benchmarks/tools/doctor.py --mode live --strict
+```
 
 ### 3.1 大文件外置盘（**symlink 依赖**）
 
@@ -109,6 +128,7 @@ L2 partial 不进 headline；Best Single 支配 P2 必须同图呈现；不宣�
 
 ## 六、验收（接手完成的定义）
 
+- [ ] `python3 benchmarks/tools/doctor.py --run-replay` 通过；外置盘缺失只产生预期 warning
 - [ ] `replay_check.py` 31/31 PASS（含外置盘不挂载的场景——证明展示层零外置依赖）
 - [ ] Rust 质量门全绿（clippy 0 + 138 tests）
 - [ ] 读完 35/34/32 号；能复述「Best Single 支配 P2」与「双 profile」两个口径

@@ -1,0 +1,38 @@
+{
+  "contract_version": 1,
+  "status": "showcase_snapshot_not_formal_v02_release",
+  "snapshots": {
+    "routerbench": {
+      "id": "lloom-routerbench-v0.2",
+      "track": "frozen_replay",
+      "headline_baselines": ["always_strong", "best_single", "cost_matched_random", "strong_share_matched_random"],
+      "required_comparator": "best_single"
+    },
+    "systembench": {
+      "id": "lloom-systembench-v0.1",
+      "track": "frozen_composition_replay",
+      "outcome_mode": "frozen",
+      "duration_mode": "simulated_completion_tokens_x_2ms",
+      "e2e_claims_allowed": false
+    },
+    "semantic": {
+      "id": "s12-semantic-research-snapshot-2026-10-09",
+      "track": "exploratory",
+      "headline_allowed": false,
+      "l2_status": "partial"
+    }
+  },
+  "evaluation_tracks": {
+    "replay": "No provider calls; validates frozen artifacts and derived reports.",
+    "live": "Provider-backed collection; requires explicit protocol and budget configuration.",
+    "e2e": "Real workflow execution including artifacts, tools, wall-clock latency and recovery; not implemented in this snapshot."
+  },
+  "guardrails": [
+    "Do not pool heterogeneous semantic cells into a headline leaderboard.",
+    "Do not promote partial L2 coverage to a headline result.",
+    "Always show Best Single beside P2.",
+    "Do not describe simulated makespan as production latency.",
+    "Do not describe frozen outcome replay as end-to-end agent success.",
+    "Do not call this snapshot a formal SystemBench v0.2 release."
+  ]
+}

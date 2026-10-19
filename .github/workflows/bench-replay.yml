@@ -1,0 +1,21 @@
+name: benchmark-replay
+
+on:
+  push:
+    paths:
+      - "benchmarks/**"
+      - ".github/workflows/bench-replay.yml"
+  pull_request:
+    paths:
+      - "benchmarks/**"
+      - ".github/workflows/bench-replay.yml"
+
+jobs:
+  offline-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run benchmark doctor and replay
+        run: make -f benchmarks/Makefile replay
+      - name: Run orchestration unit tests
+        run: make -f benchmarks/Makefile test

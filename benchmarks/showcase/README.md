@@ -17,6 +17,9 @@
 ## 快速复现（全部离线，零 API）
 
 ```bash
+# 统一入口：环境诊断 + replay（推荐）
+make -f benchmarks/Makefile replay
+
 # 1) 离线复核：figure_data CSV ↔ 冻结报告逐项核对 + audit 自洽 + manifest hash（31 项）
 python3 benchmarks/showcase/audit/replay_check.py
 # 2) 来源快照：source commit 与 13 个输入文件 SHA-256 见 manifests/source_inventory.json
@@ -37,6 +40,8 @@ showcase = `lloom-benchmark-showcase-2026-10-09`（status: `showcase_snapshot_no
 - `figure_data/` — 三图底层 CSV（图由 CSV 再生；v0.1 makespan mean 与 median/p90 分列）
 - `manifests/source_inventory.json` — 源 commit + 13 个输入文件 SHA-256
 - `audit/` — 逐 cell 可比性审计、分层状态、L2 coverage、Coordination 派生值、`replay_check.py`（离线复核脚本）
+- `../benchmark_contract.json` — Replay/Live/E2E 边界与 headline guardrails（机器可读真源）
+- `../REPRODUCE.md` — clone 后复现、live 采集前检查和数据层级说明
 
 ## 一句话结论
 
