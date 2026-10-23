@@ -102,6 +102,7 @@ cd tui && npx tsc --noEmit
 ## 文档规则
 
 - 当前架构：`ARCHITECTURE.md`
+- 审计修复前后对照：[`docs/AUDIT-FIXES-2026-10-23.md`](docs/AUDIT-FIXES-2026-10-23.md)
 - 用户使用：`README.md` / `README-ZH.md`
 - 测试：`TEST-GUIDE.md`
 - `docs/archive/`：历史设计快照，不代表当前运行架构
