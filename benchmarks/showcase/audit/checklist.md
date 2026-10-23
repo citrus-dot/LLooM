@@ -47,3 +47,12 @@
 - **P2 Frozen 数字归属修正**（34 号 §2.4）：showcase 图 1/CSV/报告/claims 与 33 号总结原把 `lloom` run（0.5867/$0.000849，实为 P0 Current/BandOnly）标为 P2 Frozen。真源：`v02_test_report.md`「P2 Frozen ⭐ = `lloom@softgate0` = 0.5863/$0.000821」（frozen manifest policy=`P2_softgate0`；cost-matched random $0.000819 与之匹配为佐证）。已修正：figure CSV、图 1 重渲染、showcase_report §2、claims C1、33 号 §2.2（含勘误块）。
 - **calibration/test 口径区分**（34 号 §2.4）：33 号 §2.3 加注——calibration weak precision 0.809（Day 9 tournament）≠ frozen test 0.786（CI [0.7629, 0.8086]）。
 - **校验与 manifest**：offline_replay_check 30/30 PASS（fig1.lloom 对照源改为 `lloom@softgate0`）；showcase_manifest 升 v2（report/figure_data version 2，erratum 记录）。
+
+## 2026-10-19 勘误记录（自查发现）
+
+- **judge_rubric_v3.md 文件头元数据陈旧**：v2→v3 生成时只替换了标题与「版本」行，文中
+  `rubric_id: sb_v02_judge_rubric_v2` 与「judge 模型：qwen-turbo」两行未更新。**实际执行身份以
+  L1 cells 的 `rubric_id` 字段（198/198 = `sb_v02_judge_rubric_v3`）与 `judge_model` 字段
+  （qwen3.8-flash 114 / qwen3.7-max 84）为准**；rubric 正文/锚点/附加规则与 v2 逐字一致（换档仅
+  judge 模型变化），故评分语义不受影响。按「冻结身份不覆盖」规则**不修改 rubric 文件本身**
+  （修改会破坏 comparability CSV 中记录的 rubric hash 与 report 的 rubric_sha256），以本勘误记录为准。
