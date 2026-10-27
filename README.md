@@ -1,213 +1,109 @@
 <p align="center">
-  <img src="assets/logo.png" width="110" height="110" alt="LLooM Logo" />
+  <img src="assets/logo.png" width="100" height="100" alt="LLooM logo" />
 </p>
 
 <h1 align="center">LLooM</h1>
 
 <p align="center">
-  A self-hosted LLM routing gateway — one Rust binary that routes, prices, caches and secures your LLM traffic.<br/>
-  <strong>Zero Docker. Zero external database. Clone and run.</strong>
+  Self-hosted LLM routing gateway: one Rust process for model routing, cost tracking, caching and provider access.<br/>
+  Local-first, no Docker and no external database required.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" />
-  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue" alt="Platform" />
-  <img src="https://img.shields.io/badge/Rust-axum-CE422B?logo=rust&logoColor=white" alt="Rust" />
-  <img src="https://img.shields.io/badge/Providers-OpenAI%20%7C%20Anthropic-blue" alt="Providers" />
-  <img src="https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
+  <a href="https://github.com/citrus-dot/LLooM/actions/workflows/ci.yml"><img src="https://github.com/citrus-dot/LLooM/actions/workflows/ci.yml/badge.svg?branch=v2" alt="CI" /></a>
+  <a href="https://github.com/citrus-dot/LLooM/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue" alt="Supported platforms" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license" /></a>
 </p>
 
 <p align="center">
-  <strong>English</strong> | <a href="README-ZH.md">中文</a>
+  <strong>English</strong> · <a href="README-ZH.md">简体中文</a> · <a href="https://github.com/citrus-dot/LLooM/releases">Releases</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="SECURITY.md">Security</a>
 </p>
 
-<p align="center">
-  <img src="assets/tui-hero.png" width="820" alt="LLooM TUI" />
-</p>
+LLooM sits between your applications and LLM providers. Register local or cloud models in its Web UI, then chat through the built-in interface or use the OpenAI-compatible `/v1` proxy. Routing, budgets and usage accounting share one process; application data and the two cache layers use separate local SQLite databases.
 
----
+## Features
 
-## Why LLooM?
+- **Routing and failover**: rule/LLM task classification, capability and health gates, cost/quality scoring, fallback candidates and optional model pinning.
+- **Task orchestration**: decomposition, dependency-aware waves and result aggregation over SSE. The Web UI can stop generation and save the partial answer.
+- **Usage and budgets**: per-model costs, budget tiers, monthly probe budget, offline routing review and DashScope bill reconciliation.
+- **Exact and semantic cache**: L1 exact matching and L2 FastEmbed semantic similarity. Both scope by model, system prompt, request context and temperature (L2 matches it exactly); L2 falls back to the provider when unavailable.
+- **Providers**: OpenAI-compatible endpoints and Anthropic Messages. OpenAI, DashScope and Anthropic have default API base URLs; local Ollama, LM Studio and vLLM endpoints are supported.
+- **Interfaces**: Web UI, Rust CLI and OpenTUI/SolidJS terminal UI share the same REST API.
+- **Local-first security boundary**: management endpoints and metrics are loopback-only. `/v1` supports hashed API keys, quotas, RPM limits, expiry and model allowlists.
 
-| Pain point | LLooM's answer |
-|------------|----------------|
-| Juggling models by gut feeling | **Score-based routing** — regex + LLM two-layer classification, cost/quality weighted `plan()` picks the best value model per task |
-| API keys stuck in one global Settings page | **Per-model configuration** — each model is explicitly local (Ollama / LM Studio / vLLM) or cloud (provider + API base + API key) |
-| Uncontrollable API bills | **Budget-tier routing** — normal/throttle/tight/protect degrade automatically; protect forces zero-cost local fallback |
-| Opaque pricing | **Multi-source pricing** — manual > remote > packaged > heuristic chain, cross-checked by live probes and OpenRouter reference prices |
-| Paying repeatedly for repeat questions | **Semantic cache** — vector similarity hits return cached replies at zero cost |
-| Complex tasks overwhelming one model | **Task orchestration** — auto-decompose, assign a model per subtask, execute, aggregate |
-| "Healthy" status that isn't healthy | **Honest status** — real probes distinguish Down / port conflict / missing config; never a fake green light |
+## Quick start
 
-## Quick Start
+### Download a release
 
-**Option A — download a release**
+1. Download the appropriate archive from [Releases](https://github.com/citrus-dot/LLooM/releases).
+2. Extract it and run `start.sh` on macOS/Linux or `start.bat` on Windows. The Web UI opens at <http://localhost:7861>.
+3. Add a model on **Models** and configure its provider key. Start chatting or configure a client to use `http://localhost:7861/v1`.
 
-1. Grab the archive for your platform from [Releases](https://github.com/citrus-dot/LLooM/releases): `.zip` on Windows, `.tar.gz` on macOS/Linux
-2. Unzip it anywhere and double-click `start` (`start.bat` on Windows / `start.sh` on macOS/Linux) — the WebUI opens automatically at `http://localhost:7861`
-3. Add models on the **Models** page and set each model's API key there; chat away
+Run `stop.sh` or `stop.bat` to stop. On Windows, allow the unsigned binary through SmartScreen if necessary. On macOS, run `xattr -cr LLooM` once on the extracted folder.
 
-To stop: double-click `stop` (`stop.bat` / `stop.sh`) — it asks the server to shut down gracefully (child processes included). To change the port, copy `.env.example` to `.env` and set `LLOOM_WEB_PORT`. Your data lives in `data/` next to the binary; to upgrade, replace everything except `data/` (and your `.env`).
+**Intel Mac:** choose `darwin-x86_64`. L2 additionally needs `brew install onnxruntime`; without it, L2 is bypassed while L1 and routing still work. Ollama is optional and is not bundled. See [Troubleshooting](TEST-GUIDE.md#troubleshooting).
 
-> **Windows SmartScreen**: the binaries are unsigned, so the first launch may show "Windows protected your PC" — click *More info → Run anyway*. **macOS Gatekeeper**: run `xattr -cr LLooM` on the extracted folder once.
->
-> **Intel Mac**: pick the `darwin-x86_64` archive. The semantic cache (L2) needs ONNX Runtime, which is loaded at runtime: `brew install onnxruntime` once. Skip it and everything else works — L2 is just bypassed (exact cache L1 and routing are unaffected).
+### Build from source
 
-**Option B — from source**
+Prerequisites: stable Rust, Node.js 20+ and npm. Install Bun only if you want to run the TUI.
 
 ```bash
 git clone -b v2 https://github.com/citrus-dot/LLooM.git
 cd LLooM
+cp .env.example .env
 
-cp .env.example .env                       # API keys are set per-model in the UI; env keys are fallback
-cd webui && npm install && npm run build && cd ..
-
-cargo run -p lloom-server                  # Web UI on :7861
+npm --prefix webui ci
+npm --prefix webui run build
+cargo run -p lloom-server
 ```
 
-The server (`:7861`) is the single entry point. Cloud providers are called natively from Rust; local models use Ollama (`:11434`).
+Open <http://localhost:7861> and add a model. You can set its key in the Web UI or reference an environment variable from `.env`; the process starts without keys but model calls need at least one configured model.
 
-## Try It
+For the TUI, keep the server running and run `cd tui && bun install && bun run dev` in another terminal. `lloom-cli chat "Explain quicksort"` uses the same server. Development and contribution commands are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**WebUI** — open [http://localhost:7861](http://localhost:7861): service status, chat, models, usage, pricing, settings.
+## Use the APIs
 
-The Models page offers an on-demand one-token connectivity check for active models (cloud checks may incur a small charge); the latest check result is shown separately from the historical health state.
-
-System Settings can update the health probe interval and shadow sampling ratio at runtime. Bind address, port and data directory still require a restart with updated launch configuration. Set the shadow ratio to 0 to avoid extra shadow-model calls.
-
-Security: `/api/*` management endpoints and `/metrics` are loopback-only. To use the `/v1/*` proxy over a LAN, create an API key locally first. CLI/TUI accept `LLOOM_SERVER_URL` or `LLOOM_WEB_PORT` to select the server.
-
-**CLI**
+The built-in chat endpoint takes a `messages` array and returns SSE frames:
 
 ```bash
-lloom-cli chat "Explain quicksort"          # one-shot, auto-routed
-lloom-cli usage                             # spend per model
-lloom-cli status                            # services + routing stats
+curl -N http://127.0.0.1:7861/api/chat/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Explain quicksort briefly"}]}'
 ```
 
-**REST API** — OpenAI-style streaming:
+The OpenAI-compatible proxy supports `GET /v1/models` and `POST /v1/chat/completions`. On loopback, it works without a key until you create the first API key. After that, send `Authorization: Bearer <your-api-key>`. LAN clients must always use a key. Only `model`, `messages`, `temperature`, `max_tokens` and `stream` are currently accepted in chat requests.
 
-```bash
-curl -N -X POST http://localhost:7861/api/chat/stream \
-  -H "Content-Type: application/json" \
-  -d '{"q": "Explain quicksort"}'
-```
-
-## Features
-
-- **Smart routing** — two-layer classification (regex → LLM fallback); registry-gated scoring with health/budget/cost-cap checks; pinned models as soft prior (`LLOOM_PINNED_MODE=hard` reverts); 5-level fallback chain; shadow evaluation + AIQ offline replay
-- **Cost accounting** — per-model token/cost tracking in SQLite; budget tiers injected into routing; monthly probe budget with calibration sentinels
-- **Multi-source pricing** — priority chain `manual > overlay > litellm_remote > litellm_packaged > heuristic`; OpenRouter reference prices with ≥20% deviation flags
-- **Task orchestration** — complexity detection → LLM decomposition → sequential execution → aggregation, all over SSE
-- **Security** — PII masking (7 types), jailbreak interception (5 types), 14-domain MMLU classification
-- **Two-level cache** — SQLite exact matching plus FastEmbed quantized MiniLM semantic retrieval (0.88 threshold, 24h TTL)
-- **Three frontends** — WebUI, CLI (`lloom-cli`), TUI (OpenTUI + SolidJS), all on one REST contract
-
-## Architecture
-
-```
-UI layer (WebUI / CLI / TUI)            ← any frontend, UI-agnostic
-        │  HTTP REST — typed JSON, the single contract
-Rust core + axum REST server (:7861)    ← all business logic + WebUI
-        │
-Rust core modules (routing / orchestration / cache / providers / SQLite)
-        │  native async HTTP
-LLM providers (DashScope / OpenAI / Anthropic / Ollama)
-```
-
-- **Pure Rust data plane**: SQLite, routing, orchestration, security, provider adapters and semantic cache run in one process
-- **Native protocols**: OpenAI-compatible providers and Anthropic Messages are supported directly
-
-Full layer breakdown, ports, and the [REST API reference](ARCHITECTURE.md#rest-api-参考) live in [ARCHITECTURE.md](ARCHITECTURE.md).
+See [ARCHITECTURE.md](ARCHITECTURE.md#http-api) for endpoint groups, [docs/SSE-CONTRACT.md](docs/SSE-CONTRACT.md) for the streaming contract and [TEST-GUIDE.md](TEST-GUIDE.md) for copyable acceptance checks.
 
 ## Configuration
 
-All via `.env` (see [.env.example](.env.example)):
+Copy `.env.example` to `.env`. The most common settings are:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `DASHSCOPE_API_KEY` | (empty) | DashScope API key — env fallback; preferred: set per-model in the UI |
-| `DASHSCOPE_API_BASE` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | DashScope endpoint |
-| `OPENAI_API_KEY` | (empty) | OpenAI API key — env fallback; preferred: set per-model in the UI |
-| `OPENAI_BASE_URL` | (empty) | OpenAI base URL override |
-| `ANTHROPIC_API_KEY` | (empty) | Anthropic API key — env fallback; preferred: set per-model in the UI |
-| `LLOOM_WEB_PORT` | `7861` | Server + Web UI port |
-| `LLOOM_SEMANTIC_THRESHOLD` | `0.88` | Semantic-cache cosine threshold |
-| `LLOOM_DATA_DIR` | `./data` | Data directory (SQLite, conversations) |
-| `LLOOM_PINNED_MODE` | `soft` | Pinned model: `soft` prior or `hard` appointment |
+| Variable | Default | Purpose |
+|---|---|---|
+| `DASHSCOPE_API_KEY` | empty | Optional fallback key for a DashScope model |
+| `OPENAI_API_KEY` | empty | Optional fallback key for an OpenAI model |
+| `ANTHROPIC_API_KEY` | empty | Optional fallback key for an Anthropic model |
+| `LLOOM_WEB_PORT` | `7861` | Web UI and API port |
+| `LLOOM_BIND` | `127.0.0.1` | Listen address; a non-loopback bind requires an API key at startup |
+| `LLOOM_DATA_DIR` | `./data` | SQLite databases, conversations and downloaded cache model |
+| `LLOOM_SEMANTIC_THRESHOLD` | `0.88` | L2 cosine similarity threshold |
+| `LLOOM_CACHE_MAX_ENTRIES` | `5000` | Cache capacity |
+| `LLOOM_LOG` | `info` | Log level: `error`, `warn` or `info` |
+| `LLOOM_SERVER_URL` | loopback server | Server URL for CLI/TUI clients |
+
+`OLLAMA_API_BASE` defaults to `http://localhost:11434`. Provider key variables can be referenced by name from a model's key field; `.env` is not committed. Health intervals, shadow sampling and security blocking switches are editable in System Settings. Port, bind address and data directory require a restart.
 
 ## Documentation
 
-| Doc | Contents |
-|-----|----------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Layer breakdown, full REST API reference, ports, data flows |
-| [TEST-GUIDE.md](TEST-GUIDE.md) | Feature test guide (`bash scripts/smoke_test.sh` covers 19 checks) |
-| [ROUTING-PLAN.md](docs/archive/ROUTING-PLAN.md) / [PRICING-PLAN.md](docs/archive/PRICING-PLAN.md) / [CONTEXT-PLAN.md](docs/archive/CONTEXT-PLAN.md) | Design docs for routing / pricing / context |
-| [LLooMprogress.md](LLooMprogress.md) | Progress ledger |
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — runtime, modules, HTTP routes, cache scope, storage and error semantics.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — development setup, quality gates, change boundaries and release process.
+- **[TEST-GUIDE.md](TEST-GUIDE.md)** — isolated manual acceptance tests and troubleshooting.
+- **[LLooMprogress.md](LLooMprogress.md)** — current baseline, completed work and roadmap.
+- **[benchmarks/HANDOVER.md](benchmarks/HANDOVER.md)** and **[docs/handover/00-总览与手记索引.md](docs/handover/00-总览与手记索引.md)** — research/benchmark handover, not user documentation.
 
-## Roadmap
-
-- [x] **OpenAI-compatible proxy** — shipped (N1): `POST /v1/chat/completions` + `/v1/models`, ChatBox / Open WebUI / agent frameworks plug in with zero changes
-- [x] **Parallel subtask execution** — shipped (N3.a): independent subtasks run concurrently, results aggregate in order
-- [x] **Prometheus metrics** — shipped (N3.b): `GET /metrics` with per-model/task-type/budget-tier counters, cache hits, fallback events
-- [x] **Closed-loop weight suggestions** — shipped (N2): offline replay grid search, adopted after human review
-- [x] **Bill reconciliation** — shipped (N3.c): DashScope bill export × recorded costs, per-model deviation report + "reconciled" badge in Usage page
-- [x] **Local/cloud model kinds** — shipped (M1): explicit `kind: local|cloud` per model (Ollama / LM Studio / vLLM, or provider + API key), replacing endpoint heuristics
-
-<details>
-<summary><strong>CLI reference</strong></summary>
-
-```bash
-cargo build -p lloom-cli                    # or use target/debug/lloom-cli
-
-lloom-cli models list | add | update | remove
-lloom-cli budgets set user default 10 --duration 30d
-lloom-cli budgets list | check user default
-lloom-cli usage | status
-lloom-cli conversation list | show <id> | delete <id> | new
-lloom-cli chat "hi"                         # one-shot
-lloom-cli chat "continue" --session <id>    # resume
-lloom-cli chat "hi" --interactive           # multi-turn
-```
-
-</details>
-
-<details>
-<summary><strong>TUI</strong> — OpenTUI + SolidJS terminal dashboard</summary>
-
-Five tabs: **Home** (logo + prompt + spend stats), **Chat** (conversation list
-+ streaming chat), **Models** (registered models + add form), **Usage** (costs,
-model pricing), **Settings** (service addresses + management). Switch with
-`Tab`, quit with `Ctrl+C`. Right-click a conversation or service row for
-open/delete/log/restart menus.
-
-```bash
-cd tui
-bun install
-bun run src/index.tsx
-```
-
-</details>
-
-<details>
-<summary><strong>Project structure</strong></summary>
-
-```
-LLooM/
-├── crates/lloom-core/            # Business core lib (UI-agnostic):
-│   │                             #   server.rs, db.rs, router.rs, security.rs,
-│   │                             #   pricing.rs, probe.rs, conversations.rs,
-│   │                             #   ai_client.rs, processes.rs, health.rs, …
-├── crates/lloom-server/          # Main server (REST + WebUI)
-├── crates/lloom-cli/             # CLI (clap, links lloom-core)
-├── webui/                        # WebUI (React + Vite + Ant Design) → dist/
-├── tui/                          # TUI (OpenTUI + SolidJS, bun)
-├── scripts/                      # build.sh / smoke_test.sh / package.sh
-└── ARCHITECTURE.md               # Layer breakdown + REST reference
-```
-
-</details>
+The latest published release is **v3.0.2**. The `v2` working tree may contain reviewed-but-unreleased fixes; build the version you intend to use. Archived design plans are historical references, not the current architecture.
 
 ## License
 
-MIT
+[MIT](LICENSE)

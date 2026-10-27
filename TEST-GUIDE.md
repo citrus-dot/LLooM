@@ -1,279 +1,176 @@
-# LLooM 用户测试指南
+# 测试与验收指南
 
-> 随任务更新。当前覆盖：**C1 思考过程展示**（ee31323）、**N2 闭环评估**（08f5012）、**模板选择器 + 定价红点透明化**（9c5bbcd）、**N3.b Prometheus 指标**（4ba43b5）、**N3.c 账单对账 + B2「已对账」徽标**（417ba29 + 5b39c0a）。
-> 服务地址：<http://localhost:7861/>（REST 同端口；启动方式：项目根目录 `./target/debug/lloom-server` 或惯用启动脚本）。
+> 目的：用可复制的步骤验证当前工作区，而不是记录某个历史提交的测试过程。
+> 自动化命令见 [CONTRIBUTING.md](CONTRIBUTING.md#4-验证要求)。本文用于需要启动服务的手工验收、故障排查与发布前抽查。
 
-***
+## 1. 先隔离测试数据
 
-## 0. 环境准备（每次测试前）
-
-```bash
-cd /Users/orange/LLooMv2
-cargo build --workspace          # 确保二进制最新
-./target/debug/lloom-server      # 前台启动，观察日志
-```
-
-启动后检查（开浏览器前先确认基础面正常）：
+**不要在未备份的情况下对真实 `data/` 执行修改 SQL、删除对话、创建测试 Key 或标记过期价格。**以下示例使用独立的临时数据目录与端口，避免污染日常使用；Ollama 可以继续复用本机实例。
 
 ```bash
-curl -s http://127.0.0.1:7861/api/services/status | python3 -m json.tool | head
+# 在仓库根目录执行；lloom-server 的退出由终端 Ctrl+C 处理。
+export LLOOM_E2E_DIR="$(mktemp -d /tmp/lloom-e2e.XXXXXX)"
+export LLOOM_DATA_DIR="$LLOOM_E2E_DIR/data"
+export LLOOM_WEB_PORT=17861
+export BASE_URL="http://127.0.0.1:$LLOOM_WEB_PORT"
+
+npm --prefix webui ci
+npm --prefix webui run build
+cargo run -p lloom-server
 ```
 
-预期：Core Server 与 Native Providers 为 healthy；使用本地模型时 Ollama 为 healthy。
-
-***
-
-## 0.5 新功能：Chat 模型选择器（问题1）
-
-**功能**：聊天输入框左侧新增模型下拉（默认 `auto · 智能路由`，可选已启用模型）。选具体模型时钉住编排的 general 角色（含子任务默认），绕过评分路由；`auto` 即智能路由。
-
-### 0.5.1 选择与切换（重点找 bug）
-
-1. 打开 WebUI → Chat 页 → 输入框左侧下拉。
-2. 默认应为 **auto · 智能路由**。
-3. 切换为某模型（如 deepseek-v3）后发送消息，`decompose` 事件 `selected_model` 应等于所选模型（可在服务日志或会话 meta 核对）。
-4. 再切回 auto，之后的请求恢复评分路由（不再钉住）。
-
-**验收点**：
-
-- [ ] 下拉列出所有已启用模型 + auto
-
-- [ ] 选模型后首条请求用所选模型
-
-- [ ] 切回 auto 后不再钉住
-
-- [ ] 生成中（loading）下拉应禁用，不可中途改模型
-
-### 0.5.2 直接选深seek-r1（解锁 C1）
-
-**前置**：已配 DASHSCOPE\_API\_KEY（本机已配，可直接测）。选 **deepseek-r1** 即可在 WebUI 内测思考卡，无需再走代理端点。
-
-***
-
-## 1. C1：思考过程（reasoning）展示
-
-**功能**：推理模型（如 deepseek-r1）返回的 `reasoning_content` 全链路透传，在聊天页以折叠卡展示，并随对话持久化（刷新/重开历史对话仍可见）。
-
-### 1.1 基础展示
-
-1. 打开 WebUI → Chat 页 → 模型选择器选 **deepseek-r1**（见 §0.5）。
-2. 发一条需要推理、且未命中的新问题，例如换数字的鸡兔同笼：`鸡兔共 101 个头、342 只脚，各几只？`
-3. 生成结束后，回复气泡上方应出现\*\*「思考过程」折叠卡\*\*（带字数标签，如「思考过程 · 644 字」）。
-4. 展开后内容应为连贯的推理文字，可滚动；折叠/展开可反复切换。
-
-> ⚠️ **缓存注意**：同类问题命中语义缓存时 reasoning 为 null（缓存只存最终答案）。测思考卡要用**新问题**或换措辞确保 `cache_hit=false`。
-
-**验收点**：
-
-- [ ] 折叠卡出现且字数 > 0
-
-- [ ] 思考内容与最终答案在逻辑上对应（不是乱码/不是答案原文）
-
-- [ ] 正文答案**不包含**思考内容（两者分离）
-
-### 1.2 持久化
-
-1. 完成 1.1 后刷新页面（F5）→ 重新打开同一会话。
-2. 历史消息中该条回复应仍带思考折叠卡。
-
-**验收点**：
-
-- [ ] 刷新后思考卡仍在
-
-- [ ] 切换到其他会话再切回来，仍在
-
-### 1.3 边界情况（重点找 bug）
-
-| 场景    | 操作             | 预期                                    |
-| ----- | -------------- | ------------------------------------- |
-| 非推理模型 | 换 qwen 系列发同样问题 | **不出现**思考卡（没捕获到 reasoning 就不渲染）       |
-| 流式中断  | 思考生成到一半点「停止」   | 已收到的思考片段应保留（或至少不崩溃、不出现空卡 0 字）         |
-| 旧对话   | 打开 C1 之前的旧会话   | 正常显示，无思考卡、无报错（meta 缺 reasoning 字段需容错） |
-| 思考很长  | 问一个复杂证明题       | 折叠卡内滚动正常，不撑爆气泡布局                      |
-
-***
-
-## 2. N2：闭环评估（路由体检）
-
-**功能**：周期（6h，启动立即首跑）对影子样本做三线重放（全弱/当前/全强）出 AIQ 报告写库；Rust 侧网格搜索给出权重建议；概览页「路由体检」折叠卡展示 + 手动刷新 + 人工采纳。
-
-### 2.1 报告展示（当前数据状态下）
-
-1. 启动服务后等 3–5 秒（首跑周期任务），打开 WebUI → **Overview 概览页**。
-2. 找到「路由体检」卡片（带盾牌图标），默认折叠。
-3. 展开后应看到：AIQ 值、相对全强节省 %、结论一句话；展开详情有三线成本/质量表、预算档分布、建议表格。
-
-**当前已知状态**：影子样本仅 2 条且全为本地零成本模型，因此 AIQ=0、建议为空、预算档显示 unknown——这是**正常数据不足态**，重点验证 UI 不崩、数字不缺。
-
-**验收点**：
-
-- [ ] 启动后概览页出现体检卡（或「暂无体检报告」黄字提示，若首跑还没完成）
-
-- [ ] 折叠展开正常，三线表有数字
-
-- [ ] 无建议时建议区显示空态而非报错
-
-### 2.2 手动立即体检
-
-1. 点卡片右上角「**立即体检**」按钮。
-2. 按钮 loading 数秒后，卡片内「（时间 · 样本 N）」应刷新为当前时间，样本数不变或增加。
-
-**验收点**：
-
-- [ ] 点击后时间戳更新
-
-- [ ] 连续快速点多次不崩（幂等追加，只是多几条报告记录）
-
-### 2.3 积累影子样本后看建议 + 采纳（**核心闭环，当前样本不足暂无法完整走通**）
-
-前置：需要 ≥ 若干条**有成本差异**的影子样本（本地零成本模型三线全 0，网格搜索无空间）。
-
-1. Models 页对某任务类型手动双跑采集（POST /api/routing/shadow），或正常使用中自动采样积累；建议配好 DashScope key 并注册 2 个以上不同价位云模型。
-2. 样本积累后回 Overview → 立即体检 → 建议表应出现「建议权重 vs 当前权重」对比行。
-3. 点「**全部采纳**」→ 提示成功 → 发起新对话请求，路由选择应按新权重变化（可在 Usage 页路由统计或服务日志观察 model 变化）。
-
-**验收点**：
-
-- [ ] 有差异化样本时建议表非空
-
-- [ ] 采纳后 `routing_policy` 更新（可在 Models/Settings 页或重启后仍生效）
-
-- [ ] 采纳后**不会自动再次变更**（人工审查点：只有再点采纳才改）
-
-### 2.4 API 直测（可选，不依赖 UI）
+启动后，另一个终端执行：
 
 ```bash
-# 最新报告
-curl -s http://127.0.0.1:7861/api/routing/review | python3 -m json.tool
-# 手动刷新
-curl -s -X POST http://127.0.0.1:7861/api/routing/review/refresh | python3 -m json.tool
-# 采纳（当前无建议 → 应返回错误信息而非 500）
-curl -s -X POST http://127.0.0.1:7861/api/routing/review/adopt \
-  -H 'Content-Type: application/json' -d '{}' | python3 -m json.tool
+export BASE_URL="http://127.0.0.1:17861"
+curl -fsS "$BASE_URL/api/health"
 ```
 
-**验收点**：
+预期返回包含 `status: ok` 的 JSON。若旧实例占用了 `17861`，先更换端口，而不是关闭不确定归属的进程。
 
-- [ ] GET 返回 ok:true + 三线数字
+需要真实云模型时，在 WebUI 模型页配置 API Key，或在启动前于 `.env` 配置对应环境变量。**真实调用可能产生费用。**没有可用云端 Key 时，可以仅做启动/路由/本地 Ollama 验收，并明确记录未覆盖云模型。
 
-- [ ] 无建议时 adopt 返回业务错误提示（4xx 风格 JSON），**不是** 500 崩溃
-
-### 2.5 边界情况（重点找 bug）
-
-| 场景       | 操作                                                                      | 预期                  |
-| -------- | ----------------------------------------------------------------------- | ------------------- |
-| 无样本冷启动   | 清空 routing\_calibration 后重启+立即体检                                        | 卡片显示「暂无体检报告」类提示，不崩溃 |
-| 体检期间并发聊天 | 立即体检 loading 时同时发对话                                                     | 互不阻塞（体检是后台 job）     |
-| 周期任务失败自愈 | 制造无效影子样本并观察 `[review] aiq report job failed` 后下个周期恢复 | 失败只打日志，服务不受影响       |
-| 报告跨重启    | 重启服务后再看概览页                                                              | 显示的是库里最新一份报告（不是空白）  |
-
-### 2.6 定价页红点透明化（问题2）
-
-**功能**：红色 ● 表示价格已过期。触发条件严苛，日常为 0，故增加「手动标记演示」与 tooltip 解释，便于观察与理解。
-
-**手动标记一条 stale 来观察红点**（可选，不影响其他功能）：
+测试完成后停止该终端的服务，再删除**自己刚创建的**临时目录：
 
 ```bash
-sqlite3 /Users/orange/LLooMv2/data/lloom.db \
-  "UPDATE price_specs SET price_stale=1, stale_reason='calibration_drift'
-   WHERE provider='dashscope' AND model='deepseek-v3';"
+# 先确认路径确实是 mktemp 创建的前缀，再清理。
+printf '%s\n' "$LLOOM_E2E_DIR"
+# 例如前缀确认为 /tmp/lloom-e2e. 后：
+rm -rf -- "$LLOOM_E2E_DIR"
+unset LLOOM_E2E_DIR LLOOM_DATA_DIR LLOOM_WEB_PORT BASE_URL
 ```
 
-1. 刷新 Pricing 页。
-2. 该行来源标签（如 `litellm_remote`）旁应出现**红点 ●**。
-3. 鼠标悬停红点 → tooltip 显示触发原因与建议（「…建议核对官方价后『改价』或『采纳』」）。
-4. 页面顶部说明文案应提及触发条件（日调用 ≥50 且对账比连续 3 天偏离 ±20%）。
+如果服务在其他终端、旧 shell 或新会话中启动，请先重新设置相同的 `LLOOM_DATA_DIR` 和端口。数据目录在创建后才会出现；首次 L2 调用会尝试下载 FastEmbed 模型，失败时应降级而不是阻塞普通聊天。
 
-**验收点**：
-
-- [ ] 手动标记后红点出现
-
-- [ ] 红点 tooltip 显示原因（不是空白）
-
-- [ ] 点「采纳为 manual」后红点消失（`price_stale→0`）
-
-> ⚠️ **勿忘清理**：演示后执行 `UPDATE price_specs SET price_stale=0 WHERE provider='dashscope' AND model='deepseek-v3';` 恢复，避免误以为 real 过期。每日校准任务只会在真实越界时重新标红。
-
-***
-
-## 2.7 Prometheus /metrics 指标导出（N3.b）
-
-**功能**：`GET /metrics` 输出 Prometheus 0.0.4 文本格式——up/build_info、用量计数与 token（按 model×task_type×api_source）、成本总额、缓存命中/节省、failover、路由 outcome 分布、预算、模型健康。
+## 2. 自动化验收
 
 ```bash
-curl -s http://127.0.0.1:7861/metrics | head -30
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+npm --prefix webui ci
+npm --prefix webui run build
+npm --prefix webui test
+cd tui && npx tsc --noEmit
+git diff --check
 ```
 
-**验收点**：
+`webui` 测试使用 Bun；本地没有 Bun 时不能将「未运行」写成通过。测试计数会随代码改变，提交说明请记录实际命令、日期与结果。
 
-- [ ] 返回 200，含 `# HELP` / `# TYPE` 注释行（合法 0.0.4 格式）
+## 3. 手工验收清单
 
-- [ ] 包含 `lloom_up`、`lloom_build_info` 及用量/成本/缓存/健康各组指标
+每项记录「实际结果 / 通过 / 未测原因」。不要仅凭页面能打开就判定功能通过。
 
-- [ ] 发一条聊天后再次抓取，对应 token/计数指标增长
+### A. 启动、模型与访问边界
 
-- [ ] 旧库（未手动迁移）启动后 `/metrics` 仍可导出（幂等迁移自愈）
+- [ ] `/api/health` 可用，首页可加载；没有配置模型时不会把「服务已启动」误报成「Provider 已可用」。
+- [ ] 在模型页新增、编辑、停用、重新启用一个模型；编辑弹窗回填名称和配置，名称含 `/` 的模型也能更新。
+- [ ] 云端模型 API Base 留空时，OpenAI/DashScope/Anthropic 使用默认地址；`custom` 没有默认地址，调用时应给出可理解的错误，不静默打到错误地址。
+- [ ] 「立即测活」结果与历史健康状态分开显示；失败不会被描述为健康。
+- [ ] 本机管理 API 可用；把服务绑定到非环回地址且没有 API Key 时，启动拒绝并给出原因。该测试使用独立端口，不影响正常服务。
 
-## 2.8 账单对账 +「已对账」徽标（N3.c / B2）
-
-**功能**：`scripts/bill_reconcile.py` 解析百炼账单详情 CSV × `usage_records` 对账，`--save` 落 `<data_dir>/reconcile_last.json`；用量页「缓存为您节省」卡出现绿/橙「已对账」Tag（绿=偏差在容差内，橙=超容差/有模型映射落空），tooltip 展示对账时间 + 对平数/偏差率。
-
-**两态验证**（可先用合成账单，等真实账单导出后重跑 `--save` 做最终数据验证）：
-
-1. 跑一次对账并落盘：
-
-   ```bash
-   python3 scripts/bill_reconcile.py --bill <账单.csv> --db data/lloom.db --save
-   ```
-
-2. WebUI → Usage 页 → 缓存节省卡右上角应出现「已对账」Tag，悬停 tooltip 有对账时间与偏差率。
-3. 将 `data/reconcile_last.json` 临时改名（模拟从未对账）→ 刷新页面 → Tag 消失（`reconciled=false` 回退，不报错）→ 改回恢复。
+### B. 普通聊天与流式输出
 
 ```bash
-# API 直测
-curl -s http://127.0.0.1:7861/api/usage/reconcile | python3 -m json.tool
+curl -N "$BASE_URL/api/chat/stream" \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"简要解释快速排序"}]}'
 ```
 
-**验收点**：
+- [ ] 响应是 SSE，不是误用 `q` 字段后的校验错误；能收到完整回答和 `done`。
+- [ ] 中文、emoji、较长 Markdown 内容没有被 chunk 边界破坏。
+- [ ] 有未命中缓存的新问题时，路由、usage、成本与模型信息与响应一致。
+- [ ] 生成中点击「停止」，按钮与状态恢复，已生成内容保留并标为中断/部分完成；服务端尽量保存部分用量。
+- [ ] 在 WebUI 快速切换会话、返回对话、刷新页面，历史内容、思考卡和 plan 不错乱。
+- [ ] 无响应、Provider 失败、上游 429、流中断时，界面显示真实错误，不出现「成功空回答」。
 
-- [ ] 有报告文件时 Tag 出现，绿/橙按偏差正确
+### C. 缓存与上下文
 
-- [ ] 文件缺失/损坏时 Tag 消失、页面不崩
+- [ ] 对同一模型、同一 system prompt、同一温度发送两次等价请求；第二次按实现命中 L1/L2，返回相同内容且记录 `cache_hit`。
+- [ ] 改 system prompt、模型或温度后，不错误复用旧答案。
+- [ ] 历史前缀相同但正文不同的对话，不因 L1 指纹碰撞而串答案。
+- [ ] 长对话裁剪后不会产生孤儿 tool 消息、非法角色序列或丢失 system；多模态/数组 content 不被估成 0 token。
+- [ ] L2 模型不可用（例如 Intel Mac 未装 ONNX Runtime）时，仅 L2 降级，L1 和 Provider 调用仍可用。
 
-- [ ] `--json` 输出与控制台报告数字一致；退出码 0 对平 / 1 偏差 / 2 缺数据
+缓存命中需结合响应元数据和 SQLite 记录验证，不能只根据「返回更快」判断。探针、影子评测和 `/v1` 代理不应与普通会话共享缓存命名空间。
 
-***
+### D. OpenAI-compatible `/v1` 与 API Key
 
-1. **普通聊天**：Chat 页选 auto 或任一模型发 1 条 → 正常流式回复、用量/成本记录更新（Usage 页）。
-2. **代理端点**（N1 回归）：
+```bash
+curl -fsS "$BASE_URL/v1/models"
+```
 
-   ```bash
-   curl -s http://127.0.0.1:7861/v1/models | python3 -m json.tool | head -n 8
-   curl -s -X POST http://127.0.0.1:7861/v1/chat/completions \
-     -H 'Content-Type: application/json' \
-     -d '{"model":"auto","messages":[{"role":"user","content":"你好，一句话自我介绍"}]}' | head -c 400
-   ```
-3. **指标导出**（N3.b 回归）：`curl -s http://127.0.0.1:7861/metrics | head -5` → 200 且格式合法。
-4. **服务日志**：全程无 `ERROR`/`panic` 级输出（`[review]` 开头的提示属业务信息）。
+在 WebUI 的 API Keys 页创建一个 Key，明文只显示一次，立即保存到测试环境变量：
 
-***
+```bash
+export LLOOM_TEST_KEY='<刚创建的测试 Key>'
+curl -fsS "$BASE_URL/v1/models" \
+  -H "Authorization: Bearer $LLOOM_TEST_KEY"
+```
 
-## 4. 已知边界与暂不处理项
+- [ ] 首个 Key 创建前，本机 `/v1` 可按规则免鉴权；创建后缺少/错误 Bearer 返回 401。
+- [ ] 有效 Key 可访问允许模型；停用 Key、过期 Key、模型白名单之外的模型按契约拒绝。
+- [ ] 非流式与 `stream:true` 都能返回；`model:"auto"` 走智能路由。
+- [ ] 请求只含支持的字段：`model`、`messages`、`temperature`、`max_tokens`、`stream`。
+- [ ] 上游 429 向客户端返回 429；上游普通请求错误为 400，连接/5xx 为 502，超时为 504。
+- [ ] 并发请求不超过 RPM；额度采用预扣-结算，失败/断连不会永久多占额度。异常预留由后台回收。
+- [ ] 远程 `/v1` 必须有 Key；远程 `/api/*` 与 `/metrics` 不可用。未配置远程访问条件时，不尝试把管理 API 暴露到局域网。
 
-- 体检建议需要**有成本差异的影子样本**才非空——纯本地模型阶段建议恒空，属预期。
+### E. 编排、推理与路由评估
 
-- 账单对账（N3.c）**代码链路已全部落地**（脚本 + 徽标端点 + UsagePage Tag）；真实 DashScope 账单导出到位后跑 `--save` 做最终数据验证即可。
+- [ ] 复杂任务出现分解、子任务、聚合事件；依赖顺序正确，重复子任务 ID 不会导致事件错乱。
+- [ ] 子任务失败、客户端停止与 Provider 错误有明确事件/状态，已产出部分尽量保留。
+- [ ] 推理模型的 reasoning 与最终答案分离；刷新会话后思考卡仍在。缓存命中时无新 reasoning 是已知边界，不应误判。
+- [ ] 路由体检能生成报告；没有有成本差异的影子样本时，建议为空属于正常数据状态，不应为了截图伪造样本。
+- [ ] 人工采纳建议前不改变生产权重；采纳后才生效。历史 band 分布参与重放，不是始终使用空 query 的基带。
 
-- deepseek-r1 思考链路已 E2E 验证（644 字思考 + 真实 usage 41/827 tok）；其他推理模型（如 qwen 系列 thinking 变体）未逐一验证，发现问题记录型号。
+### F. 指标、价格与对账
 
-***
+```bash
+curl -fsS "$BASE_URL/metrics" | head -30
+```
 
-## 变更记录
+- [ ] 返回 Prometheus 文本格式与 build_info；build_info 版本与当前构建一致，指标没有敏感 Key/完整 PII。注意：`/api/health` 的版本字段目前仍是硬编码 `2.0.0`，不能拿它判断构建版本（见「当前文档与实现差异」）。
+- [ ] 价格缺失/非法范围被拒绝；有阶梯价时估算与实际口径一致，未知云价不能伪装成免费模型。
+- [ ] 手动修改价格后 manual 锚定不被远端刷新覆盖；参考价与实际 Provider 价分开。
+- [ ] 有真实百炼账单时，使用副本执行：
 
-| 日期         | 提交      | 更新内容                                                   |
-| ---------- | ------- | ------------------------------------------------------ |
-| 2026-09-02 | ee31323 | 初版：C1 思考过程展示测试                                         |
-| 2026-09-02 | 08f5012 | 新增 N2 路由体检测试（报告展示/立即体检/建议采纳/边界）+ 回归冒烟                  |
-| 2026-09-02 | 9c5bbcd | 新增 Chat 模型选择器（0.5）、定价红点透明化（2.6）；修订 C1 步骤（选择器直达 + 缓存注意） |
-| 2026-09-15 | 4ba43b5 / 5b39c0a | 新增 2.7 Prometheus /metrics、2.8 账单对账徽标测试；回归节补 /metrics；头部与已知边界同步 |
+  ```bash
+  python3 scripts/bill_reconcile.py --bill /path/to/bill.csv --db "$LLOOM_DATA_DIR/lloom.db" --save
+  ```
 
+  报告写入测试数据目录。用量页「已对账」只在报告存在且可读取时显示；缺文件/损坏文件不应导致页面崩溃。
+- [ ] 探针流量标记为 `probe`，不与真实 WebUI 用量混淆。
+
+## 4. 故障排查
+
+| 现象 | 优先检查 |
+|---|---|
+| 页面打不开或静态资源 404 | `npm --prefix webui ci && npm --prefix webui run build` 后重启；确认访问的是当前服务的端口 |
+| 服务启动但聊天报「未配置模型」 | 模型是否启用、Provider Key 是否配置；服务进程启动成功不等于 Provider 可用 |
+| 启动时提示非环回需要 API Key | 先在本机 WebUI 创建 Key，或恢复 `LLOOM_BIND=127.0.0.1`；不要直接绕过启动保护 |
+| `/v1` 返回 401 | 是否已创建 Key、Bearer 是否完整、Key 是否启停/过期、模型是否在白名单 |
+| 管理 API 远程 403 | 当前设计为仅本机管理；不要通过代理把 `/api/*` 暴露出去 |
+| macOS 无法打开 | 对**解压出的 LLooM 目录**运行 `xattr -cr LLooM`，再启动；不要对任意系统目录执行 |
+| Intel Mac 没有 L2 | 安装 `brew install onnxruntime`；L1 与路由不受影响 |
+| 本地模型失败 | Ollama 是否运行、`:11434` 是否可访问、模型是否已下载；LLooM 不捆绑 Ollama |
+| 首次 L2 较慢或失败 | 查看模型下载/初始化日志；失败应自动降级，不应删除数据目录来修复 |
+| 中文流式乱码或错误被吞 | 按 `docs/SSE-CONTRACT.md` 检查客户端是否保留跨 chunk 字节、处理未命名 `data:` 帧与终帧 |
+| SQLite 锁或升级缺列 | 使用最新程序启动完成幂等迁移；先备份 `data/`，不要手工删库；报告具体错误与版本 |
+
+## 5. 当前文档与实现差异
+
+本轮文档审查确认以下现状，修复前按实际情况验收，不把旧配置或硬编码字段当成有效功能：
+
+| 项目 | 当前实现 | 验收/使用建议 |
+|---|---|---|
+| `LLOOM_PROXY_TOKEN` | 已从 `.env.example` 的无效配置示例移除；此前 Rust 代码未读取它 | 使用 WebUI 的 API Keys 页创建下游 Key，不能依赖该变量 |
+| `/api/health` 的 `version` | 固定 `2.0.0` | 用 `/metrics` build_info 或 `git describe` 判断构建版本 |
+| L1 容量淘汰 | 按创建时间 FIFO；L2 才按最近命中时间淘汰 | 不要以「高频 L1 条目一定不被淘汰」为测试预期 |
+| `/v1` 请求字段 | 仅 `model/messages/temperature/max_tokens/stream` | 不把 tools、多模态、response_format 等未实现字段视为兼容 |
+| 文档中的「生产级」 | 指工程质量与明确边界，不等于公网托管/多租户能力 | 公网部署需自行补 TLS、反代、备份与访问控制 |
+
+## 6. 证据与报告
+
+验收记录至少包含：版本/commit、OS/arch、启动方式、模型类型（本地/云及是否真实调用）、命令、结果、未测项、日志位置。真实 Key、完整对话与个人信息必须脱敏。
+
+`docs/AUDIT-FIXES-2026-10-23.md` 是审计修复说明，`LLooMprogress.md` 是当前进度；二者不能替代当前版本的实测。研究/Benchmark 的复现使用 [benchmarks/REPRODUCE.md](benchmarks/REPRODUCE.md)，与本文的产品手工验收分开。
