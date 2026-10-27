@@ -62,8 +62,18 @@ export default function UsagePage() {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 30000);
-    return () => clearInterval(t);
+    // 页面隐藏时暂停轮询（visibilitychange 门控），回到前台立即刷新一次。
+    const t = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 30000);
+    const onVisible = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   const spendData = usage.map((u) => ({ model: u.model_name, value: u.total_cost }));

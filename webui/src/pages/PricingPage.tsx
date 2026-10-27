@@ -77,11 +77,11 @@ export default function PricingPage() {
     [refs],
   );
 
-  const refresh = async () => {
+  const refresh = async (staleOverride?: boolean) => {
     setLoading(true);
     try {
       const [s, c, p, rf] = await Promise.all([
-        listPriceSpecs(staleOnly),
+        listPriceSpecs(staleOverride ?? staleOnly),
         listPriceCalibration(30),
         getProbeStats(),
         listPriceReferences(),
@@ -302,7 +302,7 @@ export default function PricingPage() {
             仅看过期
             <Switch size="small" style={{ marginLeft: 6 }} checked={staleOnly} onChange={(v) => {
               setStaleOnly(v);
-              setTimeout(refresh, 0);
+              refresh(v); // 显式传新值，避免闭包捕获旧 state 靠 setTimeout 赌下一次渲染
             }} />
           </span>
         </Space>
@@ -311,7 +311,7 @@ export default function PricingPage() {
           <Button icon={<ReloadOutlined />} loading={refreshing} onClick={handleRefreshRemote}>
             刷新远端价
           </Button>
-          <Button onClick={refresh}>刷新视图</Button>
+          <Button onClick={() => refresh()}>刷新视图</Button>
         </Space>
       </div>
 

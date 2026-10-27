@@ -358,7 +358,7 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
                     .into_iter()
                     .filter(|c| c.name != pinned)
                     .map(|c| c.name)
-                    .take(input.policy.fallback_depth.max(0) as usize)
+                    .take(input.policy.fallback_depth.clamp(1, 8) as usize)
                     .collect();
                 return Ok(PlanOutcome {
                     primary: pinned.to_string(),
@@ -394,7 +394,7 @@ pub fn plan_with_mode(input: &PlanInput, mode: PinnedMode) -> Result<PlanOutcome
     let primary = candidates[0].name.clone();
     let chain = candidates[1..]
         .iter()
-        .take(input.policy.fallback_depth.max(0) as usize)
+        .take(input.policy.fallback_depth.clamp(1, 8) as usize)
         .map(|c| c.name.clone())
         .collect();
     let winner = gated.iter().find(|m| m.name == primary);
@@ -595,6 +595,7 @@ pub async fn route(
     classifier: Option<&ModelSpec>,
     last_model: Option<&str>,
     conversation_id: Option<&str>,
+    sr_domain: &str,
 ) -> RoutingDecision {
     let models: Vec<Model> = db
         .list_models(true)
@@ -623,7 +624,15 @@ pub async fn route(
         };
     }
 
-    let (task_type, method) = classify(user_text, classifier).await;
+    let (mut task_type, method) = classify(user_text, classifier).await;
+    // P2-9：领域增强在 plan 之前完成（改写后的 task_type 参与策略/band/候选池），
+    // 修复「先按 general 选模、落库却记 math_logic」的口径分裂。
+    if !sr_domain.is_empty() {
+        let (new_type, changed) = enhance_with_domain(&task_type, sr_domain);
+        if changed {
+            task_type = new_type;
+        }
+    }
     let band = band_for(&task_type, user_text);
 
     let policy = db

@@ -281,27 +281,28 @@ fn number(value: Option<&Value>) -> i64 {
 }
 
 fn classify_transport_error(error: &reqwest::Error) -> AppError {
-    let kind = if error.is_timeout() {
-        "timeout"
+    use crate::error::ProviderError;
+    if error.is_timeout() {
+        AppError::Provider(ProviderError::Timeout {
+            message: error.to_string(),
+        })
     } else if error.is_connect() {
-        "transport"
+        AppError::Provider(ProviderError::Connection {
+            message: error.to_string(),
+        })
     } else {
-        "request"
-    };
-    AppError::AiService(format!("native provider {kind}: {error}"))
+        AppError::Provider(ProviderError::Other {
+            message: format!("native provider request error: {error}"),
+        })
+    }
 }
 
 fn classify_status(status: u16, body: &str) -> AppError {
-    let kind = match status {
-        401 | 403 => "authentication",
-        408 => "timeout",
-        429 => "rate_limited",
-        400..=499 => "invalid_request",
-        500..=599 => "server_error",
-        _ => "http_error",
-    };
     let detail: String = body.chars().take(500).collect();
-    AppError::AiService(format!("native provider {kind} ({status}): {detail}"))
+    AppError::Provider(crate::error::ProviderError::from_status(
+        status,
+        format!("native provider: {detail}"),
+    ))
 }
 
 #[cfg(test)]

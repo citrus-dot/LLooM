@@ -75,6 +75,15 @@ let state: StoreState = {
   pinnedModel: '',
 };
 
+/** L-1：当前进行中的流（仅一条——同会话 loading 锁已保证串行）。 */
+let activeStream: AbortController | null = null;
+
+/** 用户点击「停止」：中断在途 SSE。流侧 catch(AbortError) 走 interrupted 收口。 */
+export function stopGenerate() {
+  activeStream?.abort();
+  activeStream = null;
+}
+
 const listeners = new Set<() => void>();
 const loadSeq = new Map<string, number>();
 const emit = () => listeners.forEach((l) => l());
@@ -300,6 +309,20 @@ export async function send() {
   let totalDuration = 0;
   let usage = { input_tokens: 0, output_tokens: 0, cost: 0, saved_cost: 0, model: '' };
 
+  // token 增量节流：SSE delta 通常 10-30ms 一个，直接逐条 setConv 会让全组件树
+  // 超频重渲；80ms 合并一次，非 token 事件与收尾强制冲刷。
+  let lastFlush = 0;
+  const FLUSH_INTERVAL_MS = 80;
+  const flushContent = (force = false) => {
+    const now = Date.now();
+    if (!force && now - lastFlush < FLUSH_INTERVAL_MS) return;
+    lastFlush = now;
+    setConv(convId, (c) => ({
+      ...c,
+      messages: c.messages.map((m, i) => (i === c.messages.length - 1 ? { ...m, content: response } : m)),
+    }));
+  };
+
   const patchPlan = () => {
     setConv(convId, (c) => ({
       ...c,
@@ -308,6 +331,9 @@ export async function send() {
       ),
     }));
   };
+
+  const controller = new AbortController();
+  activeStream = controller;
 
   try {
     await streamOrchestrate(
@@ -330,10 +356,7 @@ export async function send() {
           patchPlan();
         } else if (ev.event === 'token' && d.delta) {
           response += d.delta;
-          setConv(convId, (c) => ({
-            ...c,
-            messages: c.messages.map((m, i) => (i === c.messages.length - 1 ? { ...m, content: response } : m)),
-          }));
+          flushContent();
         } else if (ev.event === 'task_done') {
           const id = d.id;
           plan.sub_tasks = plan.sub_tasks.map((t) =>
@@ -367,7 +390,9 @@ export async function send() {
       },
       convId,
       state.pinnedModel || undefined,
+      controller.signal,
     );
+    flushContent(true);
 
     if (errorMsg) {
       const finalContent = `请求被拦截: ${errorMsg}`;
@@ -458,8 +483,14 @@ export async function send() {
       loading: false,
     }));
   } catch (e: any) {
-    const finalContent = `请求失败: ${e}`;
-    const meta = { status: 'done', error: true };
+    // 用户主动停止：保留已产出的部分内容并标记 interrupted（服务端按 partial 落账）。
+    const aborted = controller.signal.aborted;
+    const finalContent = aborted
+      ? response
+        ? `${response}\n\n> ⏹ 已停止生成。`
+        : '> ⏹ 已停止生成。'
+      : `请求失败: ${e}`;
+    const meta = { status: aborted ? 'interrupted' : 'done', error: !aborted };
     try {
       await updateMessage(convId, asstSeq, { content: finalContent, meta });
     } catch {
@@ -468,10 +499,12 @@ export async function send() {
     setConv(convId, (c) => ({
       ...c,
       messages: c.messages.map((m, i) =>
-        i === c.messages.length - 1 ? { ...m, content: finalContent, status: 'done' } : m,
+        i === c.messages.length - 1 ? { ...m, content: finalContent, status: aborted ? 'interrupted' : 'done' } : m,
       ),
       loading: false,
     }));
+  } finally {
+    if (activeStream === controller) activeStream = null;
   }
 }
 

@@ -143,7 +143,16 @@ fn prepare_replay_inputs(db: &crate::db::Db, task_type: &str, models: &[Model]) 
     let est_out = db.task_avg_out_tokens(task_type).round() as i64;
     // P2-2：重放用近期平均输入 token，使成本与上下文过滤对齐真实请求（不足 20 例回退 0）。
     let est_in = db.task_avg_in_tokens(task_type).unwrap_or(0);
-    let band = router::band_for(task_type, "");
+    // L-2：band 取该 task_type 的历史众数（生产 routing_decisions 的真实分布），
+    // 无历史时回退基带映射——空 query 的 band_for 永不提档，会让重放系统性
+    // 低估复杂任务的档位，产出的权重建议基于失真口径。
+    let band = db
+        .modal_routing_band(task_type)
+        .unwrap_or_else(|e| {
+            crate::logging::warn("review", &format!("读取历史 band 分布失败: {e}"));
+            None
+        })
+        .unwrap_or_else(|| router::band_for(task_type, "").to_string());
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -153,7 +162,7 @@ fn prepare_replay_inputs(db: &crate::db::Db, task_type: &str, models: &[Model]) 
         hit_rate,
         est_in,
         est_out,
-        band: band.to_string(),
+        band,
         now,
     }
 }

@@ -64,6 +64,17 @@ fn semantic_cache(
     }
 }
 
+fn cache_max_entries() -> usize {
+    static MAX: OnceLock<usize> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("LLOOM_CACHE_MAX_ENTRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(5000)
+    })
+}
+
 fn semantic_threshold() -> f32 {
     static THRESHOLD: OnceLock<f32> = OnceLock::new();
     *THRESHOLD.get_or_init(|| {
@@ -100,11 +111,19 @@ impl From<&Model> for ModelSpec {
             } => k.resolve(),
             _ => String::new(),
         };
+        // 云端留空 api_base → 供应商默认（WebUI「留空走供应商默认」承诺的落点）；
+        // custom 无默认，保持空值由 supports_native 拒绝并给出明确错误。
+        let mut api_base = config::resolve_env_or_literal(m.api_base());
+        if api_base.trim().is_empty() {
+            if let Some(default) = crate::providers::Protocol::default_base(m.provider_name()) {
+                api_base = default.to_string();
+            }
+        }
         Self {
             name: m.name.clone(),
             provider: m.provider_name().to_string(),
             provider_model: m.provider_model.clone(),
-            api_base: config::resolve_env_or_literal(m.api_base()),
+            api_base,
             api_key,
             input_cost_per_token: m.input_cost_per_token,
             output_cost_per_token: m.output_cost_per_token,
@@ -311,6 +330,34 @@ async fn embed_query(query: String) -> Option<Vec<f32>> {
             crate::logging::warn("cache", "L2 向量生成超过 2 秒，继续无缓存调用");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod spec_default_base_tests {
+    use super::*;
+
+    #[test]
+    fn cloud_model_without_api_base_gets_provider_default() {
+        // 「API Base 留空走供应商默认」承诺的回归：修复前 supports_native 直接拒绝空 base。
+        for (provider, expected) in [
+            ("openai", "https://api.openai.com/v1"),
+            (
+                "dashscope",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            ),
+            ("anthropic", "https://api.anthropic.com"),
+        ] {
+            let m = crate::models::Model::fixture("t", provider);
+            let spec = ModelSpec::from(&m);
+            assert_eq!(spec.api_base, expected, "provider {provider}");
+            assert!(crate::providers::supports_native(&spec));
+        }
+        // custom 无默认：保持空并由 supports_native 拒绝（显式配置仍是硬要求）。
+        let custom = crate::models::Model::fixture("t", "custom");
+        let spec = ModelSpec::from(&custom);
+        assert!(spec.api_base.is_empty());
+        assert!(!crate::providers::supports_native(&spec));
     }
 }
 
@@ -573,10 +620,7 @@ pub async fn chat(
                     &result.content,
                     (!c.conversation_id.is_empty()).then_some(c.conversation_id),
                 );
-                let max = std::env::var("LLOOM_CACHE_MAX_ENTRIES")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(5000);
+                let max = cache_max_entries();
                 let _ = store.sweep(max);
             }
         }
@@ -590,10 +634,7 @@ pub async fn chat(
                     &result.content,
                     vector,
                 );
-                let max = std::env::var("LLOOM_CACHE_MAX_ENTRIES")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(5000);
+                let max = cache_max_entries();
                 let _ = cache.sweep(max);
             }
         }
@@ -780,7 +821,7 @@ pub async fn orchestrate_native(
             }
             let duration = started.elapsed().as_secs_f64();
             if tx.send(event("task_done",json!({"id":1,"model":spec_name,"task_type":"general","duration":duration,"cost":0.0,"input_tokens":usage.prompt_tokens,"output_tokens":usage.completion_tokens,"saved_cost":0.0,"cache_hit":false}))).await.is_err(){return;}
-            tx.send(event("result",json!({"response":content,"model":spec_name,"cost":0.0,"input_tokens":usage.prompt_tokens,"output_tokens":usage.completion_tokens,"saved_cost":0.0,"total_duration":duration,"models_used":[spec_name],"cache_hit":false,"reasoning":if reasoning.is_empty(){None}else{Some(reasoning)}}))).await.ok();
+            if tx.send(event("result",json!({"response":content,"model":spec_name,"cost":0.0,"input_tokens":usage.prompt_tokens,"output_tokens":usage.completion_tokens,"saved_cost":0.0,"total_duration":duration,"models_used":[spec_name],"cache_hit":false,"reasoning":if reasoning.is_empty(){None}else{Some(reasoning)}}))).await.is_err() {}
         });
         return Ok(Box::pin(futures::stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|e| (e, rx))
@@ -968,7 +1009,7 @@ pub async fn orchestrate_native(
         total_out += agg_usage.completion_tokens;
         used.insert(aggregate_name.clone());
         if tx.send(event("task_done",json!({"id":0,"model":aggregate_name,"task_type":"aggregate","duration":0.0,"cost":0.0,"input_tokens":agg_usage.prompt_tokens,"output_tokens":agg_usage.completion_tokens,"cache_hit":false}))).await.is_err(){return;}
-        tx.send(event("result",json!({"response":final_text,"model":aggregate_name,"cost":0.0,"input_tokens":total_in,"output_tokens":total_out,"saved_cost":0.0,"total_duration":total_duration,"models_used":used.into_iter().collect::<Vec<_>>(),"cache_hit":false,"reasoning":if reasoning.is_empty(){None}else{Some(reasoning)}}))).await.ok();
+        if tx.send(event("result",json!({"response":final_text,"model":aggregate_name,"cost":0.0,"input_tokens":total_in,"output_tokens":total_out,"saved_cost":0.0,"total_duration":total_duration,"models_used":used.into_iter().collect::<Vec<_>>(),"cache_hit":false,"reasoning":if reasoning.is_empty(){None}else{Some(reasoning)}}))).await.is_err() {}
     });
     Ok(Box::pin(futures::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|e| (e, rx))

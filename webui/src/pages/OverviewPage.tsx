@@ -82,8 +82,18 @@ export default function OverviewPage() {
   useEffect(() => {
     refresh();
     refreshReview();
-    const t = setInterval(refresh, 30000);
-    return () => clearInterval(t);
+    // 页面隐藏时暂停轮询（visibilitychange 门控），回到前台立即刷新一次。
+    const t = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 30000);
+    const onVisible = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   const healthyCount = services.filter((s) => s.healthy).length;

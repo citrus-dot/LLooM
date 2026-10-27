@@ -191,17 +191,8 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_id, seq);
 
-CREATE TABLE IF NOT EXISTS cache_calibration (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    sim REAL NOT NULL,
-    decision TEXT NOT NULL,
-    model TEXT,
-    label INTEGER,
-    source TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_cal_label ON cache_calibration(label);
+-- cache_calibration 表已随语义缓存校准死链一并移除（2026-10，L-5）；
+-- 存量库中的旧表保留不动（无代码引用）。
 
 -- ── PRICING-PLAN §3.2：价格规格 / 时段规则 / 校准统计 ──
 CREATE TABLE IF NOT EXISTS price_specs (
@@ -823,8 +814,18 @@ impl Db {
                     rusqlite::types::Value::Real(e.act_input_cost),
                 ),
             ]);
-            // C3：仅显式标记来源时写列（None 落库默认 'webui'，旧行为不变）
+            // C3：仅显式标记来源时写列（None 落库默认 'webui'，旧行为不变）。
+            // api_source 会拼进 SQL 列值清单，白名单断言防未来来源变成请求透传（P2-6）。
             if let Some(src) = &e.api_source {
+                debug_assert!(
+                    matches!(src.as_str(), "webui" | "proxy" | "probe"),
+                    "api_source 白名单外取值: {src}"
+                );
+                if !matches!(src.as_str(), "webui" | "proxy" | "probe") {
+                    return Err(AppError::Internal(format!(
+                        "api_source 仅允许 webui|proxy|probe，收到 '{src}'"
+                    )));
+                }
                 cols_vals.push(("api_source", rusqlite::types::Value::Text(src.clone())));
             }
         }
@@ -1163,48 +1164,11 @@ impl Db {
         Ok(expired.len())
     }
 
-    // ── Semantic-cache calibration ──
-
-    /// Silent, per-request log used to (a) monitor the similarity distribution and
-    /// (b) accumulate labeled samples for threshold self-tuning. `label` is None for
-    /// passive observations; the inline question sets it (1=correct, 0=incorrect).
-    pub fn insert_cache_calibration(
-        &self,
-        sim: f64,
-        decision: &str,
-        model: &str,
-        label: Option<bool>,
-        source: &str,
-    ) -> Result<()> {
-        let conn = self.conn()?;
-        conn.execute(
-            "INSERT INTO cache_calibration (sim, decision, model, label, source)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                sim,
-                decision,
-                model,
-                label.map(|b| if b { 1i64 } else { 0i64 }),
-                source
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// All labeled (sim, correct) samples collected so far.
-    pub fn calibration_labeled_samples(&self) -> Result<Vec<(f64, bool)>> {
-        let conn = self.conn()?;
-        let mut stmt =
-            conn.prepare("SELECT sim, label FROM cache_calibration WHERE label IS NOT NULL")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, f64>(0)?, row.get::<_, i64>(1)? == 1))
-        })?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
-        }
-        Ok(out)
-    }
+    // ── Semantic-cache calibration：已删除（L-5）──
+    // passive 采集零读者、标签无入口、optimal_threshold 从未接线——
+    // 整条链（insert_cache_calibration / calibration_labeled_samples /
+    // optimal_threshold / cache_calibration 表）于 2026-10 清理，见
+    // docs/AUDIT-2026-10-19.md P2-14/P2-15。存量库中的旧表保留不动（无引用）。
 
     // ── Pricing (PRICING-PLAN §3.2 / §4) ──
 
@@ -1858,6 +1822,20 @@ impl Db {
         .map(|v| v.round() as i64)
     }
 
+    /// L-2：某 task_type 在生产 routing_decisions 里的历史众数 band（30 天窗）。
+    /// review 网格重放用它对齐真实档位分布；无历史返回 None（回退基带映射）。
+    pub fn modal_routing_band(&self, task_type: &str) -> Result<Option<String>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT band FROM routing_decisions
+             WHERE task_type = ?1 AND band IS NOT NULL AND band <> ''
+               AND created_at >= datetime('now', '-30 days')
+             GROUP BY band ORDER BY COUNT(*) DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![task_type])?;
+        Ok(rows.next()?.map(|row| row.get::<_, String>(0)).transpose()?)
+    }
+
     /// PR-5 §5.1：最近 14 天、至少 5 次有效调用的模型缓存命中率。
     /// 无样本的模型不回填——`plan()` 缺省 0，不偏袒任何候选。
     pub fn model_cache_hit_rate(&self, task_type: &str) -> Result<HashMap<String, f64>> {
@@ -2461,50 +2439,6 @@ fn routing_policy_from_row(row: &rusqlite::Row) -> rusqlite::Result<RoutingPolic
         fallback_depth: row.get("fallback_depth")?,
         escalation_enabled: row.get("escalation_enabled")?,
     })
-}
-
-/// Choose a threshold by Youden's J over the labeled samples, hard-capped so the
-/// false-positive rate stays <= `max_fpr`. Returns None when there are too few
-/// samples to tune reliably. Result is clamped to [0.70, 0.92].
-pub fn optimal_threshold(samples: &[(f64, bool)], max_fpr: f64) -> Option<f64> {
-    if samples.len() < 10 {
-        return None;
-    }
-    let lo = 0.70_f64;
-    let hi = 0.92_f64;
-    let steps = 120;
-    let mut best: Option<(f64, f64)> = None;
-    for i in 0..=steps {
-        let t = lo + (hi - lo) * (i as f64 / steps as f64);
-        let (mut tp, mut fp, mut tn, mut fn_) = (0i64, 0i64, 0i64, 0i64);
-        for (s, correct) in samples {
-            let pred_hit = *s >= t;
-            match (pred_hit, *correct) {
-                (true, true) => tp += 1,
-                (true, false) => fp += 1,
-                (false, true) => fn_ += 1,
-                (false, false) => tn += 1,
-            }
-        }
-        let tpr = if (tp + fn_) > 0 {
-            tp as f64 / (tp + fn_) as f64
-        } else {
-            0.0
-        };
-        let fpr = if (fp + tn) > 0 {
-            fp as f64 / (fp + tn) as f64
-        } else {
-            0.0
-        };
-        if fpr > max_fpr {
-            continue;
-        }
-        let youden = tpr - fpr;
-        if best.map(|(_, by)| youden <= by).unwrap_or(true) {
-            best = Some((t, youden));
-        }
-    }
-    best.map(|(t, _)| t)
 }
 
 #[cfg(test)]

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Avatar, Button, Input, Layout, List, Select, Spin, Tag, Tooltip, Collapse } from 'antd';
-import { PlusOutlined, SendOutlined, DeleteOutlined, EditOutlined, RobotOutlined, UserOutlined } from '@ant-design/icons';
+import { PlusOutlined, SendOutlined, DeleteOutlined, EditOutlined, RobotOutlined, UserOutlined, PauseCircleOutlined } from '@ant-design/icons';
 import {
   useChat,
   send,
+  stopGenerate,
   selectConv,
   newConv,
   deleteConv,
@@ -201,7 +202,7 @@ export default function ChatPage() {
             )}
             {cur.messages.map((m: DisplayMsg, i) =>
               m.role === 'user' ? (
-                <div key={i} style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+                <div key={m.seq !== undefined ? "seq-" + m.seq : "idx-" + i} style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
                   <div style={{ maxWidth: BUBBLE_MAX, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                     <div
                       style={{
@@ -218,7 +219,7 @@ export default function ChatPage() {
                   </div>
                 </div>
               ) : (
-                <div key={i} style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
+                <div key={m.seq !== undefined ? "seq-" + m.seq : "idx-" + i} style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
                   <div style={{ maxWidth: BUBBLE_MAX, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                     <Avatar
                       size="small"
@@ -308,9 +309,15 @@ export default function ChatPage() {
             placeholder="输入消息... (Enter 发送)"
             disabled={cur.loading}
           />
-          <Button type="primary" icon={<SendOutlined />} onClick={send} loading={cur.loading}>
-            发送
-          </Button>
+          {cur.loading ? (
+            <Button danger icon={<PauseCircleOutlined />} onClick={stopGenerate}>
+              停止
+            </Button>
+          ) : (
+            <Button type="primary" icon={<SendOutlined />} onClick={send}>
+              发送
+            </Button>
+          )}
         </div>
       </Content>
     </Layout>

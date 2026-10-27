@@ -103,7 +103,20 @@ pub fn parse_decomposition(text: &str) -> Vec<SubTask> {
                     .unwrap_or(1024) as usize,
             })
         })
-        .collect()
+        .collect::<Vec<SubTask>>()
+        .into_iter()
+        // LLM 可能输出重复 id（如两条都标 5）；重复 id 会令波次调度与事件索引错乱。
+        // P3-5：按 id 去重保首个。
+        .fold(
+            (std::collections::HashSet::new(), Vec::new()),
+            |(mut seen, mut out), task| {
+                if seen.insert(task.id) {
+                    out.push(task);
+                }
+                (seen, out)
+            },
+        )
+        .1
 }
 
 /// Stable dependency waves; cycles are broken by scheduling the first pending task.
@@ -267,5 +280,18 @@ mod orchbench_parity {
         let wf = fixture("fixture_diamond.json");
         let tasks = to_subtasks(&wf);
         assert_eq!(dependency_waves(&tasks), vec![vec![1], vec![2, 3], vec![4]]);
+    }
+
+    #[test]
+    fn duplicate_ids_are_deduped_keeping_first() {
+        // P3-5：LLM 输出重复 id 时保留首个，波次调度与事件索引不再错乱。
+        let text = r#"```json
+[{"id":5,"description":"a"},{"id":5,"description":"b"},{"description":"c"}]
+```"#;
+        let tasks = parse_decomposition(text);
+        let ids: Vec<usize> = tasks.iter().map(|t| t.id).collect();
+        // 缺省 id 按原始行号+1（第三行 → 3）。
+        assert_eq!(ids, vec![5, 3], "重复 id 去重保首，缺省 id 按行号");
+        assert_eq!(tasks[0].description, "a");
     }
 }

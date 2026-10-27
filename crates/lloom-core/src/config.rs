@@ -227,7 +227,8 @@ mod net {
     }
 
     /// N1/O2 收尾：REST 服务器默认只绑环回（本地工具，默认关闭局域网暴露）。
-    /// 需要局域网访问时显式给 `--bind 0.0.0.0` 或设 `LLOOM_BIND=0.0.0.0`（建议同时配置 LLOOM_PROXY_TOKEN）。
+    /// 需要局域网访问时显式给 `--bind 0.0.0.0` 或设 `LLOOM_BIND=0.0.0.0`；
+    /// 启动前须先在 WebUI 创建下游 API Key（见 server::non_loopback_bind_permitted）。
     pub fn bind_addr() -> String {
         bind_addr_with(overrides(), std::env::var("LLOOM_BIND").ok().as_deref())
     }

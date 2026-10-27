@@ -313,26 +313,26 @@ fn parse_usage(usage: Option<&Value>) -> UsageDetail {
 }
 
 fn transport(error: &reqwest::Error) -> AppError {
-    AppError::AiService(format!(
-        "Anthropic {}: {error}",
-        if error.is_timeout() {
-            "timeout"
-        } else {
-            "transport error"
-        }
-    ))
+    use crate::error::ProviderError;
+    if error.is_timeout() {
+        AppError::Provider(ProviderError::Timeout {
+            message: format!("Anthropic: {error}"),
+        })
+    } else if error.is_connect() {
+        AppError::Provider(ProviderError::Connection {
+            message: format!("Anthropic: {error}"),
+        })
+    } else {
+        AppError::Provider(ProviderError::Other {
+            message: format!("Anthropic: {error}"),
+        })
+    }
 }
 
 fn http_error(status: u16, body: &str) -> AppError {
-    let kind = match status {
-        401 | 403 => "authentication",
-        429 => "rate limited",
-        400..=499 => "invalid request",
-        _ => "server error",
-    };
-    AppError::AiService(format!(
-        "Anthropic {kind} ({status}): {}",
-        body.chars().take(500).collect::<String>()
+    AppError::Provider(crate::error::ProviderError::from_status(
+        status,
+        format!("Anthropic: {}", body.chars().take(500).collect::<String>()),
     ))
 }
 

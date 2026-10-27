@@ -295,6 +295,7 @@ pub async fn chat_completions(
         classifier.as_ref(),
         None,
         None, // 代理请求无 lloom 会话上下文（B15 证据仅在 WebUI chat 路径注入）
+        "",   // 代理无领域提示（sr_domain 仅 WebUI chat 路径）
     )
     .await;
 
@@ -412,7 +413,7 @@ pub async fn chat_completions(
         names.extend(routing.fallback_chain.clone());
         names.dedup();
         let mut selected = None;
-        let mut first_error = None;
+        let mut first_error: Option<crate::error::AppError> = None;
         for name in names {
             let Some(model) = models.iter().find(|m| m.name == name) else {
                 continue;
@@ -427,20 +428,31 @@ pub async fn chat_completions(
                 }
                 Err(error) => {
                     if first_error.is_none() {
-                        first_error = Some(error.to_string());
+                        first_error = Some(error);
                     }
                 }
             }
         }
         let Some((selected_model, mut stream)) = selected else {
             if api_key_id > 0 {
-                let _ = state.db.settle_api_key_budget(&request_id, 0.0);
+                if let Err(error) = state.db.settle_api_key_budget(&request_id, 0.0) {
+                    crate::logging::warn(
+                        "proxy",
+                        &format!("settle(0) 失败，reservation 暂留待后台清理: {error}"),
+                    );
+                }
             }
-            let detail = first_error.unwrap_or_else(|| "all providers failed".into());
-            return sse_response(format!(
-                "data: {}\n\ndata: [DONE]\n\n",
-                error_body(&detail, "server_error", "upstream_failure")
-            ));
+            // L-3：结构化上游错误直接转发（429/400/502/504），客户端可按状态码退避。
+            let error = first_error
+                .unwrap_or_else(|| crate::error::AppError::AiService("all providers failed".into()));
+            let status = StatusCode::from_u16(error.status_code())
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            return error_response(
+                status,
+                &error.to_string(),
+                "server_error",
+                "upstream_failure",
+            );
         };
         let model_name = selected_model.name.clone();
         let provider = selected_model.provider_name().to_string();
@@ -465,7 +477,12 @@ pub async fn chat_completions(
         .await
         {
             if api_key_id > 0 {
-                let _ = db.settle_api_key_budget(&request_id, 0.0);
+                if let Err(error) = db.settle_api_key_budget(&request_id, 0.0) {
+                    crate::logging::warn(
+                        "proxy",
+                        &format!("settle(0) 失败，reservation 暂留待后台清理: {error}"),
+                    );
+                }
             }
             return sse_response(String::new());
         }
@@ -684,20 +701,23 @@ pub async fn chat_completions(
         }
         Err(e) => {
             if api_key_id > 0 {
-                let _ = state.db.settle_api_key_budget(&request_id, 0.0);
+                if let Err(error) = state.db.settle_api_key_budget(&request_id, 0.0) {
+                    crate::logging::warn(
+                        "proxy",
+                        &format!("settle(0) 失败，reservation 暂留待后台清理: {error}"),
+                    );
+                }
             }
             if decision_id > 0 {
                 let _ = state
                     .db
                     .update_routing_decision_outcome(decision_id, "failed");
             }
+            // L-3：结构化上游错误按网关语义转发（429/400/502/504），不再一律 502。
             let msg = e.to_string();
-            error_response(
-                StatusCode::BAD_GATEWAY,
-                &msg,
-                "server_error",
-                "upstream_failure",
-            )
+            let status =
+                StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::BAD_GATEWAY);
+            error_response(status, &msg, "server_error", "upstream_failure")
         }
     }
 }

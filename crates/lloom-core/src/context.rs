@@ -172,6 +172,8 @@ pub fn normalize_query(query: &str) -> String {
 }
 
 pub fn fingerprint(conversation_id: &str, history: &[Value]) -> String {
+    // 全量内容进哈希（P2-6 路由侧）：80 字符截断会让「前缀相同、正文不同」的
+    // 两条历史撞指纹，L1 精确缓存跨会话串答案。sha256 全文代价可忽略。
     let tail: String = history
         .iter()
         .rev()
@@ -183,11 +185,10 @@ pub fn fingerprint(conversation_id: &str, history: &[Value]) -> String {
             m.get("content")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .chars()
-                .take(80)
-                .collect::<String>()
+                .to_string()
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .join("\u{1}"); // 单元分隔符，防相邻消息内容直接拼接产生歧义
     sha256_prefix(&format!("{conversation_id}:{tail}"), 16)
 }
 
@@ -260,6 +261,26 @@ mod tests {
         assert!(is_context_free("请介绍量子色动力学的基本概念", &history));
         assert!(!cacheable("今天的新闻", 0.0));
         assert!(!cacheable("稳定问题", 0.8));
+    }
+
+    #[test]
+    fn fingerprint_distinguishes_histories_sharing_an_80char_prefix() {
+        // P2-6 路由侧回归：修复前只取末 2 条消息各前 80 字符，两条「前缀相同、
+        // 正文不同」的历史会撞指纹 → L1 精确缓存跨会话串答案。
+        let prefix: String = std::iter::repeat_n('前', 80).collect();
+        let h1 = vec![
+            json!({"role":"user","content":format!("{prefix}甲问题：请分析这段代码的性能瓶颈。")}),
+            json!({"role":"assistant","content":"好的"}),
+        ];
+        let h2 = vec![
+            json!({"role":"user","content":format!("{prefix}乙问题：请翻译这篇英文论文的摘要。")}),
+            json!({"role":"assistant","content":"好的"}),
+        ];
+        assert_ne!(
+            fingerprint("conv-a", &h1),
+            fingerprint("conv-a", &h2),
+            "80 字符前缀相同的不同历史必须得到不同指纹"
+        );
     }
 
     #[test]

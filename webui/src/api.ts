@@ -577,6 +577,7 @@ export async function streamOrchestrate(
   onEvent: (ev: SseEvent) => void,
   conversationId?: string,
   model?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const body: Record<string, unknown> = { query, history };
   if (conversationId) body.conversation_id = conversationId;
@@ -585,6 +586,7 @@ export async function streamOrchestrate(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok || !res.body) {
     onEvent({ event: 'error', data: { error: true, detail: `HTTP ${res.status}` } });

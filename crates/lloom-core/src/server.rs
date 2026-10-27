@@ -847,21 +847,16 @@ async fn chat_stream(State(state): State<AppState>, Json(req): Json<ChatBody>) -
         .conversation_id
         .as_deref()
         .and_then(|cid| state.db.recent_conversation_model(cid).ok().flatten());
-    let mut routing = router::route(
+    let routing = router::route(
         &state.db,
         req.model.as_deref().unwrap_or("auto"),
         &user_text,
         classifier.as_ref(),
         last_model.as_deref(),
         req.conversation_id.as_deref(), // B15：会话级缓存感知粘性证据来源
+        &sr_domain,                     // P2-9：领域增强在 plan 前完成
     )
     .await;
-    if !sr_domain.is_empty() {
-        let (new_type, changed) = router::enhance_with_domain(&routing.task_type, &sr_domain);
-        if changed {
-            routing.task_type = new_type;
-        }
-    }
 
     // P0.d：路由结果必须落在注册表内；direct 未注册 / plan 无候选 → 明确报错，
     // 不再伪造空 spec 继续调用。
@@ -1115,6 +1110,16 @@ async fn orchestrate_stream(
         Ok(m) => m,
         Err(e) => return err_response(e),
     };
+    // P2-11：客户端直传 history（无 conversation_id 的 legacy 路径）设硬上限，
+    // 防 2 MiB body × 并发的内存放大与 summary prompt 膨胀；服务端会话路径
+    // 自带滚动摘要，不受影响。
+    const MAX_CLIENT_HISTORY: usize = 200;
+    if req.history.len() > MAX_CLIENT_HISTORY {
+        return err_response(AppError::InvalidRequest(format!(
+            "history 超过 {MAX_CLIENT_HISTORY} 条上限（当前 {}），请改用 conversation_id 或精简历史",
+            req.history.len()
+        )));
+    }
     let specs: Vec<ModelSpec> = models.iter().map(ModelSpec::from).collect();
     // Semantic cache dir. The Rust SemanticCache (FastEmbed) downloads the
     // quantized MiniLM model on first embed and bypasses on failure, so
@@ -1354,21 +1359,8 @@ fn persist_orchestrate_event(
             let _ = conversations::set_summary(&db, cid, text, upto);
         }
     }
-    // Semantic-cache calibration: log whenever the chat pipeline reports a
-    // similarity (hit or miss). Pure side-effect; failures non-fatal.
-    if let Some(sim) = data.get("cache_sim").and_then(|v| v.as_f64()) {
-        let is_hit = data
-            .get("cache_hit")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let decision = if is_hit { "hit" } else { "miss" };
-        let model = data
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string();
-        let _ = db.insert_cache_calibration(sim, decision, &model, None, "passive");
-    }
+    // Semantic-cache calibration: 已随 L-5 死链清理移除（passive 采集零读者，
+    // 标签无入口，optimal_threshold 从未接线；见 docs/AUDIT-2026-10-19.md P2-14/P2-15）。
     // Real usage accounting (PRICING-PLAN PR-1 + ROUTING P1.a): one row
     // per LLM 动作的真实用量，按事件携带的 role（task_type）细分——
     // 轻量=general、子任务=各自 task_type、汇总=aggregate，便于按角色成本归因。
@@ -2815,7 +2807,7 @@ async fn run_shadow_pair(
 
     // 1) 现网路由：走真实 plan() 看「系统会选谁」；direct/未注册退回注册表首选。
     let classifier = pick_classifier(&models);
-    let routing = router::route(db, "auto", query, classifier.as_ref(), None, None).await;
+    let routing = router::route(db, "auto", query, classifier.as_ref(), None, None, "").await;
     let routed_model = if models.iter().any(|m| m.name == routing.model) {
         routing.model.clone()
     } else {
